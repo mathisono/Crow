@@ -5,7 +5,7 @@ Currently it interoperates with Meshtastic, MeshCore, Winlink, and APRS.
 
 Documentation can be found here https://github.com/kn6plv/Raven/wiki
 
-## Bridge guides
+## New Fetures guides
 
 - [APRS bridge](APRS.md) - APRS-IS, Xastir/YAAC-style TCP text streams, Dire Wolf KISS TCP, direct messages, groups, and group repeat mode.
 - [Strict Gatekeeper mode](STRICT_GATEKEEPER.md) - optional fail-closed filtering and gateway identification for Meshtastic/MeshCore ingress.
