@@ -1,2 +1,6 @@
 .DS_Store
 ._*
+
+# Build artifacts
+*.ipk
+*.apk
