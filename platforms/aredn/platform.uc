@@ -18,6 +18,13 @@ const MAX_BINARY_MEM = 0.1; // 10% free ram for binary storage
 
 const LOCATION_SOURCE_INTERNAL = 2;
 
+const CROW_INTERNAL_ROOT = "/usr/local/crow";
+const CROW_TMP_ROOT = "/tmp/apps/crow";
+const CROW_USB_MOUNT = "/mnt/crow";
+const CROW_USB_LABEL = "CROWDATA";
+const DEFAULT_IMAGE_QUOTA = 64 * 1024 * 1024;
+const DEFAULT_MIN_FREE = 16 * 1024 * 1024;
+
 const ucdata = {};
 let bynamekey = {};
 let byid = {};
@@ -37,28 +44,330 @@ let maxBinarySize = 1 * 1024 * 1024;
 let inShutdown = false;
 let storeSort = 0;
 let ramMessages = false;
+let storageMode = "internal";
+let storageState = "internal";
+let storageReason = null;
+let storageRoot = CROW_INTERNAL_ROOT;
+let storageImageRoot = `${CROW_TMP_ROOT}/images`;
+let storageMountpoint = CROW_USB_MOUNT;
+let storageLabel = CROW_USB_LABEL;
+let storageDevice = null;
+let storageMinFree = DEFAULT_MIN_FREE;
+let storageImageQuota = DEFAULT_IMAGE_QUOTA;
+
+function mkdirp(p)
+{
+    const d = fs.dirname(p);
+    if (d && !fs.access(d)) {
+        mkdirp(d);
+    }
+    fs.mkdir(p);
+}
+
+function safeShellArg(s)
+{
+    return match(s, /^[A-Za-z0-9_@%+=:,./-]+$/) ? s : null;
+}
+
+function readTrim(p)
+{
+    try {
+        return trim(fs.readfile(p));
+    }
+    catch (_) {
+        return null;
+    }
+}
+
+function currentMountDevice(mountpoint)
+{
+    const mounts = split(fs.readfile("/proc/mounts") ?? "", "\n");
+    for (let i = 0; i < length(mounts); i++) {
+        const parts = split(trim(mounts[i]), " ");
+        if (length(parts) >= 2 && parts[1] === mountpoint) {
+            return parts[0];
+        }
+    }
+    return null;
+}
+
+function freeBytes(p)
+{
+    const arg = safeShellArg(p);
+    if (!arg) {
+        return null;
+    }
+    const f = fs.popen(`df -Pk ${arg} 2>/dev/null`);
+    if (!f) {
+        return null;
+    }
+    const out = f.read("all");
+    f.close();
+    const lines = split(trim(out ?? ""), "\n");
+    if (length(lines) < 2) {
+        return null;
+    }
+    const m = match(lines[length(lines) - 1], /^\S+\s+\d+\s+\d+\s+(\d+)\s+/);
+    return m ? (m[1] + 0) * 1024 : null;
+}
+
+function setInternalStorage()
+{
+    storageState = "internal";
+    storageReason = null;
+    storageRoot = CROW_INTERNAL_ROOT;
+    storageImageRoot = `${CROW_TMP_ROOT}/images`;
+    mkdirp(`${CROW_INTERNAL_ROOT}/data`);
+    mkdirp(`${CROW_INTERNAL_ROOT}/winlink/forms`);
+    mkdirp(`${CROW_TMP_ROOT}/images`);
+    if (ramMessages) {
+        mkdirp(`${CROW_TMP_ROOT}/data`);
+    }
+}
+
+function setDegradedStorage(reason)
+{
+    storageState = "degraded";
+    storageReason = reason;
+    storageRoot = CROW_INTERNAL_ROOT;
+    storageImageRoot = `${CROW_TMP_ROOT}/images`;
+    mkdirp(`${CROW_TMP_ROOT}/images`);
+    if (ramMessages) {
+        mkdirp(`${CROW_TMP_ROOT}/data`);
+    }
+}
+
+function prepareStorageRoot(root)
+{
+    try {
+        mkdirp(`${root}/data`);
+        mkdirp(`${root}/winlink/forms`);
+        mkdirp(`${root}/images`);
+        const test = `${root}/.crow-write-test`;
+        fs.writefile(test, "ok");
+        fs.unlink(test);
+        const free = freeBytes(root);
+        if (free !== null && free < storageMinFree) {
+            return `not enough free space on ${root}`;
+        }
+        return null;
+    }
+    catch (e) {
+        return `storage root is not writable: ${e}`;
+    }
+}
+
+function activateMountedUsb()
+{
+    const mounted = currentMountDevice(storageMountpoint);
+    if (!mounted) {
+        return false;
+    }
+    const reason = prepareStorageRoot(storageMountpoint);
+    if (reason) {
+        setDegradedStorage(reason);
+        return false;
+    }
+    storageState = "usb";
+    storageReason = null;
+    storageRoot = storageMountpoint;
+    storageImageRoot = `${storageMountpoint}/images`;
+    return true;
+}
+
+function removableBlockForDevice(device)
+{
+    const m = match(device ?? "", /^\/dev\/([a-z]+)\d*$/);
+    if (!m) {
+        return null;
+    }
+    const block = m[1];
+    return readTrim(`/sys/block/${block}/removable`) === "1" ? block : null;
+}
+
+function deviceIsSafeUsb(device)
+{
+    if (!match(device ?? "", /^\/dev\/[A-Za-z0-9._-]+$/)) {
+        return false;
+    }
+    return removableBlockForDevice(device) !== null;
+}
+
+function partitionForBlock(block)
+{
+    try {
+        const entries = fs.lsdir(`/sys/block/${block}`);
+        for (let i = 0; i < length(entries); i++) {
+            if (match(entries[i], `^${block}[0-9]+$`)) {
+                return `/dev/${entries[i]}`;
+            }
+        }
+    }
+    catch (_) {
+    }
+    return `/dev/${block}`;
+}
+
+function imageQuotaPrune()
+{
+    if (!fs.access(storageImageRoot)) {
+        return;
+    }
+    let size = 0;
+    const files = [];
+    for (let f in fs.lsdir(storageImageRoot)) {
+        const p = `${storageImageRoot}/${f}`;
+        const st = fs.lstat(p);
+        if (st?.type === "file") {
+            size += st.size;
+            push(files, { path: p, size: st.size, mtime: st.mtime });
+        }
+    }
+    sort(files, (a, b) => a.mtime - b.mtime);
+    for (let i = 0; size > storageImageQuota && i < length(files); i++) {
+        fs.unlink(files[i].path);
+        size -= files[i].size;
+    }
+}
+
+function setupStorage(config)
+{
+    const sc = config.storage ?? {};
+    storageMode = sc.mode ?? "internal";
+    storageMountpoint = sc.mountpoint ?? CROW_USB_MOUNT;
+    storageLabel = sc.label ?? CROW_USB_LABEL;
+    storageDevice = sc.device ?? null;
+    storageImageQuota = sc.image_quota_mb ? (sc.image_quota_mb + 0) * 1024 * 1024 : DEFAULT_IMAGE_QUOTA;
+    storageMinFree = sc.min_free_mb ? (sc.min_free_mb + 0) * 1024 * 1024 : DEFAULT_MIN_FREE;
+
+    setInternalStorage();
+    if (storageMode === "usb" && !activateMountedUsb()) {
+        setDegradedStorage(`USB storage is not mounted at ${storageMountpoint}`);
+    }
+}
+
+/* export */ function storageStatus()
+{
+    if (storageMode === "usb" && storageState === "usb") {
+        activateMountedUsb();
+    }
+    return {
+        state: storageState,
+        mode: storageMode,
+        root: storageRoot,
+        image_root: storageImageRoot,
+        mountpoint: storageMountpoint,
+        device: currentMountDevice(storageMountpoint) ?? storageDevice,
+        reason: storageReason,
+        image_quota_mb: storageImageQuota / (1024 * 1024),
+        min_free_mb: storageMinFree / (1024 * 1024)
+    };
+}
+
+/* export */ function storageScan()
+{
+    const candidates = [];
+    let mounted = null;
+    try {
+        const blocks = fs.lsdir("/sys/block");
+        for (let i = 0; i < length(blocks); i++) {
+            const b = blocks[i];
+            if (!match(b, /^[A-Za-z0-9._-]+$/)) {
+                continue;
+            }
+            if (readTrim(`/sys/block/${b}/removable`) !== "1") {
+                continue;
+            }
+            const sectors = readTrim(`/sys/block/${b}/size`) + 0;
+            const device = partitionForBlock(b);
+            mounted = currentMountDevice(storageMountpoint) === device;
+            push(candidates, {
+                device: device,
+                block: b,
+                model: readTrim(`/sys/block/${b}/device/model`) ?? "removable storage",
+                size_bytes: sectors * 512,
+                mounted: mounted
+            });
+        }
+    }
+    catch (_) {
+    }
+    return candidates;
+}
+
+/* export */ function storageMount()
+{
+    storageMode = "usb";
+    if (activateMountedUsb()) {
+        return { ok: true, message: "USB storage active." };
+    }
+
+    let device = storageDevice;
+    if (device && !deviceIsSafeUsb(device)) {
+        setDegradedStorage(`Refusing unsafe storage device ${device}`);
+        return { ok: false, message: storageReason };
+    }
+
+    if (!device) {
+        const candidates = storageScan();
+        if (!candidates || length(candidates) === 0) {
+            setDegradedStorage("No removable USB storage candidates found.");
+            return { ok: false, message: storageReason };
+        }
+        device = candidates[0].device;
+    }
+
+    if (!deviceIsSafeUsb(device)) {
+        setDegradedStorage(`Refusing unsafe storage device ${device}`);
+        return { ok: false, message: storageReason };
+    }
+
+    mkdirp(storageMountpoint);
+    const devArg = safeShellArg(device);
+    const mntArg = safeShellArg(storageMountpoint);
+    if (!devArg || !mntArg) {
+        setDegradedStorage("Storage device or mountpoint contains unsafe characters.");
+        return { ok: false, message: storageReason };
+    }
+
+    if (system(`/bin/mount -o noatime ${devArg} ${mntArg} >/dev/null 2>&1`) !== 0 && !activateMountedUsb()) {
+        setDegradedStorage(`Unable to mount ${device} at ${storageMountpoint}`);
+        return { ok: false, message: storageReason };
+    }
+
+    if (!activateMountedUsb()) {
+        return { ok: false, message: storageReason ?? "USB storage mounted but failed health checks." };
+    }
+    storageDevice = device;
+    imageQuotaPrune();
+    return { ok: true, message: "USB storage active." };
+}
+
+/* export */ function storageDisable()
+{
+    storageMode = "internal";
+    setInternalStorage();
+    return { ok: true, message: "Crow storage returned to internal node storage." };
+}
+
+/* export */ function storageImageQuota(mb)
+{
+    const quota = mb + 0;
+    if (!(quota > 0 && quota <= 4096)) {
+        return { ok: false, message: "Image quota must be between 1 and 4096 MB." };
+    }
+    storageImageQuota = quota * 1024 * 1024;
+    imageQuotaPrune();
+    return { ok: true, message: `Image quota set to ${quota} MB.` };
+}
 
 /* export */ function setup(config)
 {
-    function mkdirp(p)
-    {
-        const d = fs.dirname(p);
-        if (d && !fs.access(d)) {
-            mkdirp(d);
-        }
-        fs.mkdir(p);
-    }
-
     if (config.messages?.ram) {
         ramMessages = true;
     }
 
-    mkdirp("/usr/local/raven/data");
-    mkdirp("/usr/local/raven/winlink/forms");
-    mkdirp("/tmp/apps/raven/images");
-    if (ramMessages) {
-        mkdirp("/tmp/apps/raven/data");
-    }
+    setupStorage(config);
 
     const c = uci.cursor();
     ucdata.latitude = c.get("aredn", "@location[0]", "lat");
@@ -196,17 +505,20 @@ let ramMessages = false;
 
 function path(name)
 {
-    // Image files are store in ramdisk
+    if (storageMode === "usb" && storageState !== "usb") {
+        activateMountedUsb();
+    }
+    // Image files are persistent on USB and temporary in internal/degraded mode.
     if (index(name, "img") === 0) {
-        return `/tmp/apps/raven/images/${name}`;
+        return `${storageImageRoot}/${name}`;
     }
     if (index(name, "winlink/") === 0) {
-        return `/usr/local/raven/${name}`;
+        return `${storageRoot}/${name}`;
     }
     if (ramMessages && index(name, "messages.") === 0) {
-        return `/tmp/apps/raven/data/${replace(name, /\//g, "_")}.json`;
+        return `${CROW_TMP_ROOT}/data/${replace(name, /\//g, "_")}.json`;
     }
-    return `/usr/local/raven/data/${replace(name, /\//g, "_")}.json`;
+    return `${storageRoot}/data/${replace(name, /\//g, "_")}.json`;
 }
 
 /* export */ function load(name)
@@ -256,7 +568,7 @@ function path(name)
     if (name === "nodedb" && !inShutdown) {
         // Special handling because this gets very big
         // and big flash writes block the app for too long
-        const filename = "/tmp/raven.nodedb";
+        const filename = "/tmp/crow.nodedb";
         const f = fs.open(filename, "w");
         f.write("{\n");
         for (let id in data) {
@@ -275,16 +587,17 @@ function path(name)
 /* export */ function storebinary(name, data)
 {
     const p = path(name);
-    // Reduce cached files to maxBinarySize
+    // Reduce cached files to maxBinarySize, or persistent image files to image quota.
     const dirname = fs.dirname(p);
     let size = 0;
+    const limit = index(name, "img") === 0 ? storageImageQuota : maxBinarySize;
     const dir = map(fs.lsdir(dirname), f => {
         const i = fs.stat(`${dirname}/${f}`);
         size += i.size;
         return { f: f, m: i.mtime, s: i.size };
     });
     sort(dir, (a, b) => a.m - b.m);
-    for (let i = 0; size > maxBinarySize && i < length(dir); i++) {
+    for (let i = 0; size > limit && i < length(dir); i++) {
         size -= dir[i].s;
         fs.unlink(`${dirname}/${dir[i].f}`);
     }
@@ -435,7 +748,7 @@ function orderStores()
     for (let k in badges) {
         total += badges[k];
     }
-    fs.writefile("/tmp/apps/raven/badge", total == 0 ? "" : total > 999 ? "999+" : `${total}`);
+    fs.writefile(`${CROW_TMP_ROOT}/badge`, total == 0 ? "" : total > 999 ? "999+" : `${total}`);
 }
 
 /* export */ function auth(headers)
@@ -588,5 +901,10 @@ return {
     handle,
     handleChanges,
     getMap,
-    canAcceptIPAddress
+    canAcceptIPAddress,
+    storageStatus,
+    storageScan,
+    storageMount,
+    storageDisable,
+    storageImageQuota
 };
