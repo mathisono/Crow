@@ -141,6 +141,7 @@ export function post(cmd, id)
                 default:
                     break;
             }
+            break;
         }
         case "storage":
         {
