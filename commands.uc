@@ -220,7 +220,7 @@ export function post(cmd, id)
                         if (!storageSupported(id, "storageImageQuota")) {
                             break;
                         }
-                        const result = platform.storageImageQuota(cmd[3] + 0);
+                        const result = platform.storageImageQuota(+cmd[3]);
                         event.queue({ cmd: "/reply", reply: [ result.message ?? "Image quota updated." ], socket: id });
                     }
                     else {

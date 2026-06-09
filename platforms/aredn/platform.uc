@@ -352,7 +352,7 @@ function setupStorage(config)
 
 /* export */ function storageImageQuota(mb)
 {
-    const quota = mb + 0;
+    const quota = +mb;
     if (!(quota > 0 && quota <= 4096)) {
         return { ok: false, message: "Image quota must be between 1 and 4096 MB." };
     }
