@@ -24,10 +24,10 @@ cp $SRC/platforms/aredn/*.uc $ROOT/data/usr/local/raven/platforms/aredn/
 cp $SRC/platforms/aredn/raven.conf $ROOT/data/usr/local/raven/
 echo "export const version = '${VERSION}';" > $ROOT/data/usr/local/raven/version.uc
 
-cp $SRC/ui/ui.js $SRC/ui/ui.css $SRC/ui/raven.svg $ROOT/data/www/apps/crow/
+cp $SRC/ui/ui.js $SRC/ui/ui.css $SRC/ui/crow.svg $ROOT/data/www/apps/crow/
 cat $SRC/ui/index.html | sed s:0.0.0-r0:${VERSION}: > $ROOT/data/www/apps/crow/index.html
-cp $SRC/ui/raven.svg $ROOT/data/www/apps/crow/icon.svg
-cp $SRC/ui/ix.png $ROOT/data/www/apps/crow/ix.png
+cp $SRC/ui/crow.svg $ROOT/data/www/apps/crow/icon.svg
+cp $SRC/ui/crow.png $ROOT/data/www/apps/crow/ix.png
 cp $SRC/platforms/aredn/admin.sh $ROOT/data/www/cgi-bin/apps/crow/admin
 cp $SRC/platforms/aredn/image.uc $ROOT/data/www/cgi-bin/apps/crow/image
 
