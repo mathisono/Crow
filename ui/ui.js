@@ -277,7 +277,7 @@ function htmlText(text, useimage)
         }
         const im = structuredtext.image;
         if (useimage && im) {
-            textmsg = `<div class="b"><div class="ack ${text.ack ? 'true' : ''}"></div><div class="i"><a target="_blank" href="${im.url}"><img loading="lazy" src="${im.url}" onerror="this.src='/apps/raven/ix.png'"></a></div></div>`;
+            textmsg = `<div class="b"><div class="ack ${text.ack ? 'true' : ''}"></div><div class="i"><a target="_blank" href="${im.url}"><img loading="lazy" src="${im.url}" onerror="this.src='/apps/crow/ix.png'"></a></div></div>`;
         }
     }
     if (!textmsg) {
@@ -1298,7 +1298,7 @@ function startup()
                     if (useImage(dropSelection)) {
                         const hostname = location.hostname.match(/^\d+\.\d+\.\d+\.\d+$/) ? location.hostname : location.hostname.indexOf(".local.mesh") == -1 ? `${location.hostname}.local.mesh` : location.hostname;
                         I("texts").lastElementChild.scrollIntoView({ behavior: "smooth", block: "end", inline: "nearest" });
-                        setTimeout(_ => send({ cmd: "post", namekey: dropSelection, text: `[Image]`, structuredtext: [ { image: { url: `http://${hostname}/cgi-bin/apps/raven/image?i=${msg.name}` } } ] }), 500);
+                        setTimeout(_ => send({ cmd: "post", namekey: dropSelection, text: `[Image]`, structuredtext: [ { image: { url: `http://${hostname}/cgi-bin/apps/crow/image?i=${msg.name}` } } ] }), 500);
                     }
                     break;
                 }

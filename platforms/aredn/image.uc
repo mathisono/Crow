@@ -7,7 +7,7 @@ let img = `/tmp/apps/crow/images/${m ? m[1] : "NONE"}`;
 let info = fs.stat(img);
 let type = "image/jpeg";
 if (!info) {
-    img = "/www/apps/raven/ix.png";
+    img = "/www/apps/crow/ix.png";
     info = fs.stat(img);
     type = "image/png";
 }

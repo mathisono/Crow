@@ -9,8 +9,8 @@ SRC=$(dirname $0)/../..
 
 rm -rf $ROOT/
 
-mkdir -p $ROOT/data/www/cgi-bin/apps/raven \
-    $ROOT/data/www/apps/raven \
+mkdir -p $ROOT/data/www/cgi-bin/apps/crow \
+    $ROOT/data/www/apps/crow \
     $ROOT/data/usr/local/raven/platforms/aredn $ROOT/data/usr/local/raven/crypto \
     $ROOT/data/etc/init.d \
     $ROOT/data/etc/local/mesh-firewall \
@@ -24,19 +24,19 @@ cp $SRC/platforms/aredn/*.uc $ROOT/data/usr/local/raven/platforms/aredn/
 cp $SRC/platforms/aredn/raven.conf $ROOT/data/usr/local/raven/
 echo "export const version = '${VERSION}';" > $ROOT/data/usr/local/raven/version.uc
 
-cp $SRC/ui/ui.js $SRC/ui/ui.css $SRC/ui/raven.svg $ROOT/data/www/apps/raven/
-cat $SRC/ui/index.html | sed s:0.0.0-r0:${VERSION}: > $ROOT/data/www/apps/raven/index.html
-cp $SRC/ui/raven.svg $ROOT/data/www/apps/raven/icon.svg
-cp $SRC/ui/ix.png $ROOT/data/www/apps/raven/ix.png
-cp $SRC/platforms/aredn/admin.sh $ROOT/data/www/cgi-bin/apps/raven/admin
-cp $SRC/platforms/aredn/image.uc $ROOT/data/www/cgi-bin/apps/raven/image
+cp $SRC/ui/ui.js $SRC/ui/ui.css $SRC/ui/raven.svg $ROOT/data/www/apps/crow/
+cat $SRC/ui/index.html | sed s:0.0.0-r0:${VERSION}: > $ROOT/data/www/apps/crow/index.html
+cp $SRC/ui/raven.svg $ROOT/data/www/apps/crow/icon.svg
+cp $SRC/ui/ix.png $ROOT/data/www/apps/crow/ix.png
+cp $SRC/platforms/aredn/admin.sh $ROOT/data/www/cgi-bin/apps/crow/admin
+cp $SRC/platforms/aredn/image.uc $ROOT/data/www/cgi-bin/apps/crow/image
 
 cp $SRC/platforms/aredn/raven.init $ROOT/data/etc/init.d/raven
 
 cp $SRC/platforms/aredn/upgrade.conf $ROOT/data/etc/arednsysupgrade.d/KN6PLV.raven.conf
 
 chmod 755 $ROOT/data/etc/local/mesh-firewall/21-raven
-chmod 755 $ROOT/data/www/apps/raven/* $ROOT/data/www/cgi-bin/apps/raven/admin $ROOT/data/www/cgi-bin/apps/raven/image
+chmod 755 $ROOT/data/www/apps/crow/* $ROOT/data/www/cgi-bin/apps/crow/admin $ROOT/data/www/cgi-bin/apps/crow/image
 
 mkdir -p $ROOT/data/usr/local/raven/winlink/forms
 cp -R $SRC/winlink/forms/* $ROOT/data/usr/local/raven/winlink/forms
