@@ -8,7 +8,7 @@ import * as crypto from "crypto.crypto";
 
 function fmtBytes(n)
 {
-    if (n === null || n === undefined) {
+    if (n == null) {
         return "unknown";
     }
     if (n > 1024 * 1024 * 1024) {
