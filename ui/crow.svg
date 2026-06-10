@@ -1,5 +1,33 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="100" height="100" viewBox="0 0 100 100" role="img" aria-label="Crow icon">
   <title>Crow icon</title>
-  <image width="100" height="100" preserveAspectRatio="xMidYMid meet" href="crow.png" />
+  <rect width="100" height="100" fill="none"/>
+  <g id="wings" stroke="#050505" stroke-width="1.4" stroke-linejoin="round" stroke-linecap="round">
+    <path fill="#050505" d="M48 30 C38 22 23 17 2 15 C9 22 18 27 30 31 C19 31 10 30 0 27 C9 37 20 43 34 44 C22 47 13 47 5 45 C13 53 24 55 36 52 C28 59 22 62 15 63 C24 68 34 64 43 56 C44 48 45 39 48 30 Z"/>
+    <path fill="#f7f7f7" d="M43 33 C34 28 25 25 13 22 C20 28 28 32 38 36 C28 36 19 35 10 32 C18 39 28 42 40 42 C31 46 23 48 14 49 C23 54 33 52 42 47 C37 55 31 59 25 61 C32 61 39 56 44 50 Z"/>
+    <path fill="#d8241f" d="M14 55 C20 54 27 51 35 47 C29 55 22 61 14 64 Z"/>
+    <path fill="#050505" d="M52 30 C62 22 77 17 98 15 C91 22 82 27 70 31 C81 31 90 30 100 27 C91 37 80 43 66 44 C78 47 87 47 95 45 C87 53 76 55 64 52 C72 59 78 62 85 63 C76 68 66 64 57 56 C56 48 55 39 52 30 Z"/>
+    <path fill="#f7f7f7" d="M57 33 C66 28 75 25 87 22 C80 28 72 32 62 36 C72 36 81 35 90 32 C82 39 72 42 60 42 C69 46 77 48 86 49 C77 54 67 52 58 47 C63 55 69 59 75 61 C68 61 61 56 56 50 Z"/>
+    <path fill="#d8241f" d="M86 55 C80 54 73 51 65 47 C71 55 78 61 86 64 Z"/>
+  </g>
+  <g id="body" stroke="#050505" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round">
+    <path fill="#050505" d="M50 22 C44 22 39 25 36 31 C34 36 34 45 37 54 C39 60 42 65 42 72 C37 72 34 76 35 82 C32 81 31 84 33 88 C35 86 37 84 40 84 C38 89 37 94 41 98 C44 92 47 87 50 83 C53 87 56 92 59 98 C63 94 62 89 60 84 C63 84 65 86 67 88 C69 84 68 81 65 82 C66 76 63 72 58 72 C58 65 61 60 63 54 C66 45 66 36 64 31 C61 25 56 22 50 22 Z"/>
+    <path fill="#f7f7f7" d="M50 24 C45 24 41 27 39 32 C36 39 37 49 40 58 C42 64 45 69 45 77 C43 75 41 75 40 78 C38 76 37 78 37 81 C39 79 41 80 42 83 C44 79 46 79 48 83 L50 79 L52 83 C54 79 56 79 58 83 C59 80 61 79 63 81 C63 78 62 76 60 78 C59 75 57 75 55 77 C55 69 58 64 60 58 C63 49 64 39 61 32 C59 27 55 24 50 24 Z"/>
+    <path fill="#050505" d="M37 30 C41 24 49 22 57 23 C50 24 45 27 41 32 Z"/>
+    <path fill="#050505" d="M40 25 C34 25 30 26 27 29 C33 28 38 29 42 32 Z"/>
+    <circle cx="56" cy="29" r="1.1" fill="#050505" stroke="none"/>
+    <path fill="#050505" d="M40 27 C34 27 29 29 23 32 C30 32 35 32 40 30 Z"/>
+  </g>
+  <g id="joints" stroke="#050505" stroke-width="1.2">
+    <circle cx="38" cy="39" r="5.1" fill="#b01e2b"/>
+    <circle cx="38" cy="39" r="2.8" fill="#e4c13b" stroke="none"/>
+    <circle cx="62" cy="39" r="5.1" fill="#b01e2b"/>
+    <circle cx="62" cy="39" r="2.8" fill="#e4c13b" stroke="none"/>
+  </g>
+  <g id="tail" stroke="#050505" stroke-width="1.4" stroke-linejoin="round">
+    <path fill="#050505" d="M43 62 L35 84 L42 78 L40 94 L50 78 L60 94 L58 78 L65 84 L57 62 L50 73 Z"/>
+    <path fill="#f7f7f7" d="M45 64 L40 80 L45 75 L44 88 L50 76 L56 88 L55 75 L60 80 L55 64 L50 72 Z"/>
+    <path fill="#d8241f" d="M47 66 L45 83 L50 73 Z" stroke="none"/>
+    <path fill="#f0c43b" d="M50 73 L55 83 L53 66 Z" stroke="none"/>
+  </g>
 </svg>
