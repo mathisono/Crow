@@ -56,16 +56,16 @@ cat > $ROOT/debian-binary <<__EOF__
 2.0
 __EOF__
 cat > $ROOT/control/control <<__EOF__
-Package: raven
+Package: crow
 Version: ${VERSION}
 Depends: ucode, curl
 Provides:
-Source: package/raven
+Source: package/crow
 Section: net
 Priority: optional
 Maintainer: Tim Wilkinson (KN6PLV)
 Architecture: all
-Description: Mesh communications
+Description: Crow Mesh Messaging
 __EOF__
 cp $SRC/platforms/aredn/postinst $ROOT/control/postinst
 cp $SRC/platforms/aredn/prerm $ROOT/control/prerm
@@ -73,33 +73,33 @@ chmod 755 $ROOT/control/postinst $ROOT/control/prerm
 
 (cd $ROOT/control ; tar cfz ../control.tar.gz .)
 (cd $ROOT/data ; tar cfz ../data.tar.gz .)
-(cd $ROOT ; tar cfz raven_${VERSION}_all.ipk control.tar.gz data.tar.gz debian-binary)
+(cd $ROOT ; tar cfz crow_${VERSION}_all.ipk control.tar.gz data.tar.gz debian-binary)
 
-rm -f ./raven_*_all.ipk
-mv $ROOT/raven_${VERSION}_all.ipk .
+rm -f ./crow_*_all.ipk
+mv $ROOT/crow_${VERSION}_all.ipk .
 
 #
 # Make APK
 #
-rm -f ./raven-*.apk
+rm -f ./crow-*.apk
 cp $SRC/platforms/aredn/postinstall $ROOT/data/.post-install
 cp $SRC/platforms/aredn/prerm $ROOT/data/.pre-deinstall
 cp $SRC/platforms/aredn/postupgrade $ROOT/data/.post-upgrade
 chmod 755 $ROOT/data/.post-install $ROOT/data/.pre-deinstall $ROOT/data/.post-upgrade
 mkapk.py \
-    -n raven \
+    -n crow \
     -v ${VER} \
     -d ${ROOT}/data \
     -a noarch \
     -r ${REL} \
-    -D 'Raven Mesh Messaging' \
-    -u 'https://github.com/kn6plv/raven' \
+    -D 'Crow Mesh Messaging' \
+    -u 'https://github.com/mathisono/Crow' \
     -l 'MIT' \
     -m 'tim.j.wilkinson@gmail.com' \
     -p ucode,curl \
     -o .
 
-cp -r raven_${VERSION}_all.ipk raven_alpha.ipk
-cp -f raven-${VERSION}.apk raven-alpha.apk
+cp -r crow_${VERSION}_all.ipk crow_alpha.ipk
+cp -f crow-${VERSION}.apk crow-alpha.apk
 
 rm -rf $ROOT/
