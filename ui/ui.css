@@ -919,7 +919,7 @@ a
     background-color: #808080;
     background-image: url('data:image/svg+xml;utf8,<svg width="100%" height="100%" viewBox="0 0 100 100" version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" xml:space="preserve" xmlns:serif="http://www.serif.com/" style="fill-rule:evenodd;clip-rule:evenodd;stroke-linecap:round;"><circle cx="50" cy="50" r="6" style="fill:white;"/><path d="M38,38C31.433,44.59 31.433,55.41 38,62" style="fill:none;fill-rule:nonzero;stroke:white;stroke-width:5.5px;"/><path d="M29,30C23.627,35.264 20.596,42.478 20.596,50C20.596,57.522 23.627,64.736 29,70" style="fill:none;fill-rule:nonzero;stroke:white;stroke-width:5.5px;"/><path d="M62,38C68.567,44.59 68.567,55.41 62,62" style="fill:none;fill-rule:nonzero;stroke:white;stroke-width:5.5px;"/><path d="M71,30C76.373,35.264 79.404,42.478 79.404,50C79.404,57.522 76.373,64.736 71,70" style="fill:none;fill-rule:nonzero;stroke:white;stroke-width:5.5px;"/></svg>') !important;
 }
-.raven
+.crow
 {
     width: 100px;
     scale: 0.8;
