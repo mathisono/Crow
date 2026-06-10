@@ -3,7 +3,7 @@ import * as fs from "fs";
 
 const q = getenv("QUERY_STRING") || "";
 const m = match(q, /i=([^/&]*)/);
-let img = `/tmp/apps/raven/images/${m ? m[1] : "NONE"}`;
+let img = `/tmp/apps/crow/images/${m ? m[1] : "NONE"}`;
 let info = fs.stat(img);
 let type = "image/jpeg";
 if (!info) {
