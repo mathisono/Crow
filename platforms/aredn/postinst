@@ -1,4 +1,21 @@
 #!/bin/sh
+
+# Create Crow data directories
+mkdir -p /usr/local/crow/data
+mkdir -p /usr/local/crow/winlink/forms
+mkdir -p /tmp/apps/crow/images
+
+# Migrate data from old Raven paths if they exist and Crow paths are empty
+if [ -d /usr/local/raven/data ] && [ -z "$(ls -A /usr/local/crow/data 2>/dev/null)" ]; then
+    cp -an /usr/local/raven/data/* /usr/local/crow/data/ 2>/dev/null
+fi
+if [ -d /usr/local/raven/winlink/forms ] && [ -z "$(ls -A /usr/local/crow/winlink/forms 2>/dev/null)" ]; then
+    cp -an /usr/local/raven/winlink/forms/* /usr/local/crow/winlink/forms/ 2>/dev/null
+fi
+if [ -d /tmp/apps/raven/images ] && [ -z "$(ls -A /tmp/apps/crow/images 2>/dev/null)" ]; then
+    cp -an /tmp/apps/raven/images/* /tmp/apps/crow/images/ 2>/dev/null
+fi
+
 /etc/init.d/raven enable
 /etc/init.d/raven start
 /usr/local/bin/restart-firewall
