@@ -157,6 +157,49 @@ function prepareStorageRoot(root)
     }
 }
 
+function copyIfMissing(srcDir, dstDir)
+{
+    if (!fs.access(srcDir) || !fs.access(dstDir)) {
+        return;
+    }
+    const entries = fs.lsdir(srcDir);
+    for (let i = 0; i < length(entries); i++) {
+        const src = `${srcDir}/${entries[i]}`;
+        const dst = `${dstDir}/${entries[i]}`;
+        if (!fs.access(dst)) {
+            const data = fs.readfile(src);
+            if (data != null) {
+                fs.writefile(dst, data);
+            }
+        }
+    }
+}
+
+function migrateDataToUsb()
+{
+    if (storageState !== "usb" || !storageMountpoint) {
+        return;
+    }
+    // Copy message data from internal to USB if USB dirs are empty
+    copyIfMissing(`${CROW_INTERNAL_ROOT}/data`, `${storageMountpoint}/data`);
+    copyIfMissing(`${CROW_TMP_ROOT}/images`, `${storageMountpoint}/images`);
+    // Winlink forms subdirectories need recursive handling
+    const formSrc = `${CROW_INTERNAL_ROOT}/winlink/forms`;
+    const formDst = `${storageMountpoint}/winlink/forms`;
+    if (fs.access(formSrc) && fs.access(formDst)) {
+        const subdirs = fs.lsdir(formSrc);
+        for (let i = 0; i < length(subdirs); i++) {
+            const s = `${formSrc}/${subdirs[i]}`;
+            const d = `${formDst}/${subdirs[i]}`;
+            const st = fs.lstat(s);
+            if (st?.type === "directory") {
+                mkdirp(d);
+                copyIfMissing(s, d);
+            }
+        }
+    }
+}
+
 function activateMountedUsb()
 {
     const mounted = currentMountDevice(storageMountpoint);
@@ -172,6 +215,7 @@ function activateMountedUsb()
     storageReason = null;
     storageRoot = storageMountpoint;
     storageImageRoot = `${storageMountpoint}/images`;
+    migrateDataToUsb();
     return true;
 }
 
@@ -339,6 +383,7 @@ function setupStorage(config)
         return { ok: false, message: storageReason ?? "USB storage mounted but failed health checks." };
     }
     storageDevice = device;
+    migrateDataToUsb();
     imageQuotaPrune();
     return { ok: true, message: "USB storage active." };
 }
