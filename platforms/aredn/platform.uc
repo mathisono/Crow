@@ -79,6 +79,21 @@ function readTrim(p)
     }
 }
 
+function hasUsbPort()
+{
+    try {
+        const entries = fs.lsdir("/sys/bus/usb/devices");
+        for (let i = 0; i < length(entries); i++) {
+            if (match(entries[i], /^usb[0-9]+$/)) {
+                return true;
+            }
+        }
+    }
+    catch (_) {
+    }
+    return false;
+}
+
 function currentMountDevice(mountpoint)
 {
     const mounts = split(fs.readfile("/proc/mounts") ?? "", "\n");
@@ -285,8 +300,13 @@ function setupStorage(config)
     storageMinFree = sc.min_free_mb ? (sc.min_free_mb + 0) * 1024 * 1024 : DEFAULT_MIN_FREE;
 
     setInternalStorage();
-    if (storageMode === "usb" && !activateMountedUsb()) {
-        setDegradedStorage(`USB storage is not mounted at ${storageMountpoint}`);
+    if (storageMode === "usb") {
+        if (!hasUsbPort()) {
+            storageMode = "internal";
+        }
+        else if (!activateMountedUsb()) {
+            setDegradedStorage(`USB storage is not mounted at ${storageMountpoint}`);
+        }
     }
 }
 
@@ -304,12 +324,16 @@ function setupStorage(config)
         device: currentMountDevice(storageMountpoint) ?? storageDevice,
         reason: storageReason,
         image_quota_mb: storageImageQuota / (1024 * 1024),
-        min_free_mb: storageMinFree / (1024 * 1024)
+        min_free_mb: storageMinFree / (1024 * 1024),
+        usb_port: hasUsbPort()
     };
 }
 
 /* export */ function storageScan()
 {
+    if (!hasUsbPort()) {
+        return [];
+    }
     const candidates = [];
     let mounted = null;
     try {
@@ -341,6 +365,10 @@ function setupStorage(config)
 
 /* export */ function storageMount()
 {
+    if (!hasUsbPort()) {
+        setInternalStorage();
+        return { ok: false, message: "This device does not have a USB port." };
+    }
     storageMode = "usb";
     if (activateMountedUsb()) {
         return { ok: true, message: "USB storage active." };

@@ -161,6 +161,9 @@ export function post(cmd, id)
                     if (s.mountpoint) {
                         push(reply, `Mountpoint: ${s.mountpoint}`);
                     }
+                    if (!s.usb_port) {
+                        push(reply, "USB: no port on this device");
+                    }
                     if (s.reason) {
                         push(reply, `Reason: ${s.reason}`);
                         push(reply, "Core service is still running from node storage; persistence may be limited until USB storage is restored.");
