@@ -198,7 +198,7 @@ function partitionForBlock(block)
     try {
         const entries = fs.lsdir(`/sys/block/${block}`);
         for (let i = 0; i < length(entries); i++) {
-            if (match(entries[i], `^${block}[0-9]+$`)) {
+            if (index(entries[i], block) === 0 && length(entries[i]) > length(block) && match(entries[i], /^[a-z]+[0-9]+$/)) {
                 return `/dev/${entries[i]}`;
             }
         }
@@ -353,8 +353,8 @@ function setupStorage(config)
 /* export */ function storageImageQuota(mb)
 {
     const quota = +mb;
-    if (!(quota > 0 && quota <= 4096)) {
-        return { ok: false, message: "Image quota must be between 1 and 4096 MB." };
+    if (!(quota > 0 && quota <= 65536)) {
+        return { ok: false, message: "Image quota must be between 1 and 65536 MB." };
     }
     storageImageQuota = quota * 1024 * 1024;
     imageQuotaPrune();
