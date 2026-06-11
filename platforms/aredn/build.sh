@@ -44,9 +44,6 @@ cp -R $SRC/winlink/forms/* $ROOT/data/usr/local/raven/winlink/forms
 cp $SRC/platforms/aredn/usb-setup.sh $ROOT/data/usr/local/raven/platforms/aredn/usb-setup.sh
 chmod 755 $ROOT/data/usr/local/raven/platforms/aredn/usb-setup.sh
 
-mkdir -p $ROOT/data/etc/cron.daily
-cp $SRC/platforms/aredn/update-cron.sh $ROOT/data/etc/cron.daily/raven-update
-chmod 755 $ROOT/data/etc/cron.daily/raven-update
 
 #
 # Make IPKG

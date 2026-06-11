@@ -1,4 +1,6 @@
 #!/bin/sh
+# Remove legacy auto-update cron job
+rm -f /etc/cron.daily/raven-update /etc/cron.daily/crow-update
 
 # Create Crow data directories
 mkdir -p /usr/local/crow/data
