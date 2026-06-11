@@ -152,7 +152,7 @@ a
 #header .w
 {
     display: block;
-    margin: auto 0 -4px -22px;
+    margin: auto 0 -4px 8px;
     font-size: 20px;
     font-weight: bold;
 }
