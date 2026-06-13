@@ -10,6 +10,7 @@ import * as timers from "timers";
 import * as channel from "channel";
 import * as node from "node";
 import * as nodedb from "nodedb";
+import * as crypto from "crypto.crypto";
 import * as kiss from "meshcore_tnc_kiss";
 import * as pkt from "meshcore_tnc_packet";
 import * as mccrypto from "meshcore_tnc_crypto";
