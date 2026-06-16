@@ -73,41 +73,7 @@ function storageSupported(id, fn)
     return true;
 }
 
-function csvEscape(v)
-{
-    v = `${v ?? ""}`;
-    return `"${replace(v, '"', '""')}"`;
-}
-
-function exportMessages(id, namekey, fmt)
-{
-    if (!namekey) {
-        event.queue({ cmd: "/reply", reply: [ "No selected channel to export." ], socket: id });
-        return;
-    }
-    const msgs = textmessage.getMessages(namekey) ?? [];
-    if (length(msgs) === 0) {
-        event.queue({ cmd: "/reply", reply: [ "Selected channel has no messages to export." ], socket: id });
-        return;
-    }
-    const reply = [ `<b>Export ${namekey}</b>`, "&nbsp;" ];
-    if (fmt === "csv") {
-        push(reply, "timestamp,from,message");
-        for (let i = 0; i < length(msgs); i++) {
-            const m = msgs[i];
-            push(reply, `${csvEscape(m.time ?? m.rx_time ?? m.id)},${csvEscape(m.textfrom ?? m.from_name ?? m.from)},${csvEscape(m.text)}`);
-        }
-    }
-    else {
-        for (let i = 0; i < length(msgs); i++) {
-            const m = msgs[i];
-            push(reply, `${m.time ?? m.rx_time ?? m.id} ${m.textfrom ?? m.from_name ?? m.from ?? ""}: ${m.text ?? ""}`);
-        }
-    }
-    event.queue({ cmd: "/reply", reply: reply, socket: id });
-}
-
-export function post(cmd, id, namekey)
+export function post(cmd, id)
 {
     switch (cmd[0]) {
         case "join":
@@ -278,17 +244,6 @@ export function post(cmd, id, namekey)
             }
             break;
         }
-        case "export":
-        {
-            const fmt = lc(cmd[1] ?? "text");
-            if (fmt !== "text" && fmt !== "csv") {
-                event.queue({ cmd: "/reply", reply: [ "Usage:", "/export", "/export csv" ], socket: id });
-            }
-            else {
-                exportMessages(id, namekey, fmt);
-            }
-            break;
-        }
         case "backend":
         case "backends":
         {
@@ -413,19 +368,9 @@ export function post(cmd, id, namekey)
                 "<b>/join</b> #name backend=NAME CALL1 msg &mdash; APRS group on a specific backend",
                 "<b>/leave</b> #name &mdash; leave channel and remove APRS group",
                 "<b>/groups</b> &mdash; list all APRS groups and members",
-                "<b>/channels</b> &mdash; list public channels on local network",
-                "<b>/channels world</b> &mdash; list public channels across the wider mesh",
-                "<b>/channels join</b> #name | %name | Name key &mdash; join a channel",
-                "<b>/channels leave</b> #name &mdash; leave a channel",
-                "<b>/storage status</b> &mdash; show active storage state",
-                "<b>/storage usb scan</b> &mdash; list removable USB devices",
-                "<b>/storage usb enable</b> &mdash; mount/activate USB storage",
-                "<b>/storage usb mount</b> &mdash; alias for enable",
-                "<b>/storage usb disable</b> &mdash; return to internal node storage",
-                "<b>/storage quota images</b> MB &mdash; set image quota",
-                "<b>/export</b> &mdash; export selected channel as text",
-                "<b>/export csv</b> &mdash; export selected channel as CSV",
-                "<b>/backends</b> &mdash; list configured APRS backends"
+                "<b>/backends</b> &mdash; list configured APRS backends",
+                "<b>/storage</b> status &mdash; show active storage state",
+                "<b>/channels</b> &mdash; list public channels on local network"
             ], socket: id });
             break;
         }

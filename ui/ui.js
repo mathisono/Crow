@@ -14,7 +14,6 @@ let replyid;
 let activeFilter;
 let winlink = null;
 let aprsBackends = [];
-let aprsGroups = [];
 let activityTimeout;
 let catchupTimeout;
 let focusid = null;
@@ -316,19 +315,6 @@ function htmlCommand(reply)
     </div>`;
 }
 
-function callsForChannelName(name)
-{
-    if (!aprsGroups) {
-        return "";
-    }
-    for (let i = 0; i < aprsGroups.length; i++) {
-        if ((aprsGroups[i].name || "").toLowerCase() === (name || "").toLowerCase()) {
-            return (aprsGroups[i].members || []).join(" ");
-        }
-    }
-    return "";
-}
-
 function backendOptions(selected)
 {
     if (!aprsBackends || aprsBackends.length === 0) {
@@ -347,14 +333,10 @@ function backendOptions(selected)
 function htmlChannelConfig()
 {
     const hasBackends = aprsBackends && aprsBackends.length > 0;
-    const showAprsCalls = hasBackends;
     const body = echannels.map((e, i) => {
         const ne = echannels[i + 1] || {};
         const backendSelect = hasBackends
             ? `<select onchange="typeChannelBackend(${i}, event.target.value)">${backendOptions(e.backend)}</select>`
-            : '';
-        const callsInput = showAprsCalls
-            ? `<input value="${e.aprs_members || ''}" oninput="typeChannelAprsMembers(${i}, event.target.value)" size="24" placeholder="CALL1 CALL2">`
             : '';
         return `<form class="c">
             <input value="${e.meshtastic ? "Meshtastic" : e.name}" oninput="typeChannelName(${i}, event.target.value)" required minlength="1" maxlength="11" size="11" placeholder="Name" ${e.aredn || e.meshtastic || e.meshcore ? "disabled" : ""} pattern="[^ ]+">
@@ -384,7 +366,6 @@ function htmlChannelConfig()
                 <option>Primary</option>
             </select>
             ${backendSelect}
-            ${callsInput}
             <button onclick="rmChannel(${i})" ${e.aredn ? "disabled" : ""}>-</button>
             <button onclick="addChannel(${i})">+</button>
         </form>`;
@@ -401,7 +382,6 @@ function htmlChannelConfig()
                 <div>Winlink</div>
                 <div></div>
                 ${hasBackends ? '<div>Backend</div>' : ''}
-                ${showAprsCalls ? '<div>APRS Calls</div>' : ''}
             </div>
             ${body}
         </div>
@@ -527,9 +507,6 @@ function updateChannels(msg)
         channels = msg.channels;
         if (msg.aprs_backends) {
             aprsBackends = msg.aprs_backends;
-        }
-        if (msg.aprs_groups) {
-            aprsGroups = msg.aprs_groups;
         }
     }
     I("channels").innerHTML = channels.map(c => htmlChannel(c)).join("");
@@ -906,7 +883,7 @@ function downloadImage()
 
 function addChannel(idx)
 {
-    echannels.splice(idx + 1, 0, { name: "", key: "og==", max: 100, badge: true, images: true, telemetry: false, winlink: false, backend: "", aprs_members: "" });
+    echannels.splice(idx + 1, 0, { name: "", key: "og==", max: 100, badge: true, images: true, telemetry: false, winlink: false, backend: "" });
     I("texts").innerHTML = htmlChannelConfig();
 }
 
@@ -1005,11 +982,6 @@ function typeChannelBackend(idx, value)
     echannels[idx].backend = value;
 }
 
-function typeChannelAprsMembers(idx, value)
-{
-    echannels[idx].aprs_members = value;
-}
-
 function genChannelKey(idx, value)
 {
     function rand() {
@@ -1089,7 +1061,7 @@ function doneChannels()
             if (name.length >= 1 && key && e.max >= 10 && e.max <= 1000) {
                 const namekey = `${name} ${key}`;
                 const channel = getChannel(namekey) || { meshtastic: false, state: { count: 0, cursor: null, max: 100, badge: true, images: true } };
-                channelnames.push({ namekey: namekey, max: e.max, badge: e.badge, images: e.images, telemetry: e.telemetry, winlink: e.winlink, backend: e.backend || "", aprs_members: e.aprs_members || "" });
+                channelnames.push({ namekey: namekey, max: e.max, badge: e.badge, images: e.images, telemetry: e.telemetry, winlink: e.winlink, backend: e.backend || "" });
                 channel.state.max = e.max;
                 channel.state.badge = e.badge;
                 channel.state.images = e.images;
@@ -1232,8 +1204,7 @@ function showNamekey(namekey)
                     images: useImage(c.namekey),
                     telemetry: c.telemetry,
                     winlink: c.state.winlink,
-                    backend: c.backend || "",
-                    aprs_members: c.aprs_members || callsForChannelName(c.name)
+                    backend: c.backend || ""
                 });
             });
             I("texts").innerHTML = htmlChannelConfig();

@@ -97,28 +97,6 @@ export function allGroups()
     return groups;
 };
 
-export function groupForChannelNamekey(namekey)
-{
-    const name = split(namekey ?? "", " ")[0];
-    if (ord(name, 0) !== 35 && ord(name, 0) !== 37) {
-        return null;
-    }
-    return getGroup(name);
-};
-
-export function parseMembersText(text)
-{
-    const out = [];
-    const toks = split(replace(text ?? "", ",", " "), " ");
-    for (let i = 0; i < length(toks); i++) {
-        const c = normcall(toks[i]);
-        if (c && match(c, /^(?=.*[0-9])[A-Z0-9]{1,6}(-[0-9]{1,2})?$/)) {
-            push(out, c);
-        }
-    }
-    return out;
-};
-
 // --- Duplicate / rate-limit ---
 
 export function canRepeat(g, src, text, id)
