@@ -6,6 +6,9 @@ import * as crypto from "crypto.crypto";
 const PORT = 4404;
 
 const PING_INTERVAL = 30;
+const MAX_HEADER_BYTES = 8192;
+const MAX_WS_FRAME = 1024 * 1024;
+const MAX_WS_MESSAGE = 2 * 1024 * 1024;
 
 const MAGIC_KEY = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 
@@ -109,6 +112,11 @@ function decode(state)
                 mask = (mask << 32) | mask;
                 off = 6;
             }
+            if (len > MAX_WS_FRAME || length(state.msg) + len > MAX_WS_MESSAGE) {
+                DEBUG0("websocket: frame/message too large, closing client %d\n", state.id);
+                close(state.s);
+                return messages;
+            }
             if (len >= 0 && off + len <= length(state.incoming)) {
                 const buf = struct.buffer(substr(state.incoming, off, len));
                 const rlen = int(len / 8);
@@ -183,6 +191,11 @@ function read(ns)
                 return [];
             }
             state.incoming += data;
+            if (length(state.incoming) > MAX_HEADER_BYTES) {
+                DEBUG0("websocket: HTTP header too large\n");
+                close(ns);
+                return [];
+            }
             const i = index(state.incoming, "\r\n\r\n");
             if (i !== -1) {
                 let key = null;
@@ -217,7 +230,7 @@ function read(ns)
                     ns.send(`HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${digest}\r\n\r\n`);
                     state.state = S_MSGRECV;
                     state.incoming = substr(state.incoming, i + 4);
-                    return [ { text: '{"cmd":"connected","agent":"' + agent + '"}', socket: state.id }, ...decode(state) ];
+                    return [ { text: '{"cmd":"connected","agent":"' + replace(agent, '"', '') + '"}', socket: state.id }, ...decode(state) ];
                 }
             }
             break;
@@ -227,9 +240,14 @@ function read(ns)
             const data = ns.recv();
             if (!data || length(data) === 0) {
                 close(ns);
-                return;
+                return [];
             }
             state.incoming += data;
+            if (length(state.incoming) > MAX_WS_MESSAGE + 14) {
+                DEBUG0("websocket: receive buffer too large\n");
+                close(ns);
+                return [];
+            }
             return decode(state);
         }
         default:
