@@ -188,7 +188,14 @@ export function tick()
     }
     const as = aprs.handle();
     if (as) {
-        push(sockets, [ as, socket.POLLIN|socket.POLLRDHUP, "aprs" ]);
+        if (type(as) === "array") {
+            for (let i = 0; i < length(as); i++) {
+                push(sockets, [ as[i].socket, socket.POLLIN|socket.POLLRDHUP, `aprs:${as[i].name}` ]);
+            }
+        }
+        else {
+            push(sockets, [ as, socket.POLLIN|socket.POLLRDHUP, "aprs" ]);
+        }
     }
     const ph = platform.handle();
     if (ph) {
@@ -203,7 +210,8 @@ export function tick()
     const v = socket.poll(timers.minTimeout(60) * 1000, ...sockets);
     for (let i = 0; i < length(v); i++) {
         if (v[i] && v[i][1]) {
-            switch (v[i][2]) {
+            const evtype = v[i][2];
+            switch (evtype) {
                 case "websocket":
                 {
                     const msgs = websocket.recv(v[i][0]);
@@ -247,10 +255,20 @@ export function tick()
                     break;
                 case "aprs":
                     try {
-                        queue(aprs.recv());
+                        queue(aprs.recv(null));
                     }
                     catch (e) {
                         DEBUG0("aprs recv: %s\n%s\n", e, e.stacktrace);
+                    }
+                    break;
+                default:
+                    if (substr(evtype, 0, 5) === "aprs:") {
+                        try {
+                            queue(aprs.recv(substr(evtype, 5)));
+                        }
+                        catch (e) {
+                            DEBUG0("aprs recv: %s\n%s\n", e, e.stacktrace);
+                        }
                     }
                     break;
                 case "platform":
