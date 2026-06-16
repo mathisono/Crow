@@ -1202,7 +1202,8 @@ function showNamekey(namekey)
                     badge: c.state.badge,
                     images: useImage(c.namekey),
                     telemetry: c.telemetry,
-                    winlink: c.state.winlink
+                    winlink: c.state.winlink,
+                    backend: c.backend || ""
                 });
             });
             I("texts").innerHTML = htmlChannelConfig();

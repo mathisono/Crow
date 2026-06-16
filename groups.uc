@@ -7,6 +7,7 @@ let groups = [];
 let recent = {};
 let last_group_tx = {};
 let inline_max_members = 10;
+let update = null;
 
 function now()
 {
@@ -58,6 +59,7 @@ export function putGroup(name, dsts, opts)
     if (opts?.repeat_member_messages != null) {
         g.repeat_member_messages = opts.repeat_member_messages;
     }
+    update?.("aprs_groups");
     return g;
 };
 
@@ -67,6 +69,7 @@ export function removeGroup(name)
     for (let i = 0; i < length(groups); i++) {
         if (lc(groups[i].name) === name) {
             splice(groups, i, 1);
+            update?.("aprs_groups");
             return true;
         }
     }
@@ -217,6 +220,7 @@ export function setup(config)
 {
     groups = config.aprs?.groups ?? [];
     inline_max_members = config.aprs?.inline_max_members ?? 10;
+    update = config.update;
 };
 
 export function tick()

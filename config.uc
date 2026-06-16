@@ -70,6 +70,28 @@ function update(option)
             }
             break;
         }
+        case "aprs_groups":
+        {
+            const ngroups = groups.allGroups();
+            if (!config.aprs) {
+                config.aprs = {};
+            }
+            config.aprs.groups = ngroups;
+            if (!override.aprs) {
+                override.aprs = {};
+            }
+            if (bconfig.aprs && jsonEq(ngroups, bconfig.aprs.groups)) {
+                delete override.aprs.groups;
+                if (length(keys(override.aprs)) === 0) {
+                    delete override.aprs;
+                }
+            }
+            else {
+                override.aprs.groups = ngroups;
+            }
+            write = true;
+            break;
+        }
         default:
             break;
     }
