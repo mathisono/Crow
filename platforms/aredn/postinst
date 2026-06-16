@@ -1,5 +1,5 @@
 #!/bin/sh
-# Remove legacy auto-update cron job
+# Remove legacy auto-update cron jobs
 rm -f /etc/cron.daily/raven-update /etc/cron.daily/crow-update
 
 # Create Crow data directories
@@ -7,19 +7,18 @@ mkdir -p /usr/local/crow/data
 mkdir -p /usr/local/crow/winlink/forms
 mkdir -p /tmp/apps/crow/images
 
-# Migrate data from old Raven paths if they exist and Crow paths are empty
-if [ -d /usr/local/raven/data ] && [ -z "$(ls -A /usr/local/crow/data 2>/dev/null)" ]; then
-    cp -an /usr/local/raven/data/* /usr/local/crow/data/ 2>/dev/null
+# Import selected legacy Raven settings/data only when Crow state is missing.
+if [ -x /usr/local/crow/platforms/aredn/crow-migrate-raven.sh ]; then
+    /usr/local/crow/platforms/aredn/crow-migrate-raven.sh
 fi
-if [ -d /usr/local/raven/winlink/forms ] && [ -z "$(ls -A /usr/local/crow/winlink/forms 2>/dev/null)" ]; then
-    cp -an /usr/local/raven/winlink/forms/* /usr/local/crow/winlink/forms/ 2>/dev/null
-fi
+
+# Migrate temporary image cache if present.
 if [ -d /tmp/apps/raven/images ] && [ -z "$(ls -A /tmp/apps/crow/images 2>/dev/null)" ]; then
     cp -an /tmp/apps/raven/images/* /tmp/apps/crow/images/ 2>/dev/null
 fi
 
-/etc/init.d/raven enable
-/etc/init.d/raven start
+/etc/init.d/crow enable
+/etc/init.d/crow start
 /usr/local/bin/restart-firewall
 
 # Fixup badge color in 4.26.1.0
