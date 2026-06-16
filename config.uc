@@ -18,6 +18,7 @@ import * as position from "position";
 import * as traceroute from "traceroute";
 import * as textstore from "textstore";
 import * as commands from "commands";
+import * as groups from "groups";
 import * as device from "telemetry_device";
 import * as environmental_weewx from "telemetry_environmental_weewx";
 import * as airquality_purpleair from "telemetry_airquality_purpleair";
@@ -51,6 +52,9 @@ function update(option)
                 const nchannel = { namekey: channels[i].namekey };
                 if (channels[i].telemetry) {
                     nchannel.telemetry = true;
+                }
+                if (channels[i].backend != null) {
+                    nchannel.backend = channels[i].backend;
                 }
                 push(nchannels, nchannel);
             }
@@ -164,6 +168,8 @@ export function setup()
     router.registerApp(meshtastic);
     meshcore.setup(config);
     router.registerApp(meshcore);
+    groups.setup(config);
+    router.registerApp(groups);
     aprs.setup(config);
     router.registerApp(aprs);
     

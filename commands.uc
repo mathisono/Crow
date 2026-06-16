@@ -5,6 +5,8 @@ import * as message from "message";
 import * as textmessage from "textmessage";
 import * as node from "node";
 import * as crypto from "crypto.crypto";
+import * as groups from "groups";
+import * as aprs from "aprs";
 
 function fmtBytes(n)
 {
@@ -53,6 +55,15 @@ function getBridge()
     return null;
 }
 
+
+function currentChannelsAsSettings()
+{
+    return map(channel.getAllLocalChannels(), c => {
+        const s = textmessage.state(c.namekey);
+        return { namekey: c.namekey, max: s.max, badge: s.badge, images: s.images, telemetry: c.telemetry, winlink: s.winlink, backend: c.backend ?? "" };
+    });
+}
+
 function storageSupported(id, fn)
 {
     if (!platform || !platform[fn]) {
@@ -65,6 +76,96 @@ function storageSupported(id, fn)
 export function post(cmd, id)
 {
     switch (cmd[0]) {
+        case "join":
+        {
+            const parsed = groups.parseJoinArgs(slice(cmd, 1));
+            if (!parsed) {
+                event.queue({ cmd: "/reply", reply: [
+                    "Usage:",
+                    "/join #name &mdash; join/create shared-key channel (Meshtastic+MeshCore+AREDN)",
+                    "/join %name &mdash; join/create AREDN-only channel",
+                    "/join #name CALL1 CALL2 message &mdash; create APRS group + channel + send",
+                    "/join #name backend=NAME CALL1 message &mdash; APRS group on specific backend"
+                ], socket: id });
+                break;
+            }
+            const namekey = groups.createGroupChannel(parsed.name, parsed.arednOnly, parsed.backendName);
+            if (length(parsed.members) > 0) {
+                groups.putGroup(parsed.name, parsed.members, {
+                    backend: parsed.backendName,
+                    repeat_member_messages: false,
+                    rate_limit_seconds: 20,
+                    max_members: 10
+                });
+                if (namekey && aprs.enabled) {
+                    aprs.updateChannelBackend(namekey, parsed.backendName);
+                }
+                if (parsed.messageText && aprs.enabled) {
+                    aprs.sendToGroup(groups.getGroup(parsed.name), parsed.messageText, namekey);
+                }
+                const reply = [
+                    `Created group ${parsed.name} (${length(parsed.members)} member${length(parsed.members) > 1 ? "s" : ""})`,
+                    `Channel: ${namekey}`
+                ];
+                if (parsed.backendName) {
+                    push(reply, `Backend: ${parsed.backendName}`);
+                }
+                if (parsed.messageText) {
+                    push(reply, `Sent: &ldquo;${parsed.messageText}&rdquo;`);
+                }
+                event.queue({ cmd: "/reply", reply: reply, socket: id });
+            }
+            else {
+                event.queue({ cmd: "/reply", reply: [ `Joined channel ${parsed.name}` ], socket: id });
+            }
+            break;
+        }
+        case "leave":
+        {
+            const name = cmd[1];
+            if (!name) {
+                event.queue({ cmd: "/reply", reply: [ "Usage:", "/leave #name &mdash; leave channel and remove APRS group if present" ], socket: id });
+                break;
+            }
+            groups.removeGroup(name);
+            const currchannels = channel.getAllLocalChannels();
+            const baseName = substr(name, 1);
+            const newchannels = map(filter(currchannels, c => {
+                const cn = split(c.namekey, " ")[0];
+                const cnBase = substr(cn, 1);
+                return cnBase !== baseName;
+            }), c => {
+                const s = textmessage.state(c.namekey);
+                return { namekey: c.namekey, max: s.max, badge: s.badge, images: s.images, telemetry: c.telemetry, winlink: s.winlink, backend: c.backend ?? "" };
+            });
+            if (length(currchannels) !== length(newchannels)) {
+                event.queue({ cmd: "newchannels", channels: newchannels });
+                event.queue({ cmd: "/reply", reply: [ `Left ${name}` ], socket: id });
+            }
+            else {
+                event.queue({ cmd: "/reply", reply: [ `Not in ${name}` ], socket: id });
+            }
+            break;
+        }
+        case "groups":
+        {
+            const all = groups.allGroups();
+            if (length(all) === 0) {
+                event.queue({ cmd: "/reply", reply: [ "No APRS groups defined" ], socket: id });
+            }
+            else {
+                const reply = [ "APRS groups:", "&nbsp;" ];
+                for (let i = 0; i < length(all); i++) {
+                    const g = all[i];
+                    const mems = join(", ", g.members ?? []);
+                    const be = g.backend ? ` [backend=${g.backend}]` : "";
+                    const rpt = g.repeat_member_messages ? " [repeat]" : "";
+                    push(reply, `<b>${g.name}</b>${be}${rpt}: ${mems}`);
+                }
+                event.queue({ cmd: "/reply", reply: reply, socket: id });
+            }
+            break;
+        }
         case "channels":
         {
             switch (cmd[1] ?? "local") {
@@ -108,13 +209,13 @@ export function post(cmd, id)
                         let join = true;
                         const namekey = `${name} ${key}`;
                         const newchannel = { namekey: namekey, max: 100, badge: true, images: false, telemetry: false, winlink: false };
-                        const currchannels = map(channel.getAllLocalChannels(), c => {
-                            const s = textmessage.state(c.namekey);
-                            if (c.namekey === namekey) {
+                        const currchannels = currentChannelsAsSettings();
+                        for (let i = 0; i < length(currchannels); i++) {
+                            if (currchannels[i].namekey === namekey) {
                                 join = false;
+                                break;
                             }
-                            return { namekey: c.namekey, max: s.max, badge: s.badge, images: s.images, telemetry: c.telemetry, winlink: s.winlink };
-                        });
+                        }
                         if (join) {
                             event.queue({ cmd: "newchannels", channels: [ ...currchannels, newchannel ] });
                             event.queue({ cmd: "/reply", reply: [ `Joined channel ${name}` ], socket: id });
@@ -129,7 +230,7 @@ export function post(cmd, id)
                         const currchannels = channel.getAllLocalChannels();
                         const newchannels = map(filter(currchannels, c => index(c.namekey, name) !== 0), c => {
                             const s = textmessage.state(c.namekey);
-                            return { namekey: c.namekey, max: s.max, badge: s.badge, images: s.images, telemetry: c.telemetry, winlink: s.winlink };
+                            return { namekey: c.namekey, max: s.max, badge: s.badge, images: s.images, telemetry: c.telemetry, winlink: s.winlink, backend: c.backend ?? "" };
                         });
                         if (length(currchannels) !== length(newchannels)) {
                             event.queue({ cmd: "newchannels", channels: newchannels });
@@ -140,6 +241,26 @@ export function post(cmd, id)
                 }
                 default:
                     break;
+            }
+            break;
+        }
+        case "backend":
+        case "backends":
+        {
+            if (!aprs.enabled) {
+                event.queue({ cmd: "/reply", reply: [ "APRS is not enabled" ], socket: id });
+                break;
+            }
+            const bes = aprs.getBackendNames();
+            if (length(bes) === 0) {
+                event.queue({ cmd: "/reply", reply: [ "No APRS backends configured" ], socket: id });
+            }
+            else {
+                const reply = [ "APRS backends:", "&nbsp;" ];
+                for (let i = 0; i < length(bes); i++) {
+                    push(reply, `<b>${bes[i].key}</b> &mdash; ${bes[i].label}`);
+                }
+                event.queue({ cmd: "/reply", reply: reply, socket: id });
             }
             break;
         }
@@ -237,7 +358,24 @@ export function post(cmd, id)
             }
             break;
         }
+        case "help":
+        {
+            event.queue({ cmd: "/reply", reply: [
+                "<b>Crow Slash Commands</b>", "&nbsp;",
+                "<b>/join</b> #name &mdash; join/create shared-key channel (Meshtastic+MeshCore+AREDN)",
+                "<b>/join</b> %name &mdash; join/create AREDN-only channel",
+                "<b>/join</b> #name CALL1 CALL2 message &mdash; create APRS group + channel + send message",
+                "<b>/join</b> #name backend=NAME CALL1 msg &mdash; APRS group on a specific backend",
+                "<b>/leave</b> #name &mdash; leave channel and remove APRS group",
+                "<b>/groups</b> &mdash; list all APRS groups and members",
+                "<b>/backends</b> &mdash; list configured APRS backends",
+                "<b>/storage</b> status &mdash; show active storage state",
+                "<b>/channels</b> &mdash; list public channels on local network"
+            ], socket: id });
+            break;
+        }
         default:
+            event.queue({ cmd: "/reply", reply: [ `Unknown command: <b>/${cmd[0]}</b>. Type <b>/help</b> for a list of commands.` ], socket: id });
             break;
     }
 };
