@@ -22,12 +22,10 @@ cp $SRC/*.uc $ROOT/data/usr/local/crow/
 cp $SRC/crypto/*.uc $ROOT/data/usr/local/crow/crypto/
 cp $SRC/platforms/aredn/*.uc $ROOT/data/usr/local/crow/platforms/aredn/
 cp $SRC/platforms/aredn/raven.conf $ROOT/data/usr/local/crow/crow.conf
-# Temporary fallback until config.uc fully drops legacy local raven.conf lookup.
-cp $SRC/platforms/aredn/raven.conf $ROOT/data/usr/local/crow/raven.conf
 cp $SRC/platforms/aredn/crow-migrate-raven.sh $ROOT/data/usr/local/crow/platforms/aredn/crow-migrate-raven.sh
 echo "export const version = '${VERSION}';" > $ROOT/data/usr/local/crow/version.uc
 
-cp $SRC/ui/ui.js $SRC/ui/ui.css $SRC/ui/crow.svg $ROOT/data/www/apps/crow/
+cp $SRC/ui/ui.js $SRC/ui/ui-safe.js $SRC/ui/ui.css $SRC/ui/crow.svg $ROOT/data/www/apps/crow/
 cat $SRC/ui/index.html | sed s:0.0.0-r0:${VERSION}: > $ROOT/data/www/apps/crow/index.html
 cp $SRC/ui/crow.svg $ROOT/data/www/apps/crow/icon.svg
 cp $SRC/ui/crow.png $ROOT/data/www/apps/crow/ix.png
@@ -36,7 +34,7 @@ cp $SRC/platforms/aredn/image.uc $ROOT/data/www/cgi-bin/apps/crow/image
 
 cp $SRC/platforms/aredn/raven.init $ROOT/data/etc/init.d/crow
 
-cp $SRC/platforms/aredn/upgrade.conf $ROOT/data/etc/arednsysupgrade.d/KJ6DZB.crow.conf
+cp $SRC/platforms/aredn/upgrade.conf $ROOT/data/etc/arednsysupgrade.d/crow.conf
 
 chmod 755 $ROOT/data/etc/local/mesh-firewall/21-crow
 chmod 755 $ROOT/data/www/apps/crow/* $ROOT/data/www/cgi-bin/apps/crow/admin $ROOT/data/www/cgi-bin/apps/crow/image
@@ -64,7 +62,7 @@ Provides:
 Source: package/crow
 Section: net
 Priority: optional
-Maintainer: Mathison Ott (KJ6DZB)
+Maintainer: Crow Contributors
 Architecture: all
 Description: Crow Mesh Messaging
 __EOF__
@@ -96,7 +94,7 @@ mkapk.py \
     -D 'Crow Mesh Messaging' \
     -u 'https://github.com/mathisono/Crow' \
     -l 'MIT' \
-    -m 'mathisono@users.noreply.github.com' \
+    -m 'crow@localhost' \
     -p ucode,curl \
     -o .
 
