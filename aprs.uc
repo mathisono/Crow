@@ -32,6 +32,7 @@ let defaultBackendName = null;
 
 // Channel → backend name mapping (namekey → backendName)
 const channelBackendMap = {};
+const lastChannelSender = {};
 
 function backendTypeLabel(btype)
 {
@@ -478,6 +479,9 @@ function resolveInboundChannel(fromcall, backendName)
 function ravenMsg(fromcall, text, backendName)
 {
     const target = resolveInboundChannel(fromcall, backendName);
+    if (fromcall) {
+        lastChannelSender[target] = fromcall;
+    }
     const msg = message.createMessage(node.BROADCAST, node.UNKNOWN, target, "text_message", text, {
         transport: "aprs",
         originating_callsign: fromcall,
@@ -786,7 +790,12 @@ export function send(msg)
         if (!g) {
             g = getGroup(p.group);
         }
-        sendGroup(g, p.text, null, msg.namekey);
+        if (!g && channelBackendMap[msg.namekey] && lastChannelSender[msg.namekey]) {
+            sendOne(bn, lastChannelSender[msg.namekey], p.text);
+        }
+        else {
+            sendGroup(g, p.text, null, msg.namekey);
+        }
     }
 };
 
