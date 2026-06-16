@@ -81,7 +81,7 @@ function esc(text)
 
 function attr(text)
 {
-    return esc(text).replace(/`/g, "&#96;");
+    return esc(text).replace(/'/g, "&#039;").replace(/`/g, "&#96;");
 }
 
 function safeClass(value)
@@ -107,13 +107,13 @@ function safeUrl(value)
     }
     catch (_) {
     }
-    return "about:blank";
+    return "#";
 }
 
 function linkifyEscaped(html)
 {
     return String(html ?? "")
-        .replace(/https?:\/\/[^ \t<&]+/g, v => `<a target="_blank" href="${attr(safeUrl(v.replace(/&amp;/g, "&")))}">${v}</a>`)
+        .replace(/https?:\/\/[^ \t<&]+/g, v => `<a target="_blank" rel="noopener noreferrer" href="${attr(safeUrl(v.replace(/&amp;/g, "&")))}">${v}</a>`)
         .replace(/@\[([^\]]+)\]/g, (_, w) => `<span>${w}</span>`);
 }
 
@@ -253,7 +253,7 @@ function htmlNodeDetail(node)
     let map = "";
     if (node.mapurl) {
         const mapurl = attr(safeUrl(node.mapurl));
-        map = `<a class="map" href="${mapurl}" target="_blank"><iframe src="${mapurl}"></iframe><div class="overlay"></div></a>`;
+        map = `<a class="map" href="${mapurl}" target="_blank" rel="noopener noreferrer"><iframe src="${mapurl}"></iframe><div class="overlay"></div></a>`;
     }
     let hops = "";
     if (node.hops !== null && node.hops !== undefined) {
@@ -338,7 +338,7 @@ function htmlText(text, useimage)
         const im = structuredtext.image;
         if (useimage && im) {
             const imageUrl = attr(safeUrl(im.url));
-            textmsg = `<div class="b"><div class="ack ${text.ack ? 'true' : ''}"></div><div class="i"><a target="_blank" href="${imageUrl}"><img loading="lazy" src="${imageUrl}" onerror="this.src='/apps/crow/ix.png'"></a></div></div>`;
+            textmsg = `<div class="b"><div class="ack ${text.ack ? 'true' : ''}"></div><div class="i"><a target="_blank" rel="noopener noreferrer" href="${imageUrl}"><img loading="lazy" src="${imageUrl}" onerror="this.src='/apps/crow/ix.png'"></a></div></div>`;
         }
     }
     if (!textmsg) {
