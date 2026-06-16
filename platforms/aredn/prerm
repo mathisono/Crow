@@ -1,4 +1,4 @@
 #!/bin/sh
-/etc/init.d/raven stop
-/etc/init.d/raven disable
+/etc/init.d/crow stop
+/etc/init.d/crow disable
 exit 0
