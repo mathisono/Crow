@@ -345,7 +345,6 @@ function htmlChannelConfig()
             <div><input ${e.badge ? "checked" : ""} type="checkbox" oninput="typeChannelBadge(${i}, event.target.checked)"></div>
             <div><input ${e.images ? "checked" : ""} type="checkbox" oninput="typeChannelImages(${i}, event.target.checked)" ${e.meshtastic || e.meshcore ? "disabled" : ""}></div>
             <div><input ${e.winlink ? "checked" : ""} type="checkbox" oninput="typeChannelWinlink(${i}, event.target.checked)" ${e.meshtastic || e.meshcore ? "disabled" : ""}></div>
-            ${backendSelect}
             <select onchange="genChannelKey(${i}, event.target.value)" ${e.aredn ? "disabled" : ""}>
                 <option>new key</option>
                 <option>1 byte</option>
@@ -366,6 +365,7 @@ function htmlChannelConfig()
                 <option disabled>-- MeshCore --</option>
                 <option>Primary</option>
             </select>
+            ${backendSelect}
             <button onclick="rmChannel(${i})" ${e.aredn ? "disabled" : ""}>-</button>
             <button onclick="addChannel(${i})">+</button>
         </form>`;
@@ -380,6 +380,7 @@ function htmlChannelConfig()
                 <div>Notify</div>
                 <div>Images</div>
                 <div>Winlink</div>
+                <div></div>
                 ${hasBackends ? '<div>Backend</div>' : ''}
             </div>
             ${body}
