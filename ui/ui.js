@@ -73,10 +73,59 @@ function N(html)
     return xdiv.firstElementChild;
 }
 
+function esc(text)
+{
+    xdiv.innerText = String(text ?? "");
+    return xdiv.innerHTML;
+}
+
+function attr(text)
+{
+    return esc(text).replace(/`/g, "&#96;");
+}
+
+function safeClass(value)
+{
+    value = String(value ?? "");
+    return /^[A-Za-z0-9_-]+$/.test(value) ? value : "";
+}
+
+function safeInt(value, fallback = 0)
+{
+    value = parseInt(value, 10);
+    return Number.isFinite(value) ? value : fallback;
+}
+
+function safeUrl(value)
+{
+    value = String(value ?? "").trim();
+    try {
+        const url = new URL(value, location.origin);
+        if (url.protocol === "http:" || url.protocol === "https:") {
+            return value;
+        }
+    }
+    catch (_) {
+    }
+    return "about:blank";
+}
+
+function linkifyEscaped(html)
+{
+    return String(html ?? "")
+        .replace(/https?:\/\/[^ \t<&]+/g, v => `<a target="_blank" href="${attr(safeUrl(v.replace(/&amp;/g, "&")))}">${v}</a>`)
+        .replace(/@\[([^\]]+)\]/g, (_, w) => `<span>${w}</span>`);
+}
+
 function T(text)
 {
-    xdiv.innerText = text.trim();
-    return xdiv.innerHTML;
+    return esc(String(text ?? "").trim());
+}
+
+
+function byNamekey(namekey)
+{
+    return Array.from(document.querySelectorAll("[data-namekey]")).find(e => e.dataset.namekey === namekey);
 }
 
 function getChannel(namekey)
@@ -163,63 +212,72 @@ function toDisplayKey(key)
 function htmlChannel(channel)
 {
     const nk = channel.namekey.split(" ");
-    return `<div class="channel ${rightSelection === channel.namekey ? "selected" : ""}" data-namekey="${channel.namekey}" onclick="showNamekey('${channel.namekey}')">
+    const namekey = String(channel.namekey ?? "");
+    const onclick = `showNamekey(${JSON.stringify(namekey)})`;
+    return `<div class="channel ${rightSelection === namekey ? "selected" : ""}" data-namekey="${attr(namekey)}" onclick="${attr(onclick)}">
         <div class="n">
-            <div class="t">${channel.meshtastic ? "Meshtastic" : nk[0]}</div>
+            <div class="t">${channel.meshtastic ? "Meshtastic" : esc(nk[0])}</div>
         </div>
-        <div class="unread">${channel.state.count > 0 ? channel.state.count : ''}</div>
+        <div class="unread">${channel.state.count > 0 ? safeInt(channel.state.count) : ''}</div>
     </div>`;
 }
 
 function htmlNode(node)
 {
-    const namekey = `DirectMessages ${node.num}`;
+    const nodenum = safeInt(node.num);
+    const namekey = `DirectMessages ${nodenum}`;
+    const platform = safeClass(node.platform);
     const filter = `${node.short_name} ${node.long_name} ${node.platform === "native" ? "aredn" : node.platform}`.toLowerCase();
+    const onclick = `showNamekey(${JSON.stringify(namekey)})`;
     let filtered = false;
     if (activeFilter && filter.indexOf(activeFilter) === -1) {
         filtered = true;
     }
-    return `<div id="${node.num}" class="node ${node.platform} ${rightSelection === namekey ? 'selected' : ''}" ${filtered ? 'style="display:none"' : ''} data-namekey="${namekey}" data-filter="${filter}" onclick="showNamekey('${namekey}')">
-        <div class="s" style="color:${node.colors.fcolor};background-color:${node.colors.bcolor}">${node.short_name}</div>
-        ${node.platform ? '<div class="logo"></div>' : ''}
+    return `<div id="${attr(nodenum)}" class="node ${platform} ${rightSelection === namekey ? 'selected' : ''}" ${filtered ? 'style="display:none"' : ''} data-namekey="${attr(namekey)}" data-filter="${attr(filter)}" onclick="${attr(onclick)}">
+        <div class="s" style="color:${attr(node.colors.fcolor)};background-color:${attr(node.colors.bcolor)}">${esc(node.short_name)}</div>
+        ${platform ? '<div class="logo"></div>' : ''}
         <div class="m">
-            <div class="l">${node.long_name}</div>
-            <div class="r">${node.rolename}</div>
-            <div class="t">${new Date(1000 * node.lastseen).toLocaleString()}</div>
+            <div class="l">${esc(node.long_name)}</div>
+            <div class="r">${esc(node.rolename)}</div>
+            <div class="t">${esc(new Date(1000 * node.lastseen).toLocaleString())}</div>
         </div>
-        <div class="unread">${ node.state?.count > 0 ? node.state.count : ""}</div>
+        <div class="unread">${ node.state?.count > 0 ? safeInt(node.state.count) : ""}</div>
         ${node.favorite ? '<div class="star true"></div>' : ''}
     </div>`;
 }
 
 function htmlNodeDetail(node)
 {
+    const nodenum = safeInt(node.num);
+    const platform = safeClass(node.platform);
     let map = "";
     if (node.mapurl) {
-        map = `<a class="map" href="${node.mapurl}" target="_blank"><iframe src="${node.mapurl}"></iframe><div class="overlay"></div></a>`;
+        const mapurl = attr(safeUrl(node.mapurl));
+        map = `<a class="map" href="${mapurl}" target="_blank"><iframe src="${mapurl}"></iframe><div class="overlay"></div></a>`;
     }
     let hops = "";
     if (node.hops !== null && node.hops !== undefined) {
-        hops = `<div class="r"><div>Hops</div><div>${node.hops}</div></div>`;
+        hops = `<div class="r"><div>Hops</div><div>${safeInt(node.hops)}</div></div>`;
     }
     return `<div class="node-detail">
-        <div class="node ${node.platform}">
-            <div class="s" style="color:${node.colors.fcolor};background-color:${node.colors.bcolor}">${node.short_name}</div>
-            ${node.platform ? '<div class="logo"></div>' : ''}
+        <div class="node ${platform}">
+            <div class="s" style="color:${attr(node.colors.fcolor)};background-color:${attr(node.colors.bcolor)}">${esc(node.short_name)}</div>
+            ${platform ? '<div class="logo"></div>' : ''}
             <div class="m">
-                <div class="l">${node.long_name}<div class="star ${node.favorite}" onclick="toggleFav(event,${node.num})"></div></div>
-                <div class="r"><div>User Id</div><div>${node.id}</div></div>
+                <div class="l">${esc(node.long_name)}<div class="star ${node.favorite ? 'true' : ''}" onclick="toggleFav(event,${nodenum})"></div></div>
+                <div class="r"><div>User Id</div><div>${esc(node.id)}</div></div>
                 <div class="r"><div>Platform</div><div>${node.platform == "native" ? "AREDN" : node.platform == "meshcore" ? "MeshCore" : "Meshtastic"}</div></div>
-                ${node.public_key ? '<div class="r"><div>Public Key</div><div>' + node.public_key + '</div></div>' : ''}
+                ${node.public_key ? '<div class="r"><div>Public Key</div><div>' + esc(node.public_key) + '</div></div>' : ''}
                 ${hops}
-                ${node.version ? '<div class="r"><div>Version</div><div>' + node.version + '</div></div>' : ''}
-                <div class="r"><div>Role</div><div>${node.rolename}</div></div>
-                <div class="t"><div>Last seen</div><div>${new Date(1000 * node.lastseen).toLocaleString()}</div></div>
+                ${node.version ? '<div class="r"><div>Version</div><div>' + esc(node.version) + '</div></div>' : ''}
+                <div class="r"><div>Role</div><div>${esc(node.rolename)}</div></div>
+                <div class="t"><div>Last seen</div><div>${esc(new Date(1000 * node.lastseen).toLocaleString())}</div></div>
             </div>
         </div>
         ${map}
     </div>`;
 }
+
 
 function htmlText(text, useimage)
 {
@@ -237,7 +295,7 @@ function htmlText(text, useimage)
             };
         }
         else {
-            const id = text.from.toString(16);
+            const id = safeInt(text.from).toString(16);
             n = {
                 short_name: id.substr(-4),
                 long_name: id.substr(-4),
@@ -272,38 +330,44 @@ function htmlText(text, useimage)
         if (winlink && wl) {
             let show = "";
             if (winlink[wl.id]) {
-                show = `onclick="showNamekey('winlink-express-show ${text.id}')"`;
+                const onclick = `showNamekey(${JSON.stringify('winlink-express-show ' + safeInt(text.id))})`;
+                show = `onclick="${attr(onclick)}"`;
             }
-            textmsg = `<div class="b"><div class="ack ${text.ack ? 'true' : ''}"></div><div class="w" ${show}><div class="i">Winlink</div><span>${wl.id.replace("/", " | ")}</span></div></div>`;
+            textmsg = `<div class="b"><div class="ack ${text.ack ? 'true' : ''}"></div><div class="w" ${show}><div class="i">Winlink</div><span>${esc(String(wl.id ?? "").replace("/", " | "))}</span></div></div>`;
         }
         const im = structuredtext.image;
         if (useimage && im) {
-            textmsg = `<div class="b"><div class="ack ${text.ack ? 'true' : ''}"></div><div class="i"><a target="_blank" href="${im.url}"><img loading="lazy" src="${im.url}" onerror="this.src='/apps/crow/ix.png'"></a></div></div>`;
+            const imageUrl = attr(safeUrl(im.url));
+            textmsg = `<div class="b"><div class="ack ${text.ack ? 'true' : ''}"></div><div class="i"><a target="_blank" href="${imageUrl}"><img loading="lazy" src="${imageUrl}" onerror="this.src='/apps/crow/ix.png'"></a></div></div>`;
         }
     }
     if (!textmsg) {
         textmsg = `<div class="b"><div class="ack ${text.ack ? 'true' : ''}"></div><div class="t">`
-            + plaintext.replace(/https?:\/\/[^ \t<]+/g, v => `<a target="_blank" href="${v}">${v}</a>`)
-                       .replace(/@\[([^\]]+)\]/g, (_, w) => `<span>${w}</span>`)
+            + linkifyEscaped(plaintext)
             + '</div><a href="#" class="re" onclick="setupReply(event)">Reply</a></div>';
     }
-    return `<div id="${text.id}" class="text ${n.num != me.num ? '' : 'me ' + me.align} ${n.platform ?? ''}">
+    const textId = safeInt(text.id);
+    const isMe = safeInt(n.num, null) === safeInt(me.num, undefined);
+    const ownerClass = isMe ? `me ${safeClass(me.align)}` : '';
+    const platform = safeClass(n.platform);
+    return `<div id="${attr(textId)}" class="text ${ownerClass} ${platform}">
         ${reply}
         <div>
-            <div class="s" style="color:${n.colors.fcolor};background-color:${n.colors.bcolor}">${n.short_name}</div>
-            ${n.platform ? '<div class="logo"></div>' : ''}
+            <div class="s" style="color:${attr(n.colors.fcolor)};background-color:${attr(n.colors.bcolor)}">${esc(n.short_name)}</div>
+            ${platform ? '<div class="logo"></div>' : ''}
             <div class="c">
-                <div class="l">${T(n.long_name)}<div>&nbsp;${new Date(1000 * text.when).toLocaleString()}</div></div>
+                <div class="l">${T(n.long_name)}<div>&nbsp;${esc(new Date(1000 * text.when).toLocaleString())}</div></div>
                 ${textmsg}
             </div>
         </div>
     </div>`;
 }
 
+
 function htmlCommand(reply)
 {
-    const lines = `<div>${reply.join("</div><div>")}</div>`;
-    return `<div class="text me command ${me.align}">
+    const lines = reply.map(line => `<div>${esc(line)}</div>`).join("");
+    return `<div class="text me command ${safeClass(me.align)}">
         <div>
             <div class="s"></div>
             <div class="c">
@@ -320,12 +384,13 @@ function backendOptions(selected)
     if (!aprsBackends || aprsBackends.length === 0) {
         return '';
     }
+    selected = String(selected ?? "");
     let opts = `<option value=""${!selected ? ' selected' : ''}>(default)</option>`;
     for (let i = 0; i < aprsBackends.length; i++) {
         const b = aprsBackends[i];
-        const key = b.key || b;
-        const label = b.label || b;
-        opts += `<option value="${key}"${selected === key ? ' selected' : ''}>${label}</option>`;
+        const key = String(b.key || b || "");
+        const label = String(b.label || b || "");
+        opts += `<option value="${attr(key)}"${selected === key ? ' selected' : ''}>${esc(label)}</option>`;
     }
     return opts;
 }
@@ -334,17 +399,21 @@ function htmlChannelConfig()
 {
     const hasBackends = aprsBackends && aprsBackends.length > 0;
     const body = echannels.map((e, i) => {
-        const ne = echannels[i + 1] || {};
+        const channelName = e.meshtastic ? "Meshtastic" : e.name;
+        const channelKey = e.meshtastic ? e.name : toDisplayKey(e.key);
+        const disabledName = e.aredn || e.meshtastic || e.meshcore ? "disabled" : "";
+        const disabledKey = e.aredn || e.meshtastic || e.meshcore || (e.name[0] === "#" || e.name[0] === "%") ? "disabled" : "";
+        const disabledImages = e.meshtastic || e.meshcore ? "disabled" : "";
         const backendSelect = hasBackends
             ? `<select onchange="typeChannelBackend(${i}, event.target.value)">${backendOptions(e.backend)}</select>`
             : '';
         return `<form class="c">
-            <input value="${e.meshtastic ? "Meshtastic" : e.name}" oninput="typeChannelName(${i}, event.target.value)" required minlength="1" maxlength="11" size="11" placeholder="Name" ${e.aredn || e.meshtastic || e.meshcore ? "disabled" : ""} pattern="[^ ]+">
-            <input value="${e.meshtastic ? e.name : toDisplayKey(e.key)}" oninput="typeChannelKey(${i}, event.target)" required minlength="4" maxlength="43" size="43" placeholder="ID or Key" ${e.aredn || e.meshtastic || e.meshcore || (e.name[0] === "#" || e.name[0] === "%") ? "disabled" : ""}>
-            <input value="${e.max}" oninput="typeChannelMax(${i}, event.target.value)" required minlength="2" maxlength="4" size="4" placeholder="Count">
+            <input value="${attr(channelName)}" oninput="typeChannelName(${i}, event.target.value)" required minlength="1" maxlength="11" size="11" placeholder="Name" ${disabledName} pattern="[^ ]+">
+            <input value="${attr(channelKey)}" oninput="typeChannelKey(${i}, event.target)" required minlength="4" maxlength="43" size="43" placeholder="ID or Key" ${disabledKey}>
+            <input value="${attr(safeInt(e.max))}" oninput="typeChannelMax(${i}, event.target.value)" required minlength="2" maxlength="4" size="4" placeholder="Count">
             <div><input ${e.badge ? "checked" : ""} type="checkbox" oninput="typeChannelBadge(${i}, event.target.checked)"></div>
-            <div><input ${e.images ? "checked" : ""} type="checkbox" oninput="typeChannelImages(${i}, event.target.checked)" ${e.meshtastic || e.meshcore ? "disabled" : ""}></div>
-            <div><input ${e.winlink ? "checked" : ""} type="checkbox" oninput="typeChannelWinlink(${i}, event.target.checked)" ${e.meshtastic || e.meshcore ? "disabled" : ""}></div>
+            <div><input ${e.images ? "checked" : ""} type="checkbox" oninput="typeChannelImages(${i}, event.target.checked)" ${disabledImages}></div>
+            <div><input ${e.winlink ? "checked" : ""} type="checkbox" oninput="typeChannelWinlink(${i}, event.target.checked)" ${disabledImages}></div>
             <select onchange="genChannelKey(${i}, event.target.value)" ${e.aredn ? "disabled" : ""}>
                 <option>new key</option>
                 <option>1 byte</option>
@@ -389,23 +458,29 @@ function htmlChannelConfig()
     </div>`;
 }
 
+
 function htmlWinlinkMenu(menu)
 {
     let main = "";
     for (let i = 0; i < menu.length; i++) {
+        const menuName = String(menu[i][0] ?? "");
         const submenu = menu[i][1];
         let sub = "";
         for (let j = 0; j < submenu.length; j++) {
-            sub += `<div onclick="showNamekey('winlink-express-form ${menu[i][0]}/${submenu[j]}')">${submenu[j]}</div>`;
+            const subName = String(submenu[j] ?? "");
+            const form = `${menuName}/${subName}`;
+            const onclick = `showNamekey(${JSON.stringify('winlink-express-form ' + form)})`;
+            sub += `<div onclick="${attr(onclick)}">${esc(subName)}</div>`;
         }
-        main += `<div><div>${menu[i][0]}</div><div><div>${sub}</div></div></div>`;
+        main += `<div><div>${esc(menuName)}</div><div><div>${sub}</div></div></div>`;
     }
     return main;
 }
 
+
 function domWinlink(formdata, id, action)
 {
-    const win = N(`<div class='winlink'><iframe></iframe><button onclick='winlinkCancel(${id})'>${action}</button></div>`);
+    const win = N(`<div class='winlink'><iframe></iframe><button onclick='winlinkCancel(${safeInt(id)})'>${esc(action)}</button></div>`);
     Q(win, "iframe").srcdoc = formdata;
     return win;
 }
@@ -515,7 +590,7 @@ function updateChannels(msg)
 
 function getChannelUnread(channel)
 {
-    return Q(`[data-namekey="${channel.namekey}"] .unread`);
+    return Q(byNamekey(channel.namekey), ".unread");
 }
 
 function catchup(channel)
@@ -720,7 +795,7 @@ function setupReply(event)
     tt.scrollIntoView({ behavior: "smooth", block: "end", inline: "nearest" });
     replyid = tt.id;
     const p = I("post");
-    const n = N(`<div class="rt"><div>${t.innerText}</div></div>`);
+    const n = N(`<div class="rt"><div>${esc(t.innerText)}</div></div>`);
     if (p.firstElementChild.nodeName == "DIV") {
         p.firstElementChild.remove();
     }
@@ -1224,7 +1299,7 @@ function showNamekey(namekey)
                 if (isDirect(namekey)) {
                     addDirect(namekey);
                     send({ cmd: "fullnode", id: namekey.split(" ")[1] });
-                    Q(`[data-namekey="${namekey}"]`).classList.add("selected");
+                    byNamekey(namekey).classList.add("selected");
                 }
                 send({ cmd: "texts", namekey: namekey });
             }
@@ -1331,7 +1406,8 @@ function startup()
                     if (useImage(dropSelection)) {
                         const hostname = location.hostname.match(/^\d+\.\d+\.\d+\.\d+$/) ? location.hostname : location.hostname.indexOf(".local.mesh") == -1 ? `${location.hostname}.local.mesh` : location.hostname;
                         I("texts").lastElementChild.scrollIntoView({ behavior: "smooth", block: "end", inline: "nearest" });
-                        setTimeout(_ => send({ cmd: "post", namekey: dropSelection, text: `[Image]`, structuredtext: [ { image: { url: `http://${hostname}/cgi-bin/apps/crow/image?i=${msg.name}` } } ] }), 500);
+                        const imageName = encodeURIComponent(String(msg.name ?? ""));
+                        setTimeout(_ => send({ cmd: "post", namekey: dropSelection, text: `[Image]`, structuredtext: [ { image: { url: `http://${hostname}/cgi-bin/apps/crow/image?i=${imageName}` } } ] }), 500);
                     }
                     break;
                 }
