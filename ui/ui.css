@@ -750,6 +750,10 @@ a
 {
     width: 120px;
 }
+.config .b .ct div:nth-child(9)
+{
+    width: 180px;
+}
 .config .b .c
 {
     padding-left: 10px;

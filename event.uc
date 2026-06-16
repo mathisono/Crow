@@ -10,6 +10,7 @@ import * as router from "router";
 import * as winlink from "winlink";
 import * as commands from "commands";
 import * as aprs from "aprs";
+import * as groups from "groups";
 
 const MAXNODES = 1000;
 const MAXNODESSAFARI = 400;
@@ -226,9 +227,10 @@ export function tick()
                 case "channels":
                 {
                     const channels = map(channel.getAllLocalChannels(), c => {
-                        return { namekey: c.namekey, meshtastic: channel.isMeshtasticPreset(c.namekey), meshcore: channel.isMeshcorePreset(c.namekey), aredn: channel.isAREDNPreset(c.namekey), winlink: c.winlink, telemetry: c.telemetry, backend: c.backend ?? "", state: textmessage.state(c.namekey) };
+                        const g = groups.groupForChannelNamekey(c.namekey);
+                        return { namekey: c.namekey, meshtastic: channel.isMeshtasticPreset(c.namekey), meshcore: channel.isMeshcorePreset(c.namekey), aredn: channel.isAREDNPreset(c.namekey), winlink: c.winlink, telemetry: c.telemetry, backend: c.backend ?? "", aprs_members: g ? join(" ", g.members ?? []) : "", state: textmessage.state(c.namekey) };
                     });
-                    send({ event: msg.cmd, channels: channels, aprs_backends: aprs.enabled ? aprs.getBackendNames() : [] });
+                    send({ event: msg.cmd, channels: channels, aprs_backends: aprs.enabled ? aprs.getBackendNames() : [], aprs_groups: groups.allGroups() });
                     break;
                 }
                 case "newchannels":
@@ -237,6 +239,21 @@ export function tick()
                         const c = msg.channels[i];
                         const n = split(c.namekey, " ");
                         c.namekey = `${substr(join("", slice(n, 0, -1)), 0, 13)} ${n[-1]}`;
+                    }
+                    for (let i = 0; i < length(msg.channels); i++) {
+                        const c = msg.channels[i];
+                        if (c.aprs_members != null) {
+                            const gname = split(c.namekey, " ")[0];
+                            if (ord(gname, 0) === 35 || ord(gname, 0) === 37) {
+                                const mems = groups.parseMembersText(c.aprs_members);
+                                if (length(mems) > 0) {
+                                    groups.putGroup(gname, mems, { backend: c.backend ?? "" });
+                                }
+                                else {
+                                    groups.removeGroup(gname);
+                                }
+                            }
+                        }
                     }
                     const nochannels = channel.updateLocalChannels(msg.channels);
                     textmessage.updateSettings(msg.channels);
@@ -341,7 +358,7 @@ export function tick()
                 }
                 case "/cmd":
                 {
-                    commands.post(msg.command, msg.socket);
+                    commands.post(msg.command, msg.socket, msg.namekey);
                     break;
                 }
                 case "/reply":
