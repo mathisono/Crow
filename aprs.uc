@@ -3,6 +3,7 @@ import * as struct from "struct";
 import * as node from "node";
 import * as message from "message";
 import * as channel from "channel";
+import * as textmessage from "textmessage";
 
 const FEND  = 0xc0;
 const FESC  = 0xdb;
@@ -757,6 +758,25 @@ export function recv(backendName)
     return recvFromBackend(inst);
 };
 
+function lastStoredSender(namekey, refid)
+{
+    if (refid) {
+        const m = textmessage.getMessage(namekey, refid);
+        const c = normcall(m?.textfrom);
+        if (c) {
+            return c;
+        }
+    }
+    const msgs = textmessage.getMessages(namekey) ?? [];
+    for (let i = length(msgs) - 1; i >= 0; i--) {
+        const c = normcall(msgs[i]?.textfrom);
+        if (c) {
+            return c;
+        }
+    }
+    return null;
+}
+
 export function send(msg)
 {
     if (!enabled || !msg?.data?.text_message) {
@@ -790,8 +810,11 @@ export function send(msg)
         if (!g) {
             g = getGroup(p.group);
         }
-        if (!g && channelBackendMap[msg.namekey] && lastChannelSender[msg.namekey]) {
-            sendOne(bn, lastChannelSender[msg.namekey], p.text);
+        if (!g && channelBackendMap[msg.namekey]) {
+            const dst = lastStoredSender(msg.namekey, msg.data?.reply_id ?? msg.data?.last_id) ?? lastChannelSender[msg.namekey];
+            if (dst) {
+                sendOne(bn, dst, p.text);
+            }
         }
         else {
             sendGroup(g, p.text, null, msg.namekey);
