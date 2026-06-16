@@ -4,25 +4,26 @@ VER=0.0.1
 REL=r$(($(date +%s) - $(date -d "2026-01-01 00:00:00" +%s)))
 VERSION=${VER}-${REL}
 
-ROOT=/tmp/raven-build-$$
+ROOT=/tmp/crow-build-$$
 SRC=$(dirname $0)/../..
 
 rm -rf $ROOT/
 
 mkdir -p $ROOT/data/www/cgi-bin/apps/crow \
     $ROOT/data/www/apps/crow \
-    $ROOT/data/usr/local/raven/platforms/aredn $ROOT/data/usr/local/raven/crypto \
+    $ROOT/data/usr/local/crow/platforms/aredn $ROOT/data/usr/local/crow/crypto \
     $ROOT/data/etc/init.d \
     $ROOT/data/etc/local/mesh-firewall \
     $ROOT/data/etc/arednsysupgrade.d
 
-cp $SRC/platforms/aredn/firewall $ROOT/data/etc/local/mesh-firewall/21-raven
+cp $SRC/platforms/aredn/firewall $ROOT/data/etc/local/mesh-firewall/21-crow
 
-cp $SRC/*.uc $ROOT/data/usr/local/raven/
-cp $SRC/crypto/*.uc $ROOT/data/usr/local/raven/crypto/
-cp $SRC/platforms/aredn/*.uc $ROOT/data/usr/local/raven/platforms/aredn/
-cp $SRC/platforms/aredn/raven.conf $ROOT/data/usr/local/raven/
-echo "export const version = '${VERSION}';" > $ROOT/data/usr/local/raven/version.uc
+cp $SRC/*.uc $ROOT/data/usr/local/crow/
+cp $SRC/crypto/*.uc $ROOT/data/usr/local/crow/crypto/
+cp $SRC/platforms/aredn/*.uc $ROOT/data/usr/local/crow/platforms/aredn/
+cp $SRC/platforms/aredn/raven.conf $ROOT/data/usr/local/crow/crow.conf
+cp $SRC/platforms/aredn/crow-migrate-raven.sh $ROOT/data/usr/local/crow/platforms/aredn/crow-migrate-raven.sh
+echo "export const version = '${VERSION}';" > $ROOT/data/usr/local/crow/version.uc
 
 cp $SRC/ui/ui.js $SRC/ui/ui.css $SRC/ui/crow.svg $ROOT/data/www/apps/crow/
 cat $SRC/ui/index.html | sed s:0.0.0-r0:${VERSION}: > $ROOT/data/www/apps/crow/index.html
@@ -31,18 +32,19 @@ cp $SRC/ui/crow.png $ROOT/data/www/apps/crow/ix.png
 cp $SRC/platforms/aredn/admin.sh $ROOT/data/www/cgi-bin/apps/crow/admin
 cp $SRC/platforms/aredn/image.uc $ROOT/data/www/cgi-bin/apps/crow/image
 
-cp $SRC/platforms/aredn/raven.init $ROOT/data/etc/init.d/raven
+cp $SRC/platforms/aredn/raven.init $ROOT/data/etc/init.d/crow
 
-cp $SRC/platforms/aredn/upgrade.conf $ROOT/data/etc/arednsysupgrade.d/KN6PLV.raven.conf
+cp $SRC/platforms/aredn/upgrade.conf $ROOT/data/etc/arednsysupgrade.d/KJ6DZB.crow.conf
 
-chmod 755 $ROOT/data/etc/local/mesh-firewall/21-raven
+chmod 755 $ROOT/data/etc/local/mesh-firewall/21-crow
 chmod 755 $ROOT/data/www/apps/crow/* $ROOT/data/www/cgi-bin/apps/crow/admin $ROOT/data/www/cgi-bin/apps/crow/image
 
-mkdir -p $ROOT/data/usr/local/raven/winlink/forms
-cp -R $SRC/winlink/forms/* $ROOT/data/usr/local/raven/winlink/forms
+mkdir -p $ROOT/data/usr/local/crow/winlink/forms
+cp -R $SRC/winlink/forms/* $ROOT/data/usr/local/crow/winlink/forms
 
-cp $SRC/platforms/aredn/usb-setup.sh $ROOT/data/usr/local/raven/platforms/aredn/usb-setup.sh
-chmod 755 $ROOT/data/usr/local/raven/platforms/aredn/usb-setup.sh
+cp $SRC/platforms/aredn/usb-setup.sh $ROOT/data/usr/local/crow/platforms/aredn/usb-setup.sh
+chmod 755 $ROOT/data/usr/local/crow/platforms/aredn/usb-setup.sh
+chmod 755 $ROOT/data/usr/local/crow/platforms/aredn/crow-migrate-raven.sh
 
 
 #
@@ -60,7 +62,7 @@ Provides:
 Source: package/crow
 Section: net
 Priority: optional
-Maintainer: Tim Wilkinson (KN6PLV)
+Maintainer: Mathison Ott (KJ6DZB)
 Architecture: all
 Description: Crow Mesh Messaging
 __EOF__
@@ -92,7 +94,7 @@ mkapk.py \
     -D 'Crow Mesh Messaging' \
     -u 'https://github.com/mathisono/Crow' \
     -l 'MIT' \
-    -m 'tim.j.wilkinson@gmail.com' \
+    -m 'mathisono@users.noreply.github.com' \
     -p ucode,curl \
     -o .
 
