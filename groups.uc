@@ -196,8 +196,13 @@ export function createGroupChannel(name, arednOnly, backendName)
 
     const namekey = `${chanName} ${key}`;
 
-    // Already registered — just return it
-    if (channel.getLocalChannelByNameKey(namekey)) {
+    // Already registered — update backend binding if requested, then return it
+    const existing = channel.getLocalChannelByNameKey(namekey);
+    if (existing) {
+        if (backendName != null) {
+            existing.backend = backendName;
+            update?.("channels");
+        }
         return namekey;
     }
 
