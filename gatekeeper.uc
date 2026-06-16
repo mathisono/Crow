@@ -13,8 +13,17 @@ function norm(s)
     if (!s) {
         return null;
     }
+
     s = uc(trim(`${s}`));
-    const m = match(s, /([A-Z]{1,2}[0-9][A-Z]{1,3})/);
+
+    // Accept an exact callsign.
+    if (match(s, US_CALLSIGN_RE)) {
+        return s;
+    }
+
+    // Accept a callsign only when it is the leading identity token, such as
+    // "KJ6DZB mobile" or "KJ6DZB-7". Do not accept arbitrary embedded text.
+    const m = match(s, /^([A-Z]{1,2}[0-9][A-Z]{1,3})(?:[-/ ][A-Z0-9 _.-]*)?$/);
     return m ? m[1] : null;
 }
 
@@ -58,7 +67,7 @@ export function gatewayCallsign()
 export function senderCallsignFromNodeId(id)
 {
     const info = nodedb.getNode(id, false)?.nodeinfo;
-    return norm(info?.long_name) ?? norm(info?.short_name) ?? null;
+    return norm(info?.short_name) ?? norm(info?.long_name) ?? null;
 };
 
 export function senderCallsignFromTextName(name)
