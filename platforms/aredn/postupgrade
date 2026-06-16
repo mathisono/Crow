@@ -1,2 +1,2 @@
 #!/bin/sh
-/etc/init.d/raven restart
+/etc/init.d/crow restart
