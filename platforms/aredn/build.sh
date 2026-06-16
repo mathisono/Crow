@@ -22,6 +22,8 @@ cp $SRC/*.uc $ROOT/data/usr/local/crow/
 cp $SRC/crypto/*.uc $ROOT/data/usr/local/crow/crypto/
 cp $SRC/platforms/aredn/*.uc $ROOT/data/usr/local/crow/platforms/aredn/
 cp $SRC/platforms/aredn/raven.conf $ROOT/data/usr/local/crow/crow.conf
+# Temporary fallback until config.uc fully drops legacy local raven.conf lookup.
+cp $SRC/platforms/aredn/raven.conf $ROOT/data/usr/local/crow/raven.conf
 cp $SRC/platforms/aredn/crow-migrate-raven.sh $ROOT/data/usr/local/crow/platforms/aredn/crow-migrate-raven.sh
 echo "export const version = '${VERSION}';" > $ROOT/data/usr/local/crow/version.uc
 
