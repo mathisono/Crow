@@ -29,6 +29,22 @@ let bconfig;
 let config;
 let override;
 
+function localFile(name)
+{
+    return `${fs.dirname(SCRIPT_NAME)}/${name}`;
+}
+
+function readFirst(files)
+{
+    for (let i = 0; i < length(files); i++) {
+        const data = fs.readfile(files[i]);
+        if (data !== null) {
+            return data;
+        }
+    }
+    return null;
+}
+
 function jsonEq(a, b)
 {
     return sprintf("%J", a) === sprintf("%J", b);
@@ -37,6 +53,16 @@ function jsonEq(a, b)
 function clone(a)
 {
     return json(sprintf("%J", a));
+}
+
+function writeOverride(data)
+{
+    if (fs.access("/etc/crow.conf.override") || fs.access("/etc/crow.conf") || fs.access("/etc/raven.conf")) {
+        fs.writefile("/etc/crow.conf.override", data);
+    }
+    else if (fs.access(localFile("crow.conf.override")) || fs.access(localFile("crow.conf")) || fs.access(localFile("raven.conf"))) {
+        fs.writefile(localFile("crow.conf.override"), data);
+    }
 }
 
 function update(option)
@@ -97,19 +123,7 @@ function update(option)
     }
 
     if (write) {
-        const data = sprintf("%.2J", override);
-        if (fs.access("/etc/raven.conf.override")) {
-            fs.writefile("/etc/raven.conf.override", data);
-        }
-        else if (fs.access(`${fs.dirname(SCRIPT_NAME)}/raven.conf.override`)) {
-            fs.writefile(`${fs.dirname(SCRIPT_NAME)}/raven.conf.override`, data);
-        }
-        else if (fs.access("/etc/raven.conf")) {
-            fs.writefile("/etc/raven.conf.override", data);
-        }
-        else if (fs.access(`${fs.dirname(SCRIPT_NAME)}/raven.conf`)) {
-            fs.writefile(`${fs.dirname(SCRIPT_NAME)}/raven.conf.override`, data);
-        }
+        writeOverride(sprintf("%.2J", override));
     }
 }
 
@@ -117,9 +131,19 @@ export function setup()
 {
     push(REQUIRE_SEARCH_PATH, `${fs.dirname(SCRIPT_NAME)}/*.uc`);
 
-    bconfig = json(fs.readfile("/etc/raven.conf") ?? fs.readfile(`${fs.dirname(SCRIPT_NAME)}/raven.conf`));
+    bconfig = json(readFirst([
+        "/etc/crow.conf",
+        localFile("crow.conf"),
+        "/etc/raven.conf",
+        localFile("raven.conf")
+    ]));
     config = clone(bconfig);
-    override = json(fs.readfile("/etc/raven.conf.override") ?? fs.readfile(`${fs.dirname(SCRIPT_NAME)}/raven.conf.override`) ?? "[]");
+    override = json(readFirst([
+        "/etc/crow.conf.override",
+        localFile("crow.conf.override"),
+        "/etc/raven.conf.override",
+        localFile("raven.conf.override")
+    ]) ?? "[]");
     if (type(override) === "object") {
         function f(c, o)
         {
