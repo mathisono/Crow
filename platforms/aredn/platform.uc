@@ -79,6 +79,115 @@ function readTrim(p)
     }
 }
 
+function blockInfo(device)
+{
+    const arg = safeShellArg(device);
+    if (!arg) {
+        return {};
+    }
+    const f = fs.popen(`/sbin/block info ${arg} 2>/dev/null`);
+    if (!f) {
+        return {};
+    }
+    const out = f.read("all") ?? "";
+    f.close();
+    const info = {};
+    const uuid = match(out, /UUID="([^"]+)"/);
+    const label = match(out, /LABEL="([^"]+)"/);
+    const type = match(out, /TYPE="([^"]+)"/);
+    if (uuid) {
+        info.UUID = uuid[1];
+    }
+    if (label) {
+        info.LABEL = label[1];
+    }
+    if (type) {
+        info.TYPE = type[1];
+    }
+    return info;
+}
+
+function installCrowInitCompat()
+{
+    if (fs.access("/etc/init.d/crow") || !fs.access("/etc/init.d/raven")) {
+        return;
+    }
+    fs.writefile("/etc/init.d/crow", "#!/bin/sh\n# Crow compatibility wrapper for legacy Raven service installs.\nexec /etc/init.d/raven \"$@\"\n");
+    system("/bin/chmod 755 /etc/init.d/crow >/dev/null 2>&1");
+}
+
+function installStorageHotplug()
+{
+    const hotplugLabel = safeShellArg(storageLabel) ?? CROW_USB_LABEL;
+    const hotplugMount = safeShellArg(storageMountpoint);
+    if (!hotplugMount) {
+        return false;
+    }
+    if (!fs.access("/etc/hotplug.d/block")) {
+        mkdirp("/etc/hotplug.d/block");
+    }
+    fs.writefile("/etc/hotplug.d/block/90-crow-storage", `#!/bin/sh
+# Mount Crow USB storage when the configured Crow data device appears.
+[ "$ACTION" = "add" ] || exit 0
+[ -n "$DEVNAME" ] || exit 0
+DEV="/dev/$DEVNAME"
+INFO="$(/sbin/block info "$DEV" 2>/dev/null)"
+case "$INFO" in
+    *LABEL="${hotplugLabel}"*|*LABEL=${hotplugLabel}*) ;;
+    *) exit 0 ;;
+esac
+mkdir -p "${hotplugMount}"
+mount | grep -q " ${hotplugMount} " && exit 0
+/bin/mount -o rw,noatime "$DEV" "${hotplugMount}" >/dev/null 2>&1 || /sbin/block mount >/dev/null 2>&1 || true
+if mount | grep -q " ${hotplugMount} "; then
+    [ -x /etc/init.d/crow ] && /etc/init.d/crow restart >/dev/null 2>&1 || true
+fi
+`);
+    system("/bin/chmod 755 /etc/hotplug.d/block/90-crow-storage >/dev/null 2>&1");
+    return true;
+}
+
+function persistStorageMount(device)
+{
+    const info = blockInfo(device);
+    const uuid = safeShellArg(info.UUID ?? "");
+    const label = safeShellArg(info.LABEL ?? storageLabel);
+    const fstype = safeShellArg(info.TYPE ?? "ext4");
+    const mntArg = safeShellArg(storageMountpoint);
+    if (!mntArg || !fstype || (!uuid && !label)) {
+        return false;
+    }
+
+    installCrowInitCompat();
+    installStorageHotplug();
+
+    let cmd = "/sbin/uci -q delete fstab.crow >/dev/null 2>&1; ";
+    cmd += "/sbin/uci set fstab.crow=mount; ";
+    cmd += `/sbin/uci set fstab.crow.target='${mntArg}'; `;
+    if (uuid) {
+        cmd += `/sbin/uci set fstab.crow.uuid='${uuid}'; `;
+    }
+    if (label) {
+        cmd += `/sbin/uci set fstab.crow.label='${label}'; `;
+    }
+    cmd += `/sbin/uci set fstab.crow.fstype='${fstype}'; `;
+    cmd += "/sbin/uci set fstab.crow.options='rw,noatime'; ";
+    cmd += "/sbin/uci set fstab.crow.enabled='1'; ";
+    cmd += "/sbin/uci set fstab.crow.enabled_fsck='0'; ";
+    cmd += "/sbin/uci commit fstab";
+    return system(cmd) === 0;
+}
+
+function removeStoragePersistence()
+{
+    system("/sbin/uci -q delete fstab.crow >/dev/null 2>&1; /sbin/uci commit fstab >/dev/null 2>&1");
+    try {
+        fs.unlink("/etc/hotplug.d/block/90-crow-storage");
+    }
+    catch (_) {
+    }
+}
+
 function hasUsbPort()
 {
     try {
@@ -371,6 +480,10 @@ function setupStorage(config)
     }
     storageMode = "usb";
     if (activateMountedUsb()) {
+        const mountedDevice = currentMountDevice(storageMountpoint);
+        if (mountedDevice) {
+            persistStorageMount(mountedDevice);
+        }
         return { ok: true, message: "USB storage active." };
     }
 
@@ -411,6 +524,7 @@ function setupStorage(config)
         return { ok: false, message: storageReason ?? "USB storage mounted but failed health checks." };
     }
     storageDevice = device;
+    persistStorageMount(device);
     migrateDataToUsb();
     imageQuotaPrune();
     return { ok: true, message: "USB storage active." };
@@ -419,6 +533,7 @@ function setupStorage(config)
 /* export */ function storageDisable()
 {
     storageMode = "internal";
+    removeStoragePersistence();
     setInternalStorage();
     return { ok: true, message: "Crow storage returned to internal node storage." };
 }
