@@ -1,7 +1,7 @@
 #!/usr/bin/ucode
 import * as fs from "fs";
 
-const IMAGE_ROOT = "/tmp/apps/crow/images";
+const IMAGE_ROOTS = [ "/mnt/crow/images", "/tmp/apps/crow/images" ];
 const FALLBACK_IMAGE = "/www/apps/crow/ix.png";
 
 function fallback()
@@ -12,11 +12,18 @@ function fallback()
 function requestedImage()
 {
     const q = getenv("QUERY_STRING") || "";
-    const m = match(q, /(?:^|&)i=([A-Za-z0-9_-]{1,96})(?:&|$)/);
+    const m = match(q, /(^|&)i=([A-Za-z0-9_-]{1,96}(\.jpg)?)(&|$)/);
     if (!m) {
         return fallback();
     }
-    return { path: `${IMAGE_ROOT}/${m[1]}`, type: "image/jpeg" };
+    for (let i = 0; i < length(IMAGE_ROOTS); i++) {
+        const path = `${IMAGE_ROOTS[i]}/${m[2]}`;
+        const info = fs.stat(path);
+        if (info && info.type === "file") {
+            return { path, type: "image/jpeg" };
+        }
+    }
+    return { path: `${IMAGE_ROOTS[0]}/${m[2]}`, type: "image/jpeg" };
 }
 
 let img = requestedImage();
