@@ -2,7 +2,7 @@
 
 This repository is being migrated from Raven-compatible paths to native Crow paths while retaining one-time Raven import compatibility for existing installs.
 
-Status updated: **2026-06-16**.
+Status updated: **2026-06-16** (late session: added first automated regression suite).
 
 ## Current status
 
@@ -11,12 +11,13 @@ The migration/security patch set has moved from planning into implementation. Re
 | Area | Status | Notes |
 | --- | --- | --- |
 | AREDN image CGI path handling | **Implemented upstream** | Image CGI path handling was hardened in the Crow migration patch series. Keep regression tests focused on traversal, absolute paths, and unexpected query values. |
-| UI string/url rendering | **Implemented and validated locally** | The temporary `ui/ui-safe.js` hardening was merged directly into `ui/ui.js`. `ui-safe.js` is no longer needed once this renderer is deployed. |
+| UI string/url rendering | **Implemented and validated locally** | The temporary `ui/ui-safe.js` hardening was merged directly into `ui/ui.js`. `ui-safe.js` is no longer needed once this renderer is deployed. Follow-up escape-gap fix landed in `b2ca1e2`. |
 | WebSocket frame/message limits | **Implemented upstream** | Frame/message size limits were added in the migration patch series. Keep oversized-frame checks in future validation. |
 | Strict gatekeeper callsign normalization/config | **Implemented/documented upstream; hardware validation pending** | Callsign validation was tightened and default config documented. Final behavior still needs LoRa/MeshCore hardware testing. |
 | Crow runtime/config/service path migration | **Implemented upstream** | Runtime/config/service paths moved toward Crow names with Raven fallback/import compatibility. Postinstall/postupgrade/remove scripts were updated to use Crow service behavior. |
 | MeshCore TNC backend | **Draft, not production activated** | See `docs/MESHCORE_TNC_BACKEND.md`. The legacy `meshcore.uc` UDP/multicast backend remains untouched. Live TNC/KISS compatibility testing is pending hardware. |
 | Build packaging | **IPK path works; APK needs `mkapk.py` in PATH** | `mkapk.py` comes from `https://github.com/kn6plv/MakeAPK`. It was installed on MSE-88 at `/home/mat/.local/bin/mkapk.py` for future builds. |
+| Outbound LoRa text formatter | **Tested** | `lora_outbound_text.uc` now has a regression suite (`tests/test_outbound_formatter.uc` canonical, `tests/run_formatter_tests.js` Node mirror). 22 cases covering `gatewayTag()`, callsign fallback chain, truncation with/without ellipsis, header-exceeds-budget, transport normalization, exact-fit boundary, default payload budget. See `tests/README.md` for when/how to run. |
 
 ## UI hardening details
 
@@ -74,13 +75,22 @@ Normal examples were also checked: normal channel, normal node, message with `ht
 
 ## Build/test notes
 
-The repository does not currently include a package.json, Makefile test target, or formal JS test framework. Available local checks are mostly syntax/static/build checks:
+The repository does not include a package.json, Makefile test target, or third-party JS test framework, but it now has a small in-tree regression suite under `tests/` (no external deps). Available local checks:
 
 ```sh
+# Static/syntax checks
 node --check ui/ui.js
 sh -n platforms/aredn/build.sh platforms/aredn/admin.sh platforms/aredn/usb-setup.sh
+
+# Outbound LoRa text formatter regression tests
+node tests/run_formatter_tests.js              # always available
+ucode -R -L .:./tests tests/test_outbound_formatter.uc  # if ucode is on PATH
+
+# Package build
 ./platforms/aredn/build.sh
 ```
+
+When to run the formatter tests, what they cover, and what they intentionally do not cover are documented in `tests/README.md`. Run them after any change to `lora_outbound_text.uc`, the transport normalization chain, the callsign fallback sources, or anything that affects outbound text shape, and before cutting an IPK/APK release.
 
 Observed build environment issue:
 
@@ -92,11 +102,12 @@ Observed build environment issue:
 ## Remaining validation before production confidence
 
 1. Re-run full package build on MSE-88 now that `mkapk.py` is installed.
-2. Re-run UI escaping smoke/static checks after any future renderer change.
+2. Re-run UI escaping smoke/static checks after any future renderer change, and consider porting the manual `grep`/fixture pass into `tests/` alongside the formatter suite.
 3. Test strict gatekeeper behavior with real LoRa traffic once hardware arrives.
 4. Test MeshCore TNC/KISS backend with real MeshCore hardware before activating it in production.
 5. Confirm Raven-to-Crow first-install import behavior on a test node with legacy Raven config/state present.
 6. Confirm upgrade/remove scripts use Crow service names and leave no unexpected Raven runtime writes except documented fallback/import paths.
+7. Extend `tests/` coverage as new outbound transports / formatters land (keep `.uc` canonical, mirror in Node so dev laptops without `ucode` can still run them).
 
 ## Historical planned patch set
 
