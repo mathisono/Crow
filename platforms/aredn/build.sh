@@ -25,7 +25,7 @@ cp $SRC/platforms/aredn/raven.conf $ROOT/data/usr/local/crow/crow.conf
 cp $SRC/platforms/aredn/crow-migrate-raven.sh $ROOT/data/usr/local/crow/platforms/aredn/crow-migrate-raven.sh
 echo "export const version = '${VERSION}';" > $ROOT/data/usr/local/crow/version.uc
 
-cp $SRC/ui/ui.js $SRC/ui/ui-safe.js $SRC/ui/ui.css $SRC/ui/crow.svg $ROOT/data/www/apps/crow/
+cp $SRC/ui/ui.js $SRC/ui/ui.css $SRC/ui/crow.svg $ROOT/data/www/apps/crow/
 cat $SRC/ui/index.html | sed s:0.0.0-r0:${VERSION}: > $ROOT/data/www/apps/crow/index.html
 cp $SRC/ui/crow.svg $ROOT/data/www/apps/crow/icon.svg
 cp $SRC/ui/crow.png $ROOT/data/www/apps/crow/ix.png
