@@ -1,41 +1,70 @@
 # Crow migration/security patch plan
 
-This repository is being migrated from Raven-compatible paths to native Crow paths while retaining one-time Raven import compatibility for existing installs.
+This repository is being migrated from Raven-compatible paths to native Crow paths while retaining limited one-time Raven import compatibility for existing installs.
 
-Status updated: **2026-06-16** (late session: added first automated regression suite).
+Status updated: **2026-06-18**.
+
+## Current direction
+
+Crow should be Crow-first at runtime and packaging time:
+
+- Runtime/config/service paths should prefer Crow names.
+- Legacy Raven paths should be treated only as read-only compatibility/import sources.
+- New writes should go to Crow paths.
+- Sysupgrade config naming should be generic, not tied to a personal callsign.
+- Raven config import must be schema-aware. Do not blindly copy whole old Raven config files into Crow if the Crow schema changes.
+- Meshtastic should move to a direct TCP Port-API backend.
+- MeshCore cleanup is planned but deferred; do not rework MeshCore in the current Meshtastic pass.
 
 ## Current status
 
-The migration/security patch set has moved from planning into implementation. Recent work covered the original five migration items plus follow-up validation and build-environment notes.
-
 | Area | Status | Notes |
 | --- | --- | --- |
-| AREDN image CGI path handling | **Implemented upstream** | Image CGI path handling was hardened in the Crow migration patch series. Keep regression tests focused on traversal, absolute paths, and unexpected query values. |
-| UI string/url rendering | **Implemented and validated locally** | The temporary `ui/ui-safe.js` hardening was merged directly into `ui/ui.js`. `ui-safe.js` is no longer needed once this renderer is deployed. Follow-up escape-gap fix landed in `b2ca1e2`. |
-| WebSocket frame/message limits | **Implemented upstream** | Frame/message size limits were added in the migration patch series. Keep oversized-frame checks in future validation. |
-| Strict gatekeeper callsign normalization/config | **Implemented/documented upstream; hardware validation pending** | Callsign validation was tightened and default config documented. Final behavior still needs LoRa/MeshCore hardware testing. |
-| Crow runtime/config/service path migration | **Implemented upstream** | Runtime/config/service paths moved toward Crow names with Raven fallback/import compatibility. Postinstall/postupgrade/remove scripts were updated to use Crow service behavior. |
-| MeshCore TNC backend | **Draft, not production activated** | See `docs/MESHCORE_TNC_BACKEND.md`. The legacy `meshcore.uc` UDP/multicast backend remains untouched. Live TNC/KISS compatibility testing is pending hardware. |
-| Build packaging | **IPK path works; APK needs `mkapk.py` in PATH** | `mkapk.py` comes from `https://github.com/kn6plv/MakeAPK`. It was installed on MSE-88 at `/home/mat/.local/bin/mkapk.py` for future builds. |
-| Outbound LoRa text formatter | **Tested** | `lora_outbound_text.uc` now has a regression suite (`tests/test_outbound_formatter.uc` canonical, `tests/run_formatter_tests.js` Node mirror). 22 cases covering `gatewayTag()`, callsign fallback chain, truncation with/without ellipsis, header-exceeds-budget, transport normalization, exact-fit boundary, default payload budget. See `tests/README.md` for when/how to run. |
+| AREDN image CGI path handling | **Implemented** | Image CGI path handling was hardened. Keep regression tests focused on traversal, absolute paths, and unexpected query values. |
+| UI string/url rendering | **Temporary overlay implemented; direct merge pending** | `ui/ui-safe.js` currently provides safe rendering overrides and `ui/index.html` loads it after `ui.js`. The desired final state is to merge those helpers directly into `ui/ui.js`, remove overlay loading, and remove `ui-safe.js` from build packaging once verified. |
+| WebSocket frame/message limits | **Implemented** | Frame/message/header size limits were added. Keep oversized-frame checks in validation. |
+| Strict gatekeeper callsign normalization/config | **Implemented; hardware validation pending** | Callsign validation was tightened and default config documented. Final behavior still needs LoRa/MeshCore/Meshtastic hardware testing. |
+| Crow runtime/config/service path migration | **Mostly implemented** | `config.uc` now prefers `/etc/crow.conf`, local `crow.conf`, and Crow override paths, with Raven read fallback. Package scripts are being moved to `/etc/init.d/crow` and `/usr/local/crow`. |
+| Sysupgrade naming | **Updated target** | Use a generic sysupgrade config filename such as `crow.conf`. Do not use `KJ6DZB.crow.conf` or another personal callsign. |
+| Raven-to-Crow import | **Schema-aware import required** | Import only compatible Raven keys into the current Crow default config. Do not blindly copy old Raven config wholesale. Runtime data directories can be copied only when Crow paths are missing. |
+| Meshtastic backend | **Current focus** | Build a direct TCP Port-API backend to a Meshtastic ESP32 node, default port `4403`. See `docs/MESHTASTIC_TCP_PORT_API_BACKEND.md`. |
+| MeshCore backend | **Deferred** | Keep current MeshCore functionality working. MeshCore can later be normalized behind the same backend boundary, but do not rewrite it during the Meshtastic TCP pass. See `docs/MESHCORE_TNC_BACKEND.md`. |
+| Build packaging | **Needs validation** | Ensure packages include all required UI/runtime files and do not include stale overlay files once direct UI merge is complete. APK still depends on `mkapk.py` being available in PATH. |
 
-## UI hardening details
+## UI hardening plan
 
-Recent local validation merged the safe rendering layer into the main renderer:
+Current state:
 
-- Added helpers near `T()` in `ui/ui.js`:
-  - `esc()` for HTML text escaping.
-  - `attr()` for attribute escaping, including single quotes and backticks.
-  - `safeClass()` for class-token allowlisting.
-  - `safeInt()` for numeric IDs/counts/onclick arguments.
-  - `safeUrl()` for allowing only `http:` and `https:` URLs; rejected URLs render as `#`.
-  - `linkifyEscaped()` for URL linkification after message text has already been escaped.
-- Audited renderer functions including channels, nodes, node detail, messages, commands, channel config, Winlink menu, and Winlink iframe wrapper.
-- Added `rel="noopener noreferrer"` to every `target="_blank"` link.
-- Replaced direct `data-namekey` selector interpolation with dataset matching where needed.
-- Confirmed hostile values cannot break out of HTML, attributes, classes, inline handler arguments, or URL attributes.
+- `ui/ui-safe.js` was added as a safety overlay.
+- `ui/index.html` loads `ui.js` first and then `ui-safe.js`.
+- `platforms/aredn/build.sh` currently packages the overlay so deployed UI gets the hardening.
 
-Validation commands used during the UI hardening pass included:
+Desired final state:
+
+1. Merge safe rendering helpers directly into `ui/ui.js`:
+   - `esc()` for HTML text.
+   - `attr()` for attributes.
+   - `safeClass()` for class tokens.
+   - `safeInt()` for IDs/counts/onclick numeric arguments.
+   - `safeUrl()` for URL allowlisting.
+   - `linkifyEscaped()` for safe linkification.
+2. Make `T(text)` null-safe and escaping.
+3. Harden HTML-producing functions such as:
+   - `htmlChannel()`
+   - `htmlNode()`
+   - `htmlNodeDetail()`
+   - `htmlText()`
+   - `htmlCommand()`
+   - `backendOptions()`
+   - `htmlChannelConfig()`
+   - `htmlWinlinkMenu()`
+   - `domWinlink()`
+4. Ensure all external mesh/user/backend values are escaped or sanitized before entering visible HTML, attributes, classes, handlers, `href`, `src`, iframe `src`, or style values.
+5. Add `rel="noopener noreferrer"` to `target="_blank"` links.
+6. Remove `ui-safe.js` loading from `ui/index.html` after direct merge is verified.
+7. Remove `ui-safe.js` from package inclusion after direct merge is verified.
+
+Validation commands for the direct UI merge:
 
 ```sh
 grep -n "innerHTML" ui/ui.js
@@ -49,7 +78,7 @@ grep -n "target=\"_blank\"" ui/ui.js
 node --check ui/ui.js
 ```
 
-A temporary Node-based renderer fixture was also used with hostile samples such as:
+Hostile samples to use in fixture/manual tests:
 
 ```text
 <img src=x onerror=alert(1)>
@@ -61,60 +90,126 @@ test' onclick='alert(1)
 bad<form><script>alert(1)</script>
 ```
 
-The fixture exercised:
+## Config and migration plan
 
-- `htmlChannel()`
-- `htmlNode()`
-- `htmlNodeDetail()`
-- `htmlText()`
-- `htmlCommand()`
-- `htmlChannelConfig()`
-- `htmlWinlinkMenu()`
+Crow config should be loaded in this order:
 
-Normal examples were also checked: normal channel, normal node, message with `http://` URL, structured image with `https://` URL, and Winlink menu item.
+1. `/etc/crow.conf`
+2. local `crow.conf` next to `SCRIPT_NAME`
+3. `/etc/raven.conf` as legacy read fallback only
+4. local `raven.conf` as legacy read fallback only
+
+Crow override should be loaded in this order:
+
+1. `/etc/crow.conf.override`
+2. local `crow.conf.override`
+3. `/etc/raven.conf.override` as legacy read fallback only
+4. local `raven.conf.override` as legacy read fallback only
+
+Runtime writes should go only to Crow override paths.
+
+Raven import helper behavior:
+
+- Use current Crow default config as the base.
+- Read Raven config only if Crow config does not exist.
+- Copy only known/stable compatible keys into the Crow config.
+- Preserve Crow-owned defaults when Raven lacks a matching key.
+- Never import unknown Raven keys blindly.
+- Copy runtime data directories only when the Crow destination is missing.
+- Preserve old Raven paths only as import sources, not as active Crow runtime paths.
+
+## Meshtastic current plan
+
+Meshtastic should become a direct TCP Port-API backend:
+
+```json
+{
+  "meshtastic": {
+    "enabled": true,
+    "transport": "tcp",
+    "host": "192.168.4.1",
+    "port": 4403
+  }
+}
+```
+
+Rules:
+
+- TCP only; do not implement serial support.
+- Default Port-API TCP port is `4403`.
+- Open and maintain a persistent TCP stream to the ESP32 Meshtastic node.
+- Decode streamed Port-API protobuf frames into Crow's normalized message shape.
+- Send Crow-originated text through the same TCP Port-API connection.
+- Handle reconnect/backoff without blocking the main event loop.
+- Drop unsupported/encrypted payloads unless Crow can safely identify and route them.
+- Preserve strict-gatekeeper checks before bridged messages are queued or forwarded.
+
+See `docs/MESHTASTIC_TCP_PORT_API_BACKEND.md` for the focused implementation plan.
+
+## MeshCore current plan
+
+MeshCore is not the current implementation focus.
+
+- Keep existing MeshCore behavior working.
+- Do not mix MeshCore parsing into Meshtastic code.
+- Do not rewrite MeshCore during the Meshtastic TCP Port-API pass.
+- Plan for MeshCore to later expose the same Crow-facing backend shape:
+  - `setup(config)`
+  - `tick()`
+  - `recv()`
+  - `send(msg)`
+  - `shutdown()`
 
 ## Build/test notes
 
-The repository does not include a package.json, Makefile test target, or third-party JS test framework, but it now has a small in-tree regression suite under `tests/` (no external deps). Available local checks:
+Available local checks:
 
 ```sh
 # Static/syntax checks
 node --check ui/ui.js
-sh -n platforms/aredn/build.sh platforms/aredn/admin.sh platforms/aredn/usb-setup.sh
+sh -n platforms/aredn/build.sh platforms/aredn/admin.sh platforms/aredn/usb-setup.sh platforms/aredn/postinst platforms/aredn/postinstall platforms/aredn/postupgrade platforms/aredn/prerm
 
-# Outbound LoRa text formatter regression tests
-node tests/run_formatter_tests.js              # always available
-ucode -R -L .:./tests tests/test_outbound_formatter.uc  # if ucode is on PATH
+# Outbound LoRa text formatter regression tests, if present
+node tests/run_formatter_tests.js
+ucode -R -L .:./tests tests/test_outbound_formatter.uc
 
 # Package build
 ./platforms/aredn/build.sh
 ```
 
-When to run the formatter tests, what they cover, and what they intentionally do not cover are documented in `tests/README.md`. Run them after any change to `lora_outbound_text.uc`, the transport normalization chain, the callsign fallback sources, or anything that affects outbound text shape, and before cutting an IPK/APK release.
-
 Observed build environment issue:
 
 - `platforms/aredn/build.sh` requires `mkapk.py` to produce `.apk` artifacts.
-- `mkapk.py` is not part of Crow/Raven; it is in `kn6plv/MakeAPK`.
-- MSE-88 now has `mkapk.py` installed in `/home/mat/.local/bin`, which is on that user's PATH.
-- On Python 3.8 systems, the installed copy needed `from __future__ import annotations` for newer type annotation syntax.
+- `mkapk.py` is from `kn6plv/MakeAPK`.
+- If `mkapk.py` is missing, IPK may still build but APK output will fail.
 
 ## Remaining validation before production confidence
 
-1. Re-run full package build on MSE-88 now that `mkapk.py` is installed.
-2. Re-run UI escaping smoke/static checks after any future renderer change, and consider porting the manual `grep`/fixture pass into `tests/` alongside the formatter suite.
-3. Test strict gatekeeper behavior with real LoRa traffic once hardware arrives.
-4. Test MeshCore TNC/KISS backend with real MeshCore hardware before activating it in production.
-5. Confirm Raven-to-Crow first-install import behavior on a test node with legacy Raven config/state present.
-6. Confirm upgrade/remove scripts use Crow service names and leave no unexpected Raven runtime writes except documented fallback/import paths.
-7. Extend `tests/` coverage as new outbound transports / formatters land (keep `.uc` canonical, mirror in Node so dev laptops without `ucode` can still run them).
+1. Merge UI escaping directly into `ui/ui.js`, then remove overlay loading and packaging.
+2. Re-run UI escaping static/fixture checks after the direct merge.
+3. Confirm package build includes all required Crow UI/runtime files.
+4. Confirm sysupgrade config installs as generic `crow.conf`.
+5. Confirm install/upgrade/remove scripts use `/etc/init.d/crow` and Crow paths.
+6. Confirm Raven-to-Crow import on a test node with legacy Raven config/state present.
+7. Confirm schema-aware Raven import does not break when Crow config structure changes.
+8. Test strict gatekeeper behavior with real Meshtastic/MeshCore/LoRa traffic.
+9. Implement and test Meshtastic TCP Port-API backend.
+10. Defer MeshCore rewrite until Meshtastic direct backend is stable.
 
 ## Historical planned patch set
 
-Original planned set, now mostly implemented:
+Original set:
 
 1. Harden AREDN image CGI path handling.
 2. Harden UI string/url rendering.
-3. Add WebSocket frame/message size limits.
+3. Add WebSocket frame/message limits.
 4. Tighten strict-gatekeeper callsign normalization and document config.
 5. Move Crow runtime/config/service paths to Crow names, with first-install import from legacy Raven locations.
+
+Current added planning items:
+
+6. Replace overlay UI hardening with direct `ui.js` hardening.
+7. Use generic sysupgrade config naming.
+8. Make Raven import schema-aware.
+9. Implement Meshtastic direct TCP Port-API backend.
+10. Keep MeshCore work planned but deferred.
