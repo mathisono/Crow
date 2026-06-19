@@ -1,25 +1,52 @@
-# MeshCore TNC Backend Draft and Test Plan
+# MeshCore TCP Port-API Backend Plan
 
-Status: **deferred while Meshtastic TCP Port-API backend is the active focus**.
+Status: **TNC/KISS path rejected; rework required for TCP Port-API backend**.
 
-This document preserves the MeshCore TNC/KISS backend design notes and test plan. The existing `meshcore.uc` UDP/multicast bridge backend should remain functional and should not be rewritten during the Meshtastic direct-backend pass.
+This document replaces the earlier MeshCore TNC/KISS backend plan. Crow should not use a TNC/KISS backend for MeshCore. The MeshCore backend needs to be reworked around a TCP Port-API style backend, matching the architectural direction now being used for Meshtastic.
 
 ## Current project decision
 
-Crow's immediate backend work is Meshtastic, not MeshCore:
+- Do **not** build or activate a MeshCore TNC/KISS backend.
+- Do **not** parse MeshCore as a serial/TNC byte stream.
+- Do **not** switch production routing to `meshcore_tnc`.
+- Remove or retire the old TNC draft files after the TCP Port-API path is planned and replacement code is ready.
+- Keep existing MeshCore behavior working until the new TCP backend is available.
+- Focus current implementation work on Meshtastic TCP Port-API first.
+- Return to MeshCore after Meshtastic TCP Port-API is stable.
 
-- Implement Meshtastic as a direct TCP Port-API backend.
-- Do not implement Meshtastic serial support.
-- Do not mix MeshCore parsing into Meshtastic code.
-- Do not rewrite MeshCore in the Meshtastic pass.
-- Keep current MeshCore behavior working.
-- Return to MeshCore after the Meshtastic direct TCP backend is stable.
+## Relationship to Meshtastic work
 
-See `docs/MESHTASTIC_TCP_PORT_API_BACKEND.md` for the current active backend plan.
+Meshtastic is the current implementation focus. Its backend should prove the shared model first:
 
-## Future MeshCore direction
+```text
+TCP Port-API stream
+  -> protocol-specific decode
+  -> normalized Crow message
+  -> strict gatekeeper / router decision
+```
 
-When MeshCore work resumes, the target is to expose the same Crow-facing backend shape as the Meshtastic direct backend:
+MeshCore should later follow the same pattern:
+
+```text
+MeshCore TCP backend stream
+  -> MeshCore-specific decode
+  -> normalized Crow message
+  -> strict gatekeeper / router decision
+```
+
+Outbound path:
+
+```text
+Crow router message
+  -> MeshCore backend send function
+  -> MeshCore TCP backend encode/send
+```
+
+The router must remain protocol-neutral.
+
+## Required future backend shape
+
+When MeshCore is reworked, target the same Crow-facing interface expected from other backends:
 
 ```text
 setup(config)
@@ -29,181 +56,169 @@ send(msg)
 shutdown()
 ```
 
-The router should remain protocol-neutral. MeshCore-specific KISS/TNC parsing should stay inside MeshCore-specific files.
+MeshCore-specific connection, framing, decoding, identity, and send behavior should stay in MeshCore-specific code. The router should only see normalized Crow messages.
 
-Target boundary:
+## Proposed future config shape
 
-```text
-MeshCore packet/frame
-  -> MeshCore-specific parser
-  -> normalized Crow message
-  -> strict gatekeeper / router decision
-```
-
-Outbound target boundary:
-
-```text
-Crow router message
-  -> MeshCore backend send function
-  -> MeshCore-specific packet/frame encoding
-```
-
-## Purpose
-
-Crow already has a MeshCore backend in `meshcore.uc` that talks to the existing UDP/multicast bridge path. The draft TNC/KISS design adds a separate MeshCore path in new `.uc` files so it can be tested side-by-side without disturbing the known-good legacy backend.
-
-The new backend must not read MeshCore traffic as raw text. It must follow a real decode chain:
-
-```text
-KISS/TNC byte stream
-  -> KISS frame unwrap
-  -> KISS command-byte check
-  -> raw MeshCore packet parse
-  -> originator/key/callsign/location discovery
-  -> Crow message object
-  -> Strict Gatekeeper / router decision
-```
-
-## Non-goals while Meshtastic is active
-
-- Do not edit `meshcore.uc` except for a narrowly required bug fix.
-- Do not switch the production router import to a TNC backend.
-- Do not remove the UDP/multicast bridge backend.
-- Do not claim live hardware compatibility until tested with real MeshCore hardware.
-- Do not spend this pass normalizing MeshCore unless it is required to keep current behavior from breaking.
-
-## Draft implementation status
-
-| Phase | Status | Notes |
-| --- | --- | --- |
-| Phase 1: Shadow backend | **Drafted / deferred** | New-file strategy remains preferred for later testing. Not wired into production router. |
-| Phase 2: KISS frame layer | **Drafted / deferred** | KISS unwrap/wrap work should handle FEND/FESC escaping, command low nibble, Data `0x00`, and SetHardware `0x06`. |
-| Phase 3: MeshCore packet parser | **Drafted / deferred** | Parser should handle route type, payload type, payload version, optional transport codes, path info, path bytes, and payload. |
-| Phase 4: Replicate old backend behavior | **Deferred** | ADVERT, direct TXT, group TXT, ACK, outbound direct/group/adverts need live validation. |
-| Phase 5: Identity and gatekeeper context | **Deferred** | ADVERT identity/location discovery, public-key resolution, and callsign extraction need hardware-backed validation. |
-| Phase 6: Switch strategy | **Deferred** | No production switch should happen until Meshtastic direct backend work is stable and MeshCore hardware testing is available. |
-
-## Existing file intentionally preserved
-
-```text
-meshcore.uc
-```
-
-That file remains the current MeshCore implementation. Keep it available for rollback and production continuity.
-
-## Future test plan
-
-### Phase 1: shadow backend
-
-Goal: prove any new MeshCore TNC files load and decode without changing production routing.
-
-Checks:
-
-```sh
-git diff main -- meshcore.uc
-ls -1 meshcore_tnc*.uc docs/MESHCORE_TNC_BACKEND.md
-```
-
-Expected:
-
-- `meshcore.uc` is unchanged or only minimally changed for a documented bug fix.
-- New files can be reviewed independently.
-- No router import has been switched on production.
-- The old UDP bridge remains active unless a test image explicitly opts into the TNC path.
-
-### Phase 2: KISS frame layer
-
-Goal: verify that Crow unwraps KISS frames before trying to parse MeshCore packets.
-
-Expected KISS behavior:
-
-| Input behavior | Expected result |
-| --- | --- |
-| Empty frame between two `0xC0` bytes | Ignored. |
-| `0xDB 0xDC` | Unescaped to `0xC0`. |
-| `0xDB 0xDD` | Unescaped to `0xDB`. |
-| Command low nibble `0x00` | Treat frame data as raw MeshCore packet. |
-| Command low nibble `0x06` | Treat as SetHardware/telemetry; ignore or log, do not route. |
-| Other command | Ignore for routing. |
-
-Acceptance criteria:
-
-- KISS framing survives byte stuffing/un-stuffing.
-- Data command frames produce only raw payload bytes for the packet parser.
-- SetHardware `0x06` does not enter routing.
-- Command matching uses `typebyte & 0x0f`, not the whole command byte.
-
-### Phase 3: MeshCore packet parser
-
-Goal: validate raw MeshCore packet parsing without requiring a live radio.
-
-Packet fields to verify:
-
-```text
-[header][transport_codes optional][path_length][path][payload]
-```
-
-| Parser output | Required behavior |
-| --- | --- |
-| `route_type` | Extract from header low 2 bits. |
-| `payload_type` | Extract from header bits 2-5. |
-| `payload_version` | Accept version 1 only until newer versions are validated. |
-| `transport_codes` | Parse only for transport flood/direct route types. |
-| `path_hash_size` | Compute from `pathinfo >> 6` plus 1. |
-| `path_hash_count` | Compute from `pathinfo & 0x3f`. |
-| `path` | Extract `hash_size * hash_count` bytes. |
-| `payload` | Everything after path bytes. |
-
-Acceptance criteria:
-
-- 1-byte, 2-byte, and 3-byte path hash modes parse correctly.
-- Reserved path mode is rejected.
-- Malformed short packets are rejected.
-- Parser does not silently treat 3-byte paths as 1-byte paths.
-
-### Phase 4: Crow message shape
-
-TNC decoded messages should normalize toward this shape:
+Exact fields may change once the MeshCore TCP API is confirmed, but the config should follow the same explicit shape as Meshtastic:
 
 ```json
 {
-  "transport": "meshcore",
-  "backend": "tnc",
-  "from": 1234,
-  "to": 4294967295,
-  "hop_limit": 1,
-  "namekey": "...",
-  "data": {
-    "text_message": "..."
+  "meshcore": {
+    "enabled": true,
+    "transport": "tcp",
+    "host": "192.168.4.1",
+    "port": 4403
   }
 }
 ```
 
-Acceptance criteria:
+Rules:
 
-- `transport` remains `meshcore` so existing router/gatekeeper logic recognizes it.
-- `backend` is `tnc` for debugging and side-by-side logging.
-- ADVERT, direct text, group text, and ACK do not regress existing Crow message semantics.
-- Group text includes a weak-identity marker unless cryptographic identity is separately validated.
+- Use TCP as the target backend transport.
+- Do not add serial/TNC config as the new path.
+- Keep old MeshCore config only as compatibility fallback while migrating.
+- Document the actual default port once confirmed against MeshCore hardware/software.
 
-### Phase 5: identity and gatekeeper context
+## TNC/KISS deprecation
 
-Before a MeshCore-derived message is forwarded into AREDN/Part 97 paths, verify:
+The previous TNC/KISS plan is no longer the desired architecture.
 
-- KISS frame is valid.
-- KISS command is Data `0x00`.
-- Raw MeshCore packet parses cleanly.
-- Packet type is one of the expected routable types.
-- Sender identity has been resolved if possible.
-- Group messages are marked as weak identity.
-- Strict Gatekeeper can still drop messages with insufficient identity.
+Deprecated concepts:
 
-## Later switch strategy
+- KISS frame unwrap/wrap as the main MeshCore backend.
+- TNC command-byte routing.
+- Serial/TNC stream parsing as the production path.
+- `meshcore_tnc` as the future production module.
+- Switching router imports from `meshcore` to `meshcore_tnc`.
 
-No production switch should be made now.
+If TNC draft files remain in the tree, treat them as historical experiments only. They should not be wired into production. After the TCP backend plan is implemented, remove stale TNC files or move them to an archive branch to avoid confusion.
 
-When testing resumes, use a reversible test image or test branch only. If a future test branch uses a different MeshCore module, make the import change isolated and easy to revert. Do not rename or delete the current `meshcore.uc` backend until the new path has live hardware validation.
+## Future MeshCore TCP implementation phases
 
-## Hardware wait state
+### Phase 0: wait until Meshtastic TCP backend is stable
 
-Current blocker: MeshCore hardware/live captures are required before any production activation. Until then, this document is a planning and preservation note, not an activation request.
+Do not rework MeshCore until the Meshtastic TCP Port-API backend has proven:
+
+- connection management
+- decode path
+- normalized Crow message path
+- outbound send path
+- reconnect/backoff behavior
+- strict gatekeeper integration
+
+### Phase 1: confirm MeshCore TCP API
+
+Before coding, confirm the actual MeshCore TCP API details:
+
+- host/IP discovery or configured host
+- TCP port
+- frame boundaries
+- message envelope format
+- text payload encoding
+- node identity fields
+- destination/broadcast model
+- RSSI/SNR or link metric availability
+- encrypted/unsupported payload behavior
+- outbound send format
+
+### Phase 2: connection skeleton
+
+- Add explicit TCP config handling.
+- Open persistent TCP connection.
+- Add reconnect/backoff.
+- Add debug logs for connect, disconnect, reconnect, retry.
+- Do not route packets until decode is reliable.
+
+### Phase 3: decode and normalize
+
+Decode MeshCore TCP backend packets into normalized Crow messages including, where available:
+
+- sender identity
+- destination or broadcast
+- channel/group/direct context
+- text payload
+- packet/message ID
+- timestamp
+- link metrics
+- encrypted/unsupported state
+
+Normalized object should follow current Crow router/message conventions and include the equivalent of:
+
+```json
+{
+  "transport": "meshcore",
+  "backend": "tcp-port-api",
+  "from": 1234,
+  "to": 4294967295,
+  "packet_id": 123,
+  "namekey": "MeshCore Primary",
+  "data": {
+    "text_message": "hello"
+  }
+}
+```
+
+### Phase 4: strict gatekeeper integration
+
+Before a MeshCore-derived message is bridged into AREDN/Part 97 paths:
+
+- verify packet decode succeeded
+- preserve sender identity context when available
+- mark weak identity clearly
+- do not upgrade weak identity into strong identity without validation
+- log drop reasons when strict gatekeeper rejects traffic
+
+### Phase 5: outbound send
+
+- Encode Crow-originated text for the MeshCore TCP backend.
+- Support broadcast/group text first.
+- Support direct text if the backend API and Crow model can safely identify the destination.
+- Define deterministic behavior when disconnected: queue with bounds or drop with log.
+
+### Phase 6: field validation
+
+Validate with real MeshCore hardware/software:
+
+- TCP connect works
+- reconnect after device reboot works
+- inbound text appears once
+- outbound text sends once
+- messages are not looped back incorrectly
+- encrypted/unsupported packets are dropped/logged safely
+- strict gatekeeper allow/drop behavior is visible in logs
+- existing APRS, AREDN, and Meshtastic paths do not regress
+
+## Cleanup plan for old TNC draft
+
+After the TCP API path is confirmed:
+
+1. Search for TNC/KISS files and references:
+
+   ```sh
+   find . -iname '*meshcore*tnc*' -o -iname '*kiss*'
+   grep -Rni 'meshcore_tnc\|KISS\|TNC' .
+   ```
+
+2. Confirm none are imported by production code.
+3. Remove stale TNC/KISS draft files from active tree or move them to an archive branch.
+4. Update docs and config examples to mention TCP only.
+5. Keep `meshcore.uc` or its TCP replacement as the active MeshCore module.
+
+## OpenClaw prompt for later MeshCore rework
+
+```text
+In mathisono/Crow, rework MeshCore away from the old TNC/KISS draft plan and toward a TCP Port-API style backend. Do not use serial or TNC/KISS as the production backend.
+
+Wait until the Meshtastic TCP Port-API backend pattern is stable, then apply the same architecture to MeshCore: TCP stream -> MeshCore-specific decode -> normalized Crow message -> strict gatekeeper/router. Outbound should use Crow router message -> MeshCore send function -> TCP encode/send.
+
+Keep the router protocol-neutral. Keep MeshCore-specific connection/framing/decode logic inside MeshCore-specific files. Preserve existing MeshCore behavior until the TCP backend works. Remove or retire stale meshcore_tnc/KISS files only after confirming they are not imported by production code.
+
+Add config under meshcore with enabled, transport="tcp", host, and port once the real MeshCore TCP API details are confirmed. Add reconnect/backoff, debug logging, safe packet drop behavior, strict_gatekeeper integration, and field validation notes.
+
+Do not change APRS, AREDN, or Meshtastic behavior in this MeshCore cleanup pass.
+```
+
+## Current action
+
+For now, treat MeshCore TCP as a future rework item. The active implementation task remains Meshtastic TCP Port-API.
