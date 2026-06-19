@@ -14,13 +14,22 @@ Example configuration:
 }
 ```
 
-When enabled, Raven applies these controls before Meshtastic or MeshCore ingress is admitted to the routing queue:
+When enabled, Crow applies these controls before Meshtastic or MeshCore ingress is admitted to the routing queue:
 
 - encrypted Meshtastic protobuf packets are dropped instead of decrypted for bridge forwarding;
 - non-text bridged packets are dropped;
 - the sender name must contain a US-style amateur callsign token such as `KN6PLV`, `W6XYZ`, or `KJ6DZB`;
 - if `allowed_callsigns` is non-empty, the extracted sender callsign must also appear in that whitelist;
 - forwarded text is re-written to originate from the gateway node, and the body is prefixed as `[SENDER via GATEWAY] message`.
+
+## Backend coverage
+
+Strict Gatekeeper must apply to all bridge ingress paths:
+
+- **meshtastic.uc** — production UDP/multicast Meshtastic backend.
+- **meshtastic_API.uc** — experimental TCP Port-API backend (when wired).
+
+MeshCore is currently **on hold**. The existing `meshcore.uc` UDP backend remains unchanged. MeshCore TNC/KISS code has been removed from the repo.
 
 ## Operational caveats
 

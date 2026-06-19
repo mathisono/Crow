@@ -5,9 +5,10 @@ function normTransport(target_transport)
 {
     switch (target_transport) {
         case "meshcore":
-        case "meshcore_tnc":
             return "meshcore";
         case "meshtastic":
+        case "meshtastic_api":
+        case "meshtastic_API":
             return "meshtastic";
         default:
             return target_transport;

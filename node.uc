@@ -96,7 +96,7 @@ function createNode(config)
     const allkeys = crypto.generateKeys();
     me = {
         id: (id[2] << 24) + (id[3] << 16) + (id[4] << 8) + id[5],
-        long_name: sprintf("Raven %02x%02x", id[4], id[5]),
+        long_name: sprintf("Crow %02x%02x", id[4], id[5]),
         short_name: sprintf("%02x%02x", id[4], id[5]),
         macaddr: struct.pack("6B", id[0], id[1], id[2], id[3], id[4], id[5]),
         private_key: allkeys.private,

@@ -14,10 +14,10 @@ Lightweight regression tests for Crow modules. No test framework dependency.
 Run the formatter tests after **any** of the following:
 
 - Editing `lora_outbound_text.uc` (logic, defaults, callsign fallback chain, truncation rules).
-- Adding/renaming a transport that flows through `normTransport()` / `gatewayTag()` (e.g. new `meshcore_*` variant).
+- Adding/renaming a transport that flows through `normTransport()` / `gatewayTag()`.
 - Changing the default LoRa payload budget (`DEFAULT_LORA_MAX_PAYLOAD`) or the ellipsis marker.
 - Changing how upstream callers populate `originating_callsign`, `callsign`, `from_callsign`, or `data.callsign` on outbound messages.
-- Touching `meshcore.uc`, `meshcore_tnc.uc`, `meshtastic.uc`, `router.uc`, or the gatekeeper path in a way that could affect outbound text shape.
+- Touching `meshcore.uc`, `meshtastic.uc`, `router.uc`, or the gatekeeper path in a way that could affect outbound text shape.
 - Before opening a PR that touches any of the above.
 - Before cutting an IPK/APK build for a release.
 - As a quick smoke check after merging `main` if outbound text shape is in scope.
@@ -57,7 +57,7 @@ command -v ucode >/dev/null \
 
 `gatewayTag()`:
 
-- `meshcore` / `meshcore_tnc` normalization to `MCGW` / `MCG{n+1}`.
+- `meshcore` normalization to `MCGW` / `MCG{n+1}`.
 - `meshtastic` mapping to `MTGW` / `MTG{n}`.
 - Unknown transport falls back to `MCGW`.
 - Null/zero gateway index handling.
@@ -72,11 +72,9 @@ command -v ucode >/dev/null \
 - Truncation without `"..."` when remaining room `<= 3`.
 - Header-exceeds-budget hard truncation of the header itself.
 - Default `max_payload` (255) when `null` is passed.
-- `meshcore_tnc` target transport normalizes tag to the `meshcore` form.
 
 ## What is not covered (yet)
 
-- Live KISS / MeshCore TNC byte-level round trips (see `docs/MESHCORE_TNC_BACKEND.md`; needs hardware).
 - Strict gatekeeper end-to-end decisions on outbound text.
 - AREDN CGI path handling, WebSocket frame limits, UI escaping (covered by other static checks listed in `docs/CROW_MIGRATION_PLAN.md`).
 

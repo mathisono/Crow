@@ -28,7 +28,7 @@ Crow should be Crow-first at runtime and packaging time:
 | Sysupgrade naming | **Updated target** | Use a generic sysupgrade config filename such as `crow.conf`. Do not use `KJ6DZB.crow.conf` or another personal callsign. |
 | Raven-to-Crow import | **Schema-aware import required** | Import only compatible Raven keys into the current Crow default config. Do not blindly copy old Raven config wholesale. Runtime data directories can be copied only when Crow paths are missing. |
 | Meshtastic backend | **Current focus** | Build a direct TCP Port-API backend to a Meshtastic ESP32 node, default port `4403`. See `docs/MESHTASTIC_TCP_PORT_API_BACKEND.md`. |
-| MeshCore backend | **Deferred** | Keep current MeshCore functionality working. MeshCore can later be normalized behind the same backend boundary, but do not rewrite it during the Meshtastic TCP pass. See `docs/MESHCORE_TNC_BACKEND.md`. |
+| MeshCore backend | **On hold** | Keep current `meshcore.uc` UDP backend working. MeshCore TNC/KISS code has been removed from the repo. When MeshCore work resumes, start from a fresh hardware/API assessment. |
 | Build packaging | **Needs validation** | Ensure packages include all required UI/runtime files and do not include stale overlay files once direct UI merge is complete. APK still depends on `mkapk.py` being available in PATH. |
 
 ## UI hardening plan

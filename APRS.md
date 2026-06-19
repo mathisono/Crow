@@ -1,6 +1,6 @@
-# Raven APRS Bridge
+# Crow APRS Bridge
 
-Raven can bridge APRS text messages through a configurable APRS backend. The default backend is APRS-IS, but the APRS module also includes support for Xastir/YAAC-style TCP text streams and Dire Wolf KISS-over-TCP.
+Crow can bridge APRS text messages through a configurable APRS backend. The default backend is APRS-IS, but the APRS module also includes support for Xastir/YAAC-style TCP text streams and Dire Wolf KISS-over-TCP.
 
 APRS is public amateur-radio traffic. Keep transmit disabled until the station callsign, APRS-IS login/passcode or local TNC path, and operator control requirements are understood.
 
@@ -83,7 +83,7 @@ Xastir, YAAC, or another APRS/TNC2-style TCP server:
 
 ## Sending APRS messages
 
-Use the configured APRS Raven channel, for example `APRS og==`.
+Use the configured APRS Crow channel, for example `APRS og==`.
 
 Send a direct APRS message:
 
@@ -125,4 +125,4 @@ Each group can optionally repeat received APRS messages from one group member ba
 }
 ```
 
-When enabled, a message received from one group member is sent to the other group members, not back to the sender. Raven applies simple duplicate suppression and rate limiting to reduce loops.
+When enabled, a message received from one group member is sent to the other group members, not back to the sender. Crow applies simple duplicate suppression and rate limiting to reduce loops.

@@ -27,7 +27,6 @@ const ELLIPSIS = '...';
 function normTransport(t) {
     switch (t) {
         case 'meshcore':
-        case 'meshcore_tnc':
             return 'meshcore';
         case 'meshtastic':
             return 'meshtastic';
@@ -94,7 +93,6 @@ function check(name, actual, expected) {
 
 // ---------- cases (mirrors tests/test_outbound_formatter.uc) ----------
 check('meshcore default idx 0 -> MCGW', gatewayTag('meshcore', 0), 'MCGW');
-check('meshcore_tnc normalizes -> MCGW', gatewayTag('meshcore_tnc', 0), 'MCGW');
 check('meshcore idx 1 -> MCG2', gatewayTag('meshcore', 1), 'MCG2');
 check('meshcore idx 2 -> MCG3', gatewayTag('meshcore', 2), 'MCG3');
 check('meshtastic default idx 0 -> MTGW', gatewayTag('meshtastic', 0), 'MTGW');
@@ -144,10 +142,6 @@ check('header exceeds budget -> truncated header',
 check('default max_payload (null)',
     prepare({ originating_callsign: 'KN6ABC', data: { text_message: 'default-budget' } }, 'meshcore', 0, null),
     'KN6ABC@MCGW> default-budget');
-
-check('meshcore_tnc target normalizes',
-    prepare({ originating_callsign: 'K6T', data: { text_message: 'ok' } }, 'meshcore_tnc', 0, 255),
-    'K6T@MCGW> ok');
 
 check('exact fit at max_payload',
     prepare({ originating_callsign: 'KN6ABC', data: { text_message: '1234567' } }, 'meshcore', 0, 20),

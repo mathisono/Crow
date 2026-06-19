@@ -60,21 +60,10 @@ meshtastic.registerProto(
     }
 );
 
-// Minimal Meshtastic client/Port-API envelopes. The TCP stream carries framed
-// FromRadio/ToRadio protobuf messages. Only the packet field is needed for this
-// backend pass; unknown fields are ignored by protobuf.uc.
-meshtastic.registerProto(
-    "fromradio", null,
-    {
-        "6": "proto packet packet"
-    }
-);
-meshtastic.registerProto(
-    "toradio", null,
-    {
-        "2": "proto packet packet"
-    }
-);
+// NOTE: FromRadio/ToRadio Port-API envelope protos are NOT registered here.
+// They belong exclusively in meshtastic_API.uc, which self-registers them into
+// its own private proto table. The UDP multicast backend (meshtastic.uc) does
+// not use Port-API framing.
 
 meshtastic.registerProto(
     "data", null,

@@ -20,7 +20,6 @@ function check(name, actual, expected) {
 
 // --- gatewayTag ---
 check("meshcore default idx 0 -> MCGW", fmt.gatewayTag("meshcore", 0), "MCGW");
-check("meshcore_tnc normalizes -> MCGW", fmt.gatewayTag("meshcore_tnc", 0), "MCGW");
 check("meshcore idx 1 -> MCG2", fmt.gatewayTag("meshcore", 1), "MCG2");
 check("meshcore idx 2 -> MCG3", fmt.gatewayTag("meshcore", 2), "MCG3");
 check("meshtastic default idx 0 -> MTGW", fmt.gatewayTag("meshtastic", 0), "MTGW");
@@ -91,11 +90,6 @@ let msg10 = { originating_callsign: "KN6ABC", data: { text_message: "default-bud
 check("default max_payload (null)",
     fmt.prepare(msg10, "meshcore", 0, null),
     "KN6ABC@MCGW> default-budget");
-
-// --- prepare: meshcore_tnc target normalizes to meshcore tags ---
-check("meshcore_tnc target normalizes",
-    fmt.prepare({ originating_callsign: "K6T", data: { text_message: "ok" } }, "meshcore_tnc", 0, 255),
-    "K6T@MCGW> ok");
 
 // --- prepare: exactly fits boundary ---
 // header 13 + body 7 = 20
