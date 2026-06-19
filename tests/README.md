@@ -8,6 +8,8 @@ Lightweight regression tests for Crow modules. No test framework dependency.
 | --- | --- | --- |
 | `test_outbound_formatter.uc` | `ucode` | Canonical tests for `lora_outbound_text.uc` (outbound LoRa text formatter: callsign + gateway tag + truncation). |
 | `run_formatter_tests.js` | `node` | Node runner with a JS port of the formatter contract. Runs the same logical cases without needing a ucode interpreter, and auto-invokes the `.uc` tests when `ucode` is on PATH. |
+| `test_meshcore_tcp_api.uc` | `ucode` | Canonical tests for `meshcore_tcp_api.uc` Smart Accumulator: fragmentation, oversize kill switch, encrypted/unknown-cmd early-drop, resync. |
+| `run_meshcore_tcp_api_tests.js` | `node` | Node mirror with a JS port of the accumulator. Same logical cases, runnable without ucode; auto-invokes `.uc` tests when `ucode` is on PATH. |
 
 ## When to run
 
