@@ -59,6 +59,23 @@ meshtastic.registerProto(
         "21": "enum transport_mechanism"
     }
 );
+
+// Minimal Meshtastic client/Port-API envelopes. The TCP stream carries framed
+// FromRadio/ToRadio protobuf messages. Only the packet field is needed for this
+// backend pass; unknown fields are ignored by protobuf.uc.
+meshtastic.registerProto(
+    "fromradio", null,
+    {
+        "6": "proto packet packet"
+    }
+);
+meshtastic.registerProto(
+    "toradio", null,
+    {
+        "2": "proto packet packet"
+    }
+);
+
 meshtastic.registerProto(
     "data", null,
     {
