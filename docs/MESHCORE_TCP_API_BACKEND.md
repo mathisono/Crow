@@ -2,6 +2,10 @@
 
 > Status: Experimental — not wired into `router.uc`. Phase 1 (smart accumulator + handshake + decoder) complete; Phase 2 live-hardware tests pending.
 
+## Scope: TXT_MSG / GRP_TXT only
+
+This backend exists for ONE job: surface cleartext MeshCore text messages into the Crow router. Adverts, telemetry, handshake responses, encrypted blobs, and vendor extensions are all dropped at the buffer layer without allocating payload memory. This keeps RAM exposure on OpenWrt routers minimal and the Part 97 regulatory surface tight.
+
 ## Why
 
 Replace the abandoned KISS/TNC serial parser with a native TCP connection to a MeshCore radio's Companion Protocol on port 4403. This mirrors how the MeshMonitor dashboard talks to the radio — a structured binary command/response stream with asynchronous event frames.
@@ -29,8 +33,7 @@ TCP 4403 ──►│  recv()                                  │
             │   │     ├─ encrypted/blocked cmd drop    │
             │   │     ├─ unknown cmd drop              │
             │   │     └─ resync window cap             │
-            │   ├─ dispatchFrame() → decodeTextFrame() │
-            │   └─ gatekeeper.filterInboundBridge()    │
+            │   └─ decodeTextFrame() (TXT_MSG/GRP_TXT) │
             │                                          │
             │  setup() → openTcp() + sendBootHandshake │
             │  reconnect timer (5s)                    │
@@ -38,21 +41,29 @@ TCP 4403 ──►│  recv()                                  │
                           │
                           ▼
                     router queue
+                          │
+                          ▼
+            gatekeeper.filterInboundBridge() in router.uc
 ```
+
+**No double-filtering:** `router.uc:queue()` runs the canonical `gatekeeper.filterInboundBridge()` pass on every queued `meshcore` message (callsign extraction, whitelist, `[SENDER via GATEWAY]` annotation). The backend caches a `strictHook` only for the Smart Accumulator's `early_drop_encrypted` decision — it does NOT call `filterInboundBridge` itself.
 
 ## Smart Accumulator (the "smart firewall buffer")
 
 Crow runs on OpenWrt nodes with very little RAM. A naïve accumulator that trusts a TCP-supplied length field is vulnerable to memory exhaustion from a malicious or glitching radio. The Smart Accumulator pulls Strict Gatekeeper rules down into the buffer loop so we **fail closed before allocating payload bytes**.
 
-Three gates fire BEFORE per-frame payload buffer allocation:
+Four gates fire BEFORE per-frame payload buffer allocation:
 
 | Gate | Trigger | Action |
 |------|---------|--------|
-| **Oversize kill switch** | `payload_length > 512` | Drop header, arrange to discard the claimed payload bytes from the wire as they arrive. Bumps `early_drop_oversize`. |
+| **Oversize kill switch** | `payload_length > 256` | Drop header, arrange to discard the claimed payload bytes from the wire as they arrive. Bumps `early_drop_oversize`. |
 | **Encrypted early-drop** | Strict Gatekeeper ON **and** cmd ∈ `{0x90, 0x91}` | Skip header + payload from buffer (or queue discard for incoming continuation). Bumps `early_drop_encrypted`. |
-| **Unknown-cmd early-drop** | cmd ∉ `{HELLO_RESP, TXT_MSG, GRP_TXT, ADVERT}` | Same as above. Bumps `early_drop_unknown_cmd`. |
+| **Unknown-cmd early-drop** | cmd ∉ `{TXT_MSG, GRP_TXT}` | Same as above. This catches HELLO_RESP, ADVERT, vendor extensions, and (with strict OFF) encrypted commands. Bumps `early_drop_unknown_cmd`. |
+| **Malformed-text drop** | `plen < 9` or text-length byte > `plen - 9` | Drop the frame after full receive but before decoder allocation. Bumps `early_drop_malformed_text`. |
 
-A fourth defensive cap (`RESYNC_BUFFER_CAP = 4096`) prevents the resync window from growing without bound when no magic byte ever appears.
+A fifth defensive cap (`RESYNC_BUFFER_CAP = 4096`) prevents the resync window from growing without bound when no magic byte ever appears.
+
+`SMART_MAX_PAYLOAD` is tuned to MeshCore's real text MTU: ~150 byte text + 9 byte envelope = 159. The 256 cap is the smallest power-of-two that leaves headroom for variants while keeping a single frame well under one TCP MSS.
 
 ## Wire format
 
@@ -125,7 +136,7 @@ ucode -R -L tests/test_meshcore_tcp_api.uc        # on a node with ucode
 | advert | `CMD_ADVERT` passes the accumulator |
 | oversize drain | Buffer correctly skips a multi-read oversize blob and parses the next valid frame |
 
-23/23 passing as of initial commit.
+34/34 passing as of the tightened-contract commit.
 
 ### Group B — Handshake & Telemetry (live radio)
 

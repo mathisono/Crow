@@ -2,28 +2,34 @@
 // meshcore_tcp_api.uc
 // =====================================================================
 //
-// Crow MeshCore TCP Companion API backend.
+// Crow MeshCore TCP Companion API backend — text-message bridge only.
 //
-// Connects natively to a MeshCore radio over TCP (default 127.0.0.1:4403)
-// and speaks the MeshCore Companion Protocol — the same binary protocol
-// used by MeshMonitor. This is NOT Meshtastic's port 4403 (which streams
-// raw protobufs). MeshCore Companion is a structured, binary Command/
-// Response protocol with asynchronous event frames:
+// Speaks the MeshCore Companion Protocol over TCP (default 127.0.0.1:4403),
+// the same binary protocol used by MeshMonitor. This is NOT Meshtastic's
+// port 4403 (which streams raw protobufs). MeshCore Companion frames:
 //
-//     [ Magic ][ CmdID ][ PayloadLen (2 bytes BE) ][ Payload ... ]
+//     [ Magic=0x3E ][ CmdID ][ PayloadLen (2 bytes BE) ][ Payload ... ]
+//
+// Scope: this backend ONLY surfaces cleartext text messages (TXT_MSG +
+// GRP_TXT) into the Crow router. Every other frame — handshake responses,
+// adverts, encrypted blobs, unknown commands — is dropped at the buffer
+// layer without payload allocation. This minimises RAM exposure on
+// OpenWrt nodes and keeps the regulatory surface tight (FCC Part 97).
 //
 // Design pillars:
 //
 //   1. Non-blocking ucode socket integrated with Crow's timer-driven
 //      recv/send loop (same shape as meshtastic_API.uc).
-//   2. "Smart Accumulator" — Part 97 / FCC rules are enforced AT the buffer
-//      level. Oversized frames, encrypted payload types, and unknown
-//      command IDs are dropped from the TCP stream BEFORE allocating a
-//      payload buffer, protecting OpenWrt RAM.
-//   3. MeshMonitor-style boot handshake to subscribe the radio to
-//      asynchronous TXT_MSG / GRP_TXT / ADVERT push events.
-//   4. Reconnect backoff with stable state machine reset.
-//   5. All decoded text messages routed through gatekeeper before AREDN.
+//   2. "Smart Accumulator" — Strict Gatekeeper / Part 97 rules are
+//      enforced AT the buffer level. Oversized frames, encrypted payload
+//      types, and any command outside { TXT_MSG, GRP_TXT } are skipped
+//      from the wire BEFORE allocating a payload buffer.
+//   3. MeshMonitor-style boot handshake — HELLO + SUBSCRIBE_EVENTS,
+//      fire-and-forget. The response is consumed by the unknown-cmd
+//      gate (we don't need to inspect it).
+//   4. Reconnect backoff with stable state-machine reset.
+//   5. Decoded messages are queued raw; router.uc runs the canonical
+//      gatekeeper.filterInboundBridge() pass (no double-filtering).
 //
 // This backend is EXPERIMENTAL. It is not wired into router.uc by default.
 // Enable via config:
@@ -46,39 +52,33 @@ import * as timers from "timers";
 const COMPANION_MAGIC          = 0x3E;   // '>' — MeshMonitor-observed sync byte
 const HEADER_BYTES             = 4;       // magic(1) + cmd(1) + len(2)
 
-// Maximum payload bytes we are willing to buffer for a single Companion
-// frame. A real MeshCore text message + envelope is well under this.
-// Anything larger is treated as glitch/attack and discarded WITHOUT
-// allocating buffer space (Smart Accumulator rule 1).
-const SMART_MAX_PAYLOAD        = 512;
+// Hard ceiling on per-frame payload bytes we will buffer. MeshCore text
+// MTU is ~150 bytes; with the 9-byte text envelope (from/to/len) the
+// observed maximum is ~159. 256 gives headroom for future variants while
+// still being a small RAM target. Anything bigger is dropped from the
+// wire (Smart Accumulator rule 1).
+const SMART_MAX_PAYLOAD        = 256;
 
-// How many bytes to keep in the rolling resync window when we're
-// searching for the next magic byte. Without this cap, a steady stream of
-// garbage with no magic byte could grow tcpbuf without bound.
+// Cap the rolling resync window. Without this, a steady stream of
+// garbage without a magic byte could grow tcpbuf without bound.
 const RESYNC_BUFFER_CAP        = 4096;
 
-// Async event command IDs (push frames from the radio)
-const CMD_HELLO_RESP           = 0x80;
+// Async event command IDs we actually emit Crow messages for.
 const CMD_TXT_MSG              = 0x81;   // direct/private cleartext text msg
 const CMD_GRP_TXT              = 0x82;   // group/channel cleartext text msg
-const CMD_ADVERT               = 0x83;   // node advertisement / discovery
-const CMD_ENCRYPTED_DM         = 0x90;   // encrypted direct message (DROP)
-const CMD_ENCRYPTED_BIN        = 0x91;   // encrypted binary blob   (DROP)
 
-// Outgoing command IDs (host -> radio)
-const CMD_HELLO                = 0x01;   // initial handshake
-const CMD_SUBSCRIBE_EVENTS     = 0x02;   // subscribe to async TXT push
-
-// Cleartext command IDs allowed past the early-drop gate.
-const CLEARTEXT_COMMANDS = {
-    [CMD_HELLO_RESP]:  true,
-    [CMD_TXT_MSG]:     true,
-    [CMD_GRP_TXT]:     true,
-    [CMD_ADVERT]:      true
-};
+// Outgoing command IDs (host -> radio). Sent once at connect, never
+// inspected on return.
+const CMD_HELLO                = 0x01;
+const CMD_SUBSCRIBE_EVENTS     = 0x02;
 
 // Encrypted / non-compliant command IDs that are always early-dropped
 // when Strict Gatekeeper is enabled, regardless of payload contents.
+// (Without strict mode, the unknown-cmd gate catches them too — strict
+// mode just gives them their own stat bucket.)
+const CMD_ENCRYPTED_DM         = 0x90;
+const CMD_ENCRYPTED_BIN        = 0x91;
+
 const PART97_BLOCKED_COMMANDS = {
     [CMD_ENCRYPTED_DM]:  true,
     [CMD_ENCRYPTED_BIN]: true
@@ -89,6 +89,9 @@ const DEFAULT_PORT             = 4403;
 const RECONNECT_INTERVAL       = 5;       // seconds
 const SOCKET_READ_CHUNK        = 2048;
 
+// Text frame envelope: 4-byte from + 4-byte to + 1-byte length.
+const TEXT_ENVELOPE_BYTES      = 9;
+
 // ---------------------------------------------------------------------
 // Module state
 // ---------------------------------------------------------------------
@@ -97,14 +100,16 @@ let cfg              = null;
 let enabled          = false;
 let callsign         = null;
 let router           = null;
-let gatekeeper       = null;
 let tcpHost          = null;
 let tcpPort          = DEFAULT_PORT;
+let strictHook       = null;     // function(): boolean   — cached strict-mode probe
 
 let s                = null;     // active socket handle (null = disconnected)
 let tcpbuf           = "";       // TCP accumulator
-let handshakeDone    = false;
+let pendingSkip      = 0;        // bytes still to discard from incoming stream
 let pendingRx        = [];       // decoded Crow message queue
+let msgSeq           = 0;        // monotonic local message id
+
 let stats            = {
     connects: 0,
     disconnects: 0,
@@ -113,6 +118,7 @@ let stats            = {
     early_drop_oversize: 0,
     early_drop_encrypted: 0,
     early_drop_unknown_cmd: 0,
+    early_drop_malformed_text: 0,
     resync_skips: 0
 };
 
@@ -131,7 +137,7 @@ function log1(fmt, ...args)
 }
 
 // ---------------------------------------------------------------------
-// Small binary helpers
+// Tiny binary helpers
 // ---------------------------------------------------------------------
 
 function be16(buf, off)
@@ -144,14 +150,20 @@ function pack_be16(n)
     return chr((n >> 8) & 0xFF) + chr(n & 0xFF);
 }
 
+function u32le(buf, off)
+{
+    return (ord(buf, off)
+        | (ord(buf, off + 1) << 8)
+        | (ord(buf, off + 2) << 16)
+        | (ord(buf, off + 3) << 24)) & 0xFFFFFFFF;
+}
+
 // Strip trailing NULs from a C-style string payload field.
 function cstr(s)
 {
     if (!s) return "";
     let n = length(s);
-    while (n > 0 && ord(s, n - 1) === 0) {
-        n--;
-    }
+    while (n > 0 && ord(s, n - 1) === 0) n--;
     return substr(s, 0, n);
 }
 
@@ -162,7 +174,7 @@ function cstr(s)
 function resetState()
 {
     tcpbuf = "";
-    handshakeDone = false;
+    pendingSkip = 0;
 }
 
 function closeSocket(reason)
@@ -170,11 +182,7 @@ function closeSocket(reason)
     if (s) {
         log0("disconnect %s\n", reason ?? "");
         stats.disconnects++;
-        try {
-            s.close();
-        }
-        catch (_) {
-        }
+        try { s.close(); } catch (_) {}
     }
     s = null;
     resetState();
@@ -200,16 +208,16 @@ function openTcp()
 }
 
 // ---------------------------------------------------------------------
-// MeshMonitor-style boot handshake
-// ---------------------------------------------------------------------
+// MeshMonitor-style boot handshake — fire-and-forget.
 //
 // On connect, send:
 //   [ MAGIC ][ CMD_HELLO         ][ len=0 ]
 //   [ MAGIC ][ CMD_SUBSCRIBE_EVT ][ len=0 ]
 //
-// This is what wakes the Companion interface and causes the radio to
-// autonomously push TXT_MSG / GRP_TXT frames over the socket without
-// polling.
+// The radio then autonomously pushes TXT_MSG / GRP_TXT frames over the
+// socket. The HELLO response (CMD_HELLO_RESP) is consumed by the
+// unknown-cmd gate — we don't need to validate it for routing.
+// ---------------------------------------------------------------------
 
 function buildFrame(cmd, payload)
 {
@@ -223,7 +231,6 @@ function sendBootHandshake()
     try {
         s.send(buildFrame(CMD_HELLO, ""));
         s.send(buildFrame(CMD_SUBSCRIBE_EVENTS, ""));
-        handshakeDone = true;
         log1("handshake sent (HELLO + SUBSCRIBE_EVENTS)\n");
     }
     catch (_) {
@@ -235,93 +242,78 @@ function sendBootHandshake()
 // The "Smart Accumulator"
 // ---------------------------------------------------------------------
 //
-// Pulls fully-formed Companion frames out of tcpbuf. Applies Part 97 /
-// memory-safety rules BEFORE allocating per-frame payload buffers:
+// Pulls fully-formed Companion frames out of tcpbuf, but only for
+// commands we actually decode (TXT_MSG / GRP_TXT). Everything else is
+// dropped from the wire without payload allocation:
 //
-//   * Oversize early drop: frame length > SMART_MAX_PAYLOAD.
-//   * Encrypted early drop: command ID in PART97_BLOCKED_COMMANDS while
-//     Strict Gatekeeper is enabled.
-//   * Unknown-command early drop: command ID outside CLEARTEXT_COMMANDS.
+//   * Oversize early-drop  — frame length > SMART_MAX_PAYLOAD.
+//   * Encrypted early-drop — cmd in PART97_BLOCKED_COMMANDS when strict.
+//   * Unknown-cmd drop     — cmd not in { TXT_MSG, GRP_TXT }.
+//   * Malformed-text drop  — text-length byte is inconsistent with plen.
+//
+// When an early-drop fires mid-stream (payload not yet fully arrived),
+// `pendingSkip` records how many bytes to discard from future reads.
 //
 // Returns an array of { cmd, payload } records ready for decoding.
-//
-// IMPORTANT: when an early-drop fires, we *don't* keep accumulating
-// pending bytes — we advance the buffer past the bad frame's bounds
-// (or, if the payload hasn't arrived yet, mark how many bytes to skip
-// from future reads). This is the "flush from the wire" behavior the
-// design plan calls for.
-
-let pendingSkip = 0;   // bytes still to discard from incoming stream
 
 function smartAccumulate(data)
 {
     const frames = [];
 
-    // Discard any in-flight skip bytes first (continuation of a previous
-    // early-drop whose payload hadn't fully arrived yet).
+    // 1. Discard any in-flight skip bytes first.
     if (pendingSkip > 0 && length(data) > 0) {
         const drop = pendingSkip < length(data) ? pendingSkip : length(data);
         data = substr(data, drop);
         pendingSkip -= drop;
-        if (pendingSkip > 0) {
-            return frames;
-        }
+        if (pendingSkip > 0) return frames;
     }
 
-    tcpbuf += data;
-    const strictOn = gatekeeper?.isEnabled() === true;
+    if (length(data) > 0) {
+        tcpbuf += data;
+    }
+
+    // Cache the strict-mode probe once per inject — strict-mode flips
+    // rarely, and re-calling it inside the loop is wasted work.
+    const strictOn = strictHook ? strictHook() : false;
 
     for (;;) {
-        // 1. Resync: find next magic byte.
-        let start = -1;
         const blen = length(tcpbuf);
-        for (let i = 0; i < blen; i++) {
-            if (ord(tcpbuf, i) === COMPANION_MAGIC) {
-                start = i;
-                break;
+        if (blen === 0) return frames;
+
+        // 2. Resync: find next magic byte.
+        if (ord(tcpbuf, 0) !== COMPANION_MAGIC) {
+            let start = -1;
+            for (let i = 1; i < blen; i++) {
+                if (ord(tcpbuf, i) === COMPANION_MAGIC) { start = i; break; }
             }
-        }
-        if (start < 0) {
-            // Cap the resync window so a glitch-storm can't grow tcpbuf
-            // unbounded.
-            if (blen > RESYNC_BUFFER_CAP) {
-                stats.resync_skips++;
-                log1("resync: dropped %d bytes of pre-magic garbage\n", blen);
-                tcpbuf = "";
+            if (start < 0) {
+                if (blen > RESYNC_BUFFER_CAP) {
+                    stats.resync_skips++;
+                    log1("resync: dropped %d bytes of pre-magic garbage\n", blen);
+                    tcpbuf = "";
+                }
+                return frames;
             }
-            return frames;
-        }
-        if (start > 0) {
             stats.resync_skips++;
             log1("resync: skipped %d bytes before magic\n", start);
             tcpbuf = substr(tcpbuf, start);
+            continue;
         }
 
-        // 2. Need a full header?
-        if (length(tcpbuf) < HEADER_BYTES) {
-            return frames;
-        }
+        // 3. Need a full header before any further decisions.
+        if (blen < HEADER_BYTES) return frames;
 
-        const cmd = ord(tcpbuf, 1);
+        const cmd  = ord(tcpbuf, 1);
         const plen = be16(tcpbuf, 2);
 
-        // 3. Smart Accumulator gates — applied BEFORE buffering payload.
+        // ----- Smart Accumulator gates (BEFORE payload allocation) -----
 
-        // 3a. Oversized payload kill switch.
+        // 3a. Oversize kill switch.
         if (plen > SMART_MAX_PAYLOAD) {
             stats.early_drop_oversize++;
             log1("early-drop oversize cmd=0x%02x plen=%d > %d\n",
                 cmd, plen, SMART_MAX_PAYLOAD);
-            // We can't trust the rest of the stream — advance past header
-            // and arrange to discard the claimed payload as it arrives.
-            tcpbuf = substr(tcpbuf, HEADER_BYTES);
-            pendingSkip = plen;
-            // Apply pendingSkip to whatever's already in tcpbuf.
-            if (pendingSkip > 0 && length(tcpbuf) > 0) {
-                const drop = pendingSkip < length(tcpbuf) ? pendingSkip : length(tcpbuf);
-                tcpbuf = substr(tcpbuf, drop);
-                pendingSkip -= drop;
-            }
+            advance(HEADER_BYTES, plen);
             continue;
         }
 
@@ -329,38 +321,41 @@ function smartAccumulate(data)
         if (strictOn && PART97_BLOCKED_COMMANDS[cmd]) {
             stats.early_drop_encrypted++;
             log1("early-drop encrypted cmd=0x%02x plen=%d (Part 97)\n", cmd, plen);
-            // Drop header + payload from buffer.
-            if (length(tcpbuf) >= HEADER_BYTES + plen) {
-                tcpbuf = substr(tcpbuf, HEADER_BYTES + plen);
-            }
-            else {
-                pendingSkip = HEADER_BYTES + plen - length(tcpbuf);
-                tcpbuf = "";
-            }
+            advance(HEADER_BYTES, plen);
             continue;
         }
 
-        // 3c. Unknown / unsupported command early drop.
-        if (!CLEARTEXT_COMMANDS[cmd]) {
+        // 3c. Anything outside { TXT_MSG, GRP_TXT } is dropped without
+        //     decode. This catches HELLO_RESP, ADVERT, unencrypted DMs
+        //     of unknown shape, vendor extensions, and (with strict OFF)
+        //     the encrypted commands too.
+        if (cmd !== CMD_TXT_MSG && cmd !== CMD_GRP_TXT) {
             stats.early_drop_unknown_cmd++;
             log1("early-drop unknown cmd=0x%02x plen=%d\n", cmd, plen);
-            if (length(tcpbuf) >= HEADER_BYTES + plen) {
-                tcpbuf = substr(tcpbuf, HEADER_BYTES + plen);
-            }
-            else {
-                pendingSkip = HEADER_BYTES + plen - length(tcpbuf);
-                tcpbuf = "";
-            }
+            advance(HEADER_BYTES, plen);
             continue;
         }
 
-        // 4. Need full payload? If not, leave it in tcpbuf and wait for
-        //    next read. This is the fragmentation-safe wait.
-        if (length(tcpbuf) < HEADER_BYTES + plen) {
-            return frames;
+        // 4. Wait for full payload (fragmentation-safe).
+        if (blen < HEADER_BYTES + plen) return frames;
+
+        // 5. Inline text-envelope sanity check. Reject malformed frames
+        //    here instead of letting decode allocate a half-msg object.
+        if (plen < TEXT_ENVELOPE_BYTES) {
+            stats.early_drop_malformed_text++;
+            log1("early-drop short text plen=%d < %d\n", plen, TEXT_ENVELOPE_BYTES);
+            tcpbuf = substr(tcpbuf, HEADER_BYTES + plen);
+            continue;
+        }
+        const tlen = ord(tcpbuf, HEADER_BYTES + 8);
+        if (TEXT_ENVELOPE_BYTES + tlen > plen) {
+            stats.early_drop_malformed_text++;
+            log1("early-drop malformed text tlen=%d plen=%d\n", tlen, plen);
+            tcpbuf = substr(tcpbuf, HEADER_BYTES + plen);
+            continue;
         }
 
-        // 5. Emit the validated frame.
+        // 6. Emit the validated frame.
         const payload = substr(tcpbuf, HEADER_BYTES, plen);
         tcpbuf = substr(tcpbuf, HEADER_BYTES + plen);
         stats.frames_in++;
@@ -368,84 +363,64 @@ function smartAccumulate(data)
     }
 }
 
+// Advance past a rejected frame. If the payload hasn't fully arrived
+// yet, arrange to discard the remainder from future socket reads.
+function advance(hdrBytes, payloadBytes)
+{
+    const total = hdrBytes + payloadBytes;
+    if (length(tcpbuf) >= total) {
+        tcpbuf = substr(tcpbuf, total);
+        return;
+    }
+    pendingSkip = total - length(tcpbuf);
+    tcpbuf = "";
+}
+
 // ---------------------------------------------------------------------
-// Decoder
+// Decoder — TXT_MSG / GRP_TXT only.
 // ---------------------------------------------------------------------
 //
-// MeshCore Companion TXT_MSG / GRP_TXT payload (cleartext form):
-//
+// Cleartext text payload:
 //   Off  Size  Field
 //   0    4     sender node id      (uint32 LE)
 //   4    4     target node id      (uint32 LE)   (0 = broadcast/group)
 //   8    1     text length (n)
 //   9    n     UTF-8 text bytes
 //
-// Anything else is decoded best-effort. Unknown shapes return null and
-// are logged.
-
-function readU32LE(buf, off)
-{
-    if (off + 4 > length(buf)) return null;
-    return (ord(buf, off)
-        | (ord(buf, off + 1) << 8)
-        | (ord(buf, off + 2) << 16)
-        | (ord(buf, off + 3) << 24)) & 0xFFFFFFFF;
-}
+// All length validation already happened in the accumulator, so this
+// is straight unpack.
 
 function decodeTextFrame(cmd, payload)
 {
-    if (length(payload) < 9) {
-        log1("decode: short text payload cmd=0x%02x len=%d\n", cmd, length(payload));
-        return null;
-    }
-    const fromId = readU32LE(payload, 0);
-    const toId   = readU32LE(payload, 4);
+    const fromId = u32le(payload, 0);
+    const toId   = u32le(payload, 4);
     const tlen   = ord(payload, 8);
-    if (9 + tlen > length(payload)) {
-        log1("decode: truncated text len=%d payloadlen=%d\n", tlen, length(payload));
-        return null;
-    }
-    const text = cstr(substr(payload, 9, tlen));
+    const text   = cstr(substr(payload, 9, tlen));
     if (!length(text)) {
         log1("decode: empty text from=%08x\n", fromId);
         return null;
     }
 
+    msgSeq = (msgSeq + 1) & 0xFFFFFFFF;
     const msg = {
-        transport:            "meshcore",
-        backend:              "tcp_api",
+        id:                   msgSeq,
         from:                 fromId,
         to:                   toId,
         rx_time:              time(),
         hop_limit:            1,
+        transport:            "meshcore",
+        backend:              "tcp_api",
         originating_callsign: callsign,
         data: {
             text_message: text
         }
     };
-    if (cmd === CMD_GRP_TXT) {
-        msg.is_group = true;
-    }
+    if (cmd === CMD_GRP_TXT) msg.is_group = true;
+
     log1("decoded %s from=%08x to=%08x text=%d bytes\n",
         cmd === CMD_GRP_TXT ? "GRP_TXT" : "TXT_MSG",
         fromId, toId, length(text));
     return msg;
-}
-
-function dispatchFrame(frame)
-{
-    switch (frame.cmd) {
-        case CMD_HELLO_RESP:
-            log1("HELLO_RESP received (len=%d)\n", length(frame.payload));
-            return null;
-        case CMD_ADVERT:
-            log1("ADVERT received (len=%d)\n", length(frame.payload));
-            return null;
-        case CMD_TXT_MSG:
-        case CMD_GRP_TXT:
-            return decodeTextFrame(frame.cmd, frame.payload);
-    }
-    return null;
 }
 
 // ---------------------------------------------------------------------
@@ -460,16 +435,22 @@ export function setup(config)
     }
     enabled = true;
 
-    callsign   = config.callsign;
-    router     = config.router;
-    gatekeeper = config._gatekeeper;
-    tcpHost    = cfg.host ?? DEFAULT_HOST;
-    tcpPort    = cfg.port ?? DEFAULT_PORT;
+    callsign = config.callsign;
+    router   = config.router;
+    tcpHost  = cfg.host ?? DEFAULT_HOST;
+    tcpPort  = cfg.port ?? DEFAULT_PORT;
+
+    // Cache a Strict-mode probe. We only need to know whether
+    // strict-mode is on; the router runs the full gatekeeper pass
+    // (filterInboundBridge) on every queued meshcore message, so we
+    // don't double-filter here.
+    const gk = config._gatekeeper;
+    strictHook = gk && typeof(gk.isEnabled) === "function"
+        ? function () { return gk.isEnabled() === true; }
+        : null;
 
     s = openTcp();
-    if (s) {
-        sendBootHandshake();
-    }
+    if (s) sendBootHandshake();
     timers.setInterval("meshcore_tcp_api.reconnect", RECONNECT_INTERVAL);
 };
 
@@ -498,16 +479,12 @@ function readSocket()
 export function recv()
 {
     // Drain any already-decoded messages first.
-    if (length(pendingRx) > 0) {
-        return shift(pendingRx);
-    }
+    if (length(pendingRx) > 0) return shift(pendingRx);
 
     // Reconnect path.
     if (!s && timers.tick("meshcore_tcp_api.reconnect")) {
         s = openTcp();
-        if (s) {
-            sendBootHandshake();
-        }
+        if (s) sendBootHandshake();
     }
     if (!s) return null;
 
@@ -516,27 +493,15 @@ export function recv()
 
     const frames = smartAccumulate(data);
     for (let i = 0; i < length(frames); i++) {
-        const msg = dispatchFrame(frames[i]);
-        if (!msg) continue;
-
-        // Hand decoded text messages to the gatekeeper for callsign /
-        // whitelist / annotation enforcement. The gatekeeper returns null
-        // on drop, or the (possibly rewritten) message on pass.
-        if (gatekeeper && typeof(gatekeeper.filterInboundBridge) === "function") {
-            const gated = gatekeeper.filterInboundBridge(msg);
-            if (!gated) continue;
-            stats.frames_decoded++;
-            push(pendingRx, gated);
-        }
-        else {
+        const f = frames[i];
+        const msg = decodeTextFrame(f.cmd, f.payload);
+        if (msg) {
             stats.frames_decoded++;
             push(pendingRx, msg);
         }
     }
 
-    if (length(pendingRx) > 0) {
-        return shift(pendingRx);
-    }
+    if (length(pendingRx) > 0) return shift(pendingRx);
     return null;
 };
 
@@ -550,25 +515,31 @@ export function send(msg)
 
 // ---------------------------------------------------------------------
 // Test/introspection hooks (used by tests/test_meshcore_tcp_api.uc).
-// These are intentionally side-door entry points so the buffer state
-// machine can be exercised without a real socket.
+// These are side-door entry points so the buffer state machine can be
+// exercised without a real socket.
 // ---------------------------------------------------------------------
 
 export function _test_inject(data, gatekeeperShim)
 {
     if (gatekeeperShim !== null && gatekeeperShim !== undefined) {
-        gatekeeper = gatekeeperShim;
+        strictHook = function () {
+            return gatekeeperShim.isEnabled() === true;
+        };
     }
     return smartAccumulate(data);
+};
+
+export function _test_decode(cmd, payload)
+{
+    return decodeTextFrame(cmd, payload);
 };
 
 export function _test_reset()
 {
     resetState();
-    pendingSkip = 0;
-    for (let k in stats) {
-        stats[k] = 0;
-    }
+    pendingRx = [];
+    msgSeq = 0;
+    for (let k in stats) stats[k] = 0;
 };
 
 export function _test_stats()
