@@ -8,16 +8,27 @@ import * as node from "node";
 import * as nodedb from "nodedb";
 import * as timers from "timers";
 
-const ADDRESS = "224.0.0.69";
-const PORT = 4403;
+const MULTICAST_ADDRESS = "224.0.0.69";
+const DEFAULT_PORT = 4403;
+const PORTAPI_MAGIC0 = 0x94;
+const PORTAPI_MAGIC1 = 0xc3;
+const PORTAPI_MAX_FRAME = 8192;
 
 const SAVE_INTERVAL = 19 * 60; // 19 minutes
+const RECONNECT_INTERVAL = 15;
 
 const BITFIELD_MQTT_OKAY = 1;
 const TRANSPORT_MECHANISM_MULTICAST_UDP = 6;
+const TRANSPORT_MECHANISM_TCP = 8;
 const MAX_TEXT_MESSAGE_LENGTH = 200;
 
 let s = null;
+let cfg = null;
+let transport = "udp-multicast";
+let tcpHost = null;
+let tcpPort = DEFAULT_PORT;
+let tcpbuf = "";
+const pendingRx = [];
 
 const portnum2Proto = {};
 const proto2Portnum = {};
@@ -38,6 +49,11 @@ export function registerProto(name, portnum, decode)
 };
 
 let sharedKeys = {};
+
+function log0(fmt, ...args)
+{
+    DEBUG0("meshtastic: " + fmt, ...args);
+}
 
 function getSharedKey(priv, pub)
 {
@@ -89,6 +105,109 @@ function merge(to, from)
     return to;
 }
 
+function closeSocket(reason)
+{
+    if (s) {
+        log0("disconnect %s\n", reason ?? "");
+        try {
+            s.close();
+        }
+        catch (_) {
+        }
+    }
+    s = null;
+    tcpbuf = "";
+}
+
+function openTcp()
+{
+    if (!tcpHost) {
+        log0("tcp host not configured; backend disabled\n");
+        return null;
+    }
+    try {
+        const ns = socket.create(socket.AF_INET, socket.SOCK_STREAM, 0);
+        ns.connect({ address: tcpHost, port: tcpPort });
+        log0("connected tcp-port-api %s:%d\n", tcpHost, tcpPort);
+        return ns;
+    }
+    catch (_) {
+        log0("tcp connect failed %s:%d: %s\n", tcpHost, tcpPort, socket.error());
+        return null;
+    }
+}
+
+function openUdpMulticast(address)
+{
+    const ns = socket.create(socket.AF_INET, socket.SOCK_DGRAM, 0);
+    ns.setopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1);
+    ns.bind({
+        port: DEFAULT_PORT
+    });
+    if (!address) {
+        ns.setopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, {
+            multiaddr: MULTICAST_ADDRESS
+        });
+    }
+    else {
+        ns.setopt(socket.IPPROTO_IP, socket.IP_MULTICAST_IF, {
+            address: address
+        });
+        ns.setopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, {
+            address: address,
+            multiaddr: MULTICAST_ADDRESS
+        });
+    }
+    ns.setopt(socket.IPPROTO_IP, socket.IP_MULTICAST_LOOP, 0);
+    ns.listen();
+    log0("listening udp multicast %s:%d\n", MULTICAST_ADDRESS, DEFAULT_PORT);
+    return ns;
+}
+
+function portApiFrame(payload)
+{
+    return chr(PORTAPI_MAGIC0) + chr(PORTAPI_MAGIC1) + chr((length(payload) >> 8) & 255) + chr(length(payload) & 255) + payload;
+}
+
+function extractPortApiFrames(data)
+{
+    const frames = [];
+    tcpbuf += data;
+
+    for (;;) {
+        let start = -1;
+        for (let i = 0; i + 1 < length(tcpbuf); i++) {
+            if (ord(tcpbuf, i) === PORTAPI_MAGIC0 && ord(tcpbuf, i + 1) === PORTAPI_MAGIC1) {
+                start = i;
+                break;
+            }
+        }
+        if (start < 0) {
+            if (length(tcpbuf) > 1) {
+                tcpbuf = substr(tcpbuf, -1);
+            }
+            return frames;
+        }
+        if (start > 0) {
+            tcpbuf = substr(tcpbuf, start);
+        }
+        if (length(tcpbuf) < 4) {
+            return frames;
+        }
+        const flen = (ord(tcpbuf, 2) << 8) + ord(tcpbuf, 3);
+        if (flen > PORTAPI_MAX_FRAME) {
+            log0("drop oversized Port-API frame len=%d\n", flen);
+            tcpbuf = substr(tcpbuf, 2);
+            continue;
+        }
+        if (length(tcpbuf) < flen + 4) {
+            return frames;
+        }
+        push(frames, substr(tcpbuf, 4, flen));
+        tcpbuf = substr(tcpbuf, flen + 4);
+    }
+}
+
 function decodePacketData(msg)
 {
     if (msg.decoded) {
@@ -115,12 +234,15 @@ function decodePacketData(msg)
     return null;
 }
 
-function decodePacket(pkt)
+function decodePacketObject(msg)
 {
-    const msg = protobuf.decode(protos, "packet", pkt);
+    if (!msg) {
+        return null;
+    }
     // Set the hop_limit to 1 to prevent this from being routed back out to meshtastic or meshcore
     msg.hop_limit = 1;
     msg.transport = "meshtastic";
+    msg.backend = transport === "tcp" ? "tcp-port-api" : "udp-multicast";
     msg.originating_callsign = callsign;
 
     if (gatekeeper?.isEnabled() && msg.encrypted) {
@@ -162,7 +284,25 @@ function decodePacket(pkt)
             }
         }
     }
+    log0("drop unsupported/encrypted packet from %s id=%s\n", msg.from, msg.id);
     return null;
+}
+
+function decodePacket(pkt)
+{
+    return decodePacketObject(protobuf.decode(protos, "packet", pkt));
+}
+
+function decodeFromRadio(payload)
+{
+    const fromradio = protobuf.decode(protos, "fromradio", payload);
+    if (fromradio?.packet) {
+        return decodePacketObject(fromradio.packet);
+    }
+
+    // Compatibility fallback for older UDP/multicast captures or test fixtures that
+    // pass a MeshPacket directly instead of a FromRadio envelope.
+    return decodePacket(payload);
 }
 
 function encodePacket(msg)
@@ -213,39 +353,37 @@ function encodePacket(msg)
     return null;
 }
 
+function encodeToRadio(pkt)
+{
+    const packet = protobuf.decode(protos, "packet", pkt);
+    if (!packet) {
+        return null;
+    }
+    return portApiFrame(protobuf.encode(protos, "toradio", { packet: packet }));
+}
+
 export function setup(config)
 {
     if (!config.meshtastic) {
         return;
     }
+    cfg = config.meshtastic;
     enabled = true;
 
     callsign = config.callsign;
     router = config.router;
     gatekeeper = config._gatekeeper;
 
-    const address = config.meshtastic.address;
-    s = socket.create(socket.AF_INET, socket.SOCK_DGRAM, 0);
-    s.setopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1);
-    s.bind({
-        port: PORT
-    });
-    if (!address) {
-        s.setopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, {
-            multiaddr: ADDRESS
-        });
+    transport = (cfg.transport ?? (cfg.host ? "tcp" : "udp-multicast"));
+    if (transport === "tcp") {
+        tcpHost = cfg.host;
+        tcpPort = cfg.port ?? DEFAULT_PORT;
+        s = openTcp();
+        timers.setInterval("meshtastic.reconnect", RECONNECT_INTERVAL);
     }
     else {
-        s.setopt(socket.IPPROTO_IP, socket.IP_MULTICAST_IF, {
-            address: address
-        });
-        s.setopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, {
-            address: address,
-            multiaddr: ADDRESS
-        });
+        s = openUdpMulticast(cfg.address);
     }
-    s.setopt(socket.IPPROTO_IP, socket.IP_MULTICAST_LOOP, 0);
-    s.listen();
 
     loadSharedKeys();
 
@@ -255,6 +393,7 @@ export function setup(config)
 export function shutdown()
 {
     saveSharedKeys();
+    closeSocket("shutdown");
 };
 
 export function handle()
@@ -264,6 +403,21 @@ export function handle()
 
 function makeNativeMsg(data)
 {
+    if (transport === "tcp") {
+        const frames = extractPortApiFrames(data);
+        for (let i = 0; i < length(frames); i++) {
+            const msg = decodeFromRadio(frames[i]);
+            if (msg) {
+                push(pendingRx, msg);
+            }
+        }
+        if (length(pendingRx) > 0) {
+            const msg = pendingRx[0];
+            shift(pendingRx);
+            return msg;
+        }
+        return null;
+    }
     return decodePacket(data);
 }
 
@@ -277,6 +431,7 @@ function makeMeshtasticMsg(msg)
         }
         mchannel = chan.meshtastichash;
     }
+    const transportMechanism = transport === "tcp" ? TRANSPORT_MECHANISM_TCP : TRANSPORT_MECHANISM_MULTICAST_UDP;
     if (msg.data.text_message && length(msg.data.text_message) > MAX_TEXT_MESSAGE_LENGTH) {
         const words = split(msg.data.text_message, " ");
         let line = words[0];
@@ -308,7 +463,7 @@ function makeMeshtasticMsg(msg)
                 rx_snr: 0,
                 rx_rssi: 0,
                 relay_node: msg.from & 255,
-                transport_mechanism: TRANSPORT_MECHANISM_MULTICAST_UDP,
+                transport_mechanism: transportMechanism,
                 hop_start: msg.hop_limit,
                 channel: mchannel,
                 data:{
@@ -325,7 +480,7 @@ function makeMeshtasticMsg(msg)
         rx_snr: 0,
         rx_rssi: 0,
         relay_node: msg.from & 255,
-        transport_mechanism: TRANSPORT_MECHANISM_MULTICAST_UDP,
+        transport_mechanism: transportMechanism,
         hop_start: msg.hop_limit,
         channel: mchannel,
         data: merge({
@@ -334,10 +489,56 @@ function makeMeshtasticMsg(msg)
     }, msg)) ];
 }
 
+function readSocket()
+{
+    if (!s) {
+        return null;
+    }
+    try {
+        if (transport === "tcp") {
+            return s.recv(2048);
+        }
+        return s.recvmsg(512).data;
+    }
+    catch (_) {
+        closeSocket(socket.error());
+        return null;
+    }
+}
+
 export function recv()
 {
-    return makeNativeMsg(s.recvmsg(512).data);
+    if (length(pendingRx) > 0) {
+        const msg = pendingRx[0];
+        shift(pendingRx);
+        return msg;
+    }
+    const data = readSocket();
+    if (!data) {
+        return null;
+    }
+    return makeNativeMsg(data);
 };
+
+function writeSocket(data)
+{
+    if (!s || !data) {
+        return false;
+    }
+    try {
+        if (transport === "tcp") {
+            return s.send(data) !== null;
+        }
+        return s.send(data, 0, {
+            address: MULTICAST_ADDRESS,
+            port: DEFAULT_PORT
+        }) !== null;
+    }
+    catch (_) {
+        closeSocket(socket.error());
+        return false;
+    }
+}
 
 export function send(msg)
 {
@@ -345,15 +546,19 @@ export function send(msg)
         const pkts = makeMeshtasticMsg(msg);
         if (pkts && pkts[0]) {
             for (let i = 0; i < length(pkts); i++) {
-                const r = s.send(pkts[i], 0, {
-                    address: ADDRESS,
-                    port: PORT
-                });
-                if (r == null) {
-                    DEBUG0("meshtastic:send error: %s\n", socket.error());
+                const data = transport === "tcp" ? encodeToRadio(pkts[i]) : pkts[i];
+                const r = writeSocket(data);
+                if (!r) {
+                    log0("send error: %s\n", socket.error());
+                }
+                else {
+                    log0("send ok id=%s backend=%s\n", msg.id, transport);
                 }
             }
         }
+    }
+    else if (transport === "tcp") {
+        log0("send drop: tcp disconnected\n");
     }
 };
 
@@ -361,6 +566,9 @@ export function tick()
 {
      if (timers.tick("meshtastic")) {
         saveSharedKeys();
+    }
+    if (transport === "tcp" && !s && timers.tick("meshtastic.reconnect")) {
+        s = openTcp();
     }
 };
 
