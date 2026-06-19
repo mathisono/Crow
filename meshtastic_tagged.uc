@@ -1,3 +1,13 @@
+// Thin wrapper around the production Meshtastic UDP backend that prepends
+// a gateway tag to outbound LoRa text messages:
+//
+//     KJ6DZB@MTGW> Hello Meshtastic
+//
+// Activation: swap router.uc's Meshtastic import from
+//     import * as meshtastic from "meshtastic";
+// to:
+//     import * as meshtastic from "meshtastic_tagged";
+
 import * as meshtastic from "meshtastic";
 import * as lora_text from "lora_outbound_text";
 
@@ -5,6 +15,9 @@ const DEFAULT_MAX_PAYLOAD = 200;
 
 let gatewayIndex = 0;
 let maxPayload = DEFAULT_MAX_PAYLOAD;
+
+// Snapshot of meshtastic.enabled after setup(); router.uc reads it.
+export let enabled = false;
 
 function cloneForTaggedText(msg, text)
 {
@@ -39,6 +52,7 @@ export function setup(config)
     gatewayIndex = cfg.gateway_index ?? 0;
     maxPayload = cfg.gateway_tag_max_payload ?? cfg.max_text_payload ?? DEFAULT_MAX_PAYLOAD;
     meshtastic.setup(config);
+    enabled = meshtastic.enabled;
 };
 
 export function shutdown()
