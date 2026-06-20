@@ -15,17 +15,18 @@
 //   2. tick(): Every 5-10 minutes, re-query and diff against cached state
 //   3. On change: Alert user, update channel, call channel.uc auto-import
 //
-// Status: READY FOR IMPLEMENTATION (Phase 2)
-//          All API details verified by Mathison (2026-06-19)
+// Status: PHASE 2 IMPLEMENTATION (API details confirmed by Mathison 2026-06-19)
+// API Spec: CMD_GET_CHANNEL = 0x1F, Response = PACKET_CHANNEL_INFO (0x12)
 // =====================================================================
 
 import * as channel from "channel";
 import * as struct from "struct";
 
-// TODO: Confirm exact command ID for CMD_GET_CHANNEL from MeshCore spec
-const CMD_GET_CHANNEL     = 0x0A;  // Query group info from radio (ASSUMED)
-const COMPANION_MAGIC     = 0x3E;
-const HEADER_BYTES        = 4;
+// API Details (Confirmed by Mathison 2026-06-19 23:18 PDT)
+const CMD_GET_CHANNEL        = 0x1F;  // Query channel info from radio
+const PACKET_CHANNEL_INFO    = 0x12;  // Response packet type
+const COMPANION_MAGIC        = 0x3E;  // Frame magic byte
+const HEADER_BYTES           = 4;     // Magic(1) + Cmd(1) + Len(2)
 
 // Discovery state
 let enabled              = false;
@@ -60,7 +61,8 @@ function log1(fmt, ...args)
 // Group Query — Iterative slot scanning
 // =====================================================================
 //
-// Query all 8 memory slots on the radio.
+// Query all 8 memory slots on the radio using CMD_GET_CHANNEL (0x1F).
+// Each query returns a PACKET_CHANNEL_INFO (0x12) response.
 // 
 // Returns array of groups:
 //   [
@@ -69,41 +71,66 @@ function log1(fmt, ...args)
 //     ...
 //   ]
 //
-// BLOCKED on MeshCore TCP API details:
-//   - Exact command ID for CMD_GET_CHANNEL
-//   - Response structure (name location, key location, etc.)
-//   - How to detect empty slots
+// API Spec (Mathison, 2026-06-19):
+//   Request:  [0x1F] [slot_index] where slot_index = 0-7
+//   Response: [0x12] [channel_info...]
 //
-// For now: STUB implementation with TODO markers
+// IMPLEMENTATION IN PROGRESS:
+//   - Command ID: 0x1F ✅ (confirmed)
+//   - Response type: 0x12 ✅ (confirmed)
+//   - Response structure: TO BE VERIFIED with real device
+//
 // =====================================================================
 
 export function queryDeviceGroups()
 {
     const groups = [];
     
-    // TODO: Get reference to meshcore_tcp_api module for command sending
-    // For now, this is a stub that returns empty array
-    
+    // PHASE 2: Iterate through 8 memory slots
     for (let slot = 0; slot < 8; slot++) {
-        // TODO: Send CMD_GET_CHANNEL to radio for this slot
-        // TODO: Parse response to extract: name, AES key, is_configured, etc.
-        // TODO: If is_configured = false, skip this slot
+        // Build request: CMD_GET_CHANNEL (0x1F) with slot index (0-7)
+        const request_payload = sprintf("%c", slot);
         
-        // Stub code (will be replaced):
-        // const response = meshcore_tcp_api.sendCommand(CMD_GET_CHANNEL, [slot]);
-        // if (!response || !response.is_configured) continue;
-        //
+        // TODO: Send command via meshcore_tcp_api
+        // const response = meshcore_tcp_api.sendCommand(CMD_GET_CHANNEL, request_payload);
+        
+        // TODO: Verify response is PACKET_CHANNEL_INFO (0x12)
+        // if (!response || response.cmd !== PACKET_CHANNEL_INFO) {
+        //     log1("slot %d: query failed or wrong response\\n", slot);
+        //     continue;
+        // }
+        
+        // TODO: Parse response payload to extract channel configuration
+        // Response structure (to be determined from real device):
+        //   - is_configured flag (indicates if slot is programmed)
+        //   - Channel name (string)
+        //   - AES key (16 or 32 bytes)
+        //   - Other metadata (rx_only, tx_power, etc.)
+        
+        // Stub: Skip empty slots for now
+        // if (!response.is_configured) {
+        //     log1("slot %d: empty\\n", slot);
+        //     continue;
+        // }
+        
+        // Build group object from response
         // const group = {
         //     slot: slot,
-        //     name: response.name,
-        //     key: response.aes_key,     // [bytes]
+        //     name: response.channel_name,
+        //     key: response.aes_key,        // [bytes]
         //     key_size: response.key_length,
-        //     index: response.channel_index,
-        //     is_programmed: response.is_configured
+        //     is_programmed: response.is_configured,
+        //     // ... other fields from response
         // };
-        // push(groups, group);
+        // 
+        // if (group.name && group.key) {
+        //     push(groups, group);
+        //     log1("slot %d: %s (%d-byte key)\\n",
+        //          slot, group.name, group.key_size);
+        // }
     }
     
+    log0("discovered %d groups from radio\\n", length(groups));
     return groups;
 }
 
@@ -381,3 +408,33 @@ export function getSyncStatus()
         stats: stats
     };
 }
+
+// =====================================================================
+// PHASE 2 IMPLEMENTATION STATUS
+// =====================================================================
+//
+// ✅ DONE:
+//   - Skeleton with all functions (stubs)
+//   - Logging framework
+//   - Change detection (new/deleted/key rotation)
+//   - Periodic sync (5-min interval)
+//   - API constants (0x1F, 0x12)
+//   - Documentation of response structure
+//
+// TODO (High Priority):
+//   1. Implement actual TCP command sending in queryDeviceGroups()
+//   2. Parse PACKET_CHANNEL_INFO (0x12) response
+//   3. Extract: channel_name, aes_key, is_configured, etc.
+//   4. Test with real device to verify response structure
+//   5. Implement channel.addMessageNameKey() if not exists
+//
+// TODO (Medium Priority):
+//   - channel.uc: Mark deprecated channels
+//   - User alert system integration
+//   - channel.uc: Rename channels on discovery
+//
+// NEXT STEP:
+//   Contact Mathison with sample PACKET_CHANNEL_INFO (0x12) response
+//   to verify exact field locations and data types.
+//
+// =====================================================================
