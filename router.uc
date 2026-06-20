@@ -16,7 +16,7 @@ const apps = [];
 const q = [];
 let gatekeeper = null;
 
-export function setGatekeeper(gk)
+function setGatekeeper(gk)
 {
     gatekeeper = gk;
 };
@@ -25,7 +25,7 @@ export function setGatekeeper(gk)
 // Before Phase 2 implements auto-discovery, this allows manual setup
 // of group slot -> channel mappings for testing.
 // Usage: router.registerGroupChannel(0, group_channel_object)
-export function registerGroupChannel(slot, channelObj)
+function registerGroupChannel(slot, channelObj)
 {
     if (slot === null || slot === undefined || slot < 0 || slot > 7) {
         return false;
@@ -38,12 +38,12 @@ export function registerGroupChannel(slot, channelObj)
     return result;
 };
 
-export function registerApp(app)
+function registerApp(app)
 {
     push(apps, app);
 };
 
-export function process()
+function process()
 {
     while (length(q) > 0) {
         const msg = shift(q);
@@ -153,7 +153,7 @@ export function process()
     }
 };
 
-export function queueId(id)
+function queueId(id)
 {
     // Remember messages we queued for a little while and don't queue them again.
     if (index(recent, id) === -1) {
@@ -216,7 +216,7 @@ function enforceChannelAccess(msg)
     return result;  // null if access denied, msg if allowed
 };
 
-export function queue(msg)
+function queue(msg)
 {
     if (!msg) {
         return;
@@ -249,7 +249,7 @@ export function queue(msg)
 };
 
 
-export function tick()
+function tick()
 {
     for (let i = 0; i < length(apps); i++) {
         apps[i].tick();
