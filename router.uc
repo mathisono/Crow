@@ -1,5 +1,5 @@
-import * as meshtastic from "meshtastic";
-import * as meshcore from "meshcore";
+import * as meshtastic from "meshtastic_backend";
+import * as meshcore from "meshcore_backend";
 import * as meship from "meship";
 import * as aprs from "aprs";
 import * as node from "node";
@@ -360,4 +360,10 @@ export function tick()
             }
         }
     }
+
+    meship.tick();
+    meshtastic.tick();
+    meshcore.tick();
+    aprs.tick();
+    timers.process();
 };
