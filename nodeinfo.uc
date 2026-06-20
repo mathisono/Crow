@@ -1,11 +1,11 @@
-import * as router from "router";
-import * as message from "message";
-import * as node from "node";
-import * as nodedb from "nodedb";
-import * as timers from "timers";
-import * as channel from "channel";
-import * as textmessage from "textmessage";
-import * as version from "version";
+const router = require("router");
+const message = require("message");
+const node = require("node");
+const nodedb = require("nodedb");
+const timers = require("timers");
+const channel = require("channel");
+const textmessage = require("textmessage");
+const version = require("version");
 
 const HW_PRIVATE = 255;
 const HW_NATIVE = 254;

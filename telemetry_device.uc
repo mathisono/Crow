@@ -1,10 +1,10 @@
-import * as router from "router";
-import * as message from "message";
-import * as node from "node";
-import * as timers from "timers";
-import * as nodedb from "nodedb";
-import * as channel from "channel";
-import * as telemetry from "telemetry";
+const router = require("router");
+const message = require("message");
+const node = require("node");
+const timers = require("timers");
+const nodedb = require("nodedb");
+const channel = require("channel");
+const telemetry = require("telemetry");
 
 const GRID_POWER = 101;
 let startTime = 0;

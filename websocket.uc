@@ -1,7 +1,7 @@
-import * as socket from "socket";
-import * as struct from "struct";
-import * as timers from "timers";
-import * as crypto from "crypto.crypto";
+const socket = require("socket");
+const struct = require("struct");
+const timers = require("timers");
+const crypto = require("crypto.crypto");
 
 const PORT = 4404;
 

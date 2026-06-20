@@ -19,8 +19,8 @@
 // Only the outbound text path is wrapped.
 // =====================================================================
 
-import * as meshcore from "meshcore";
-import * as lora_text from "lora_outbound_text";
+const meshcore = require("meshcore");
+const lora_text = require("lora_outbound_text");
 
 const DEFAULT_MAX_PAYLOAD = 150;   // MeshCore MAX_TEXT_MESSAGE_LENGTH
 

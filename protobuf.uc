@@ -1,5 +1,5 @@
-import * as struct from "struct";
-import * as math from "math";
+const struct = require("struct");
+const math = require("math");
 
 export function registerProto(protos, name, proto)
 {

@@ -1,15 +1,15 @@
-import * as math from "math";
-import * as websocket from "websocket";
-import * as timers from "timers";
-import * as node from "node";
-import * as nodedb from "nodedb";
-import * as channel from "channel";
-import * as textmessage from "textmessage";
-import * as textstore from "textstore";
-import * as router from "router";
-import * as winlink from "winlink";
-import * as commands from "commands";
-import * as aprs from "aprs";
+const math = require("math");
+const websocket = require("websocket");
+const timers = require("timers");
+const node = require("node");
+const nodedb = require("nodedb");
+const channel = require("channel");
+const textmessage = require("textmessage");
+const textstore = require("textstore");
+const router = require("router");
+const winlink = require("winlink");
+const commands = require("commands");
+const aprs = require("aprs");
 
 const MAXNODES = 1000;
 const MAXNODESSAFARI = 400;

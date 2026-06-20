@@ -1,10 +1,10 @@
-import * as math from "math";
-import * as channel from "channel";
-import * as router from "router";
-import * as message from "message";
-import * as textmessage from "textmessage";
-import * as timers from "timers";
-import * as node from "node";
+const math = require("math");
+const channel = require("channel");
+const router = require("router");
+const message = require("message");
+const textmessage = require("textmessage");
+const timers = require("timers");
+const node = require("node");
 
 let enabled = false;
 

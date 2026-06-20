@@ -8,8 +8,8 @@
 // to:
 //     import * as meshtastic from "meshtastic_tagged";
 
-import * as meshtastic from "meshtastic";
-import * as lora_text from "lora_outbound_text";
+const meshtastic = require("meshtastic");
+const lora_text = require("lora_outbound_text");
 
 const DEFAULT_MAX_PAYLOAD = 200;
 

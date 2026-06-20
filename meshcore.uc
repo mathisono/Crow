@@ -1,10 +1,10 @@
-import * as socket from "socket";
-import * as struct from "struct";
-import * as channel from "channel";
-import * as node from "node";
-import * as nodedb from "nodedb";
-import * as crypto from "crypto.crypto";
-import * as timers from "timers";
+const socket = require("socket");
+const struct = require("struct");
+const channel = require("channel");
+const node = require("node");
+const nodedb = require("nodedb");
+const crypto = require("crypto.crypto");
+const timers = require("timers");
 
 // =====
 // NOTES

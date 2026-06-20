@@ -1,6 +1,6 @@
-import * as math from "math";
-import * as node from "node";
-import * as channel from "channel";
+const math = require("math");
+const node = require("node");
+const channel = require("channel");
 
 const DEFAULT_PRIORITY = 64;
 const ACK_PRIORITY = 120;

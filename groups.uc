@@ -1,7 +1,7 @@
-import * as struct from "struct";
-import * as channel from "channel";
-import * as textmessage from "textmessage";
-import * as crypto from "crypto.crypto";
+const struct = require("struct");
+const channel = require("channel");
+const textmessage = require("textmessage");
+const crypto = require("crypto.crypto");
 
 let groups = [];
 let recent = {};

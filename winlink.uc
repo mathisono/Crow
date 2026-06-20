@@ -1,4 +1,4 @@
-import * as node from "node";
+const node = require("node");
 
 const WINLINK_FORMS_DIR = "winlink/forms";
 const menuitems = [];

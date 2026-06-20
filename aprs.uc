@@ -1,9 +1,9 @@
-import * as socket from "socket";
-import * as struct from "struct";
-import * as node from "node";
-import * as message from "message";
-import * as channel from "channel";
-import * as textmessage from "textmessage";
+const socket = require("socket");
+const struct = require("struct");
+const node = require("node");
+const message = require("message");
+const channel = require("channel");
+const textmessage = require("textmessage");
 
 const FEND  = 0xc0;
 const FESC  = 0xdb;

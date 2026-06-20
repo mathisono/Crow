@@ -1,6 +1,6 @@
 #!/usr/bin/ucode
 
-import * as config from "./config.uc";
+const config = require("./config.uc");
 
 config.setup();
 for (;;) {

@@ -1,5 +1,6 @@
-import * as udp from "meshcore";
-import * as api from "meshcore_tcp_api";
+// AREDN ucode: use require() instead of ES6 import for compatibility
+const udp = require("meshcore");
+const api = require("meshcore_tcp_api");
 
 let active = null;
 let activeName = null;

@@ -1,10 +1,10 @@
-import * as timers from "timers";
-import * as router from "router";
-import * as message from "message";
-import * as node from "node";
-import * as nodedb from "nodedb";
-import * as channel from "channel";
-import * as telemetry from "telemetry";
+const timers = require("timers");
+const router = require("router");
+const message = require("message");
+const node = require("node");
+const nodedb = require("nodedb");
+const channel = require("channel");
+const telemetry = require("telemetry");
 
 let weewxurl;
 
