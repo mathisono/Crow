@@ -19,6 +19,8 @@ mkdir -p $ROOT/data/www/cgi-bin/apps/crow \
 cp $SRC/platforms/aredn/firewall $ROOT/data/etc/local/mesh-firewall/21-crow
 
 cp $SRC/*.uc $ROOT/data/usr/local/crow/
+# Remove raven.uc (APRS app, not part of Crow LoRa router)
+rm -f $ROOT/data/usr/local/crow/raven.uc
 cp $SRC/crypto/*.uc $ROOT/data/usr/local/crow/crypto/
 cp $SRC/platforms/aredn/*.uc $ROOT/data/usr/local/crow/platforms/aredn/
 cp $SRC/platforms/aredn/raven.conf $ROOT/data/usr/local/crow/crow.conf
@@ -32,7 +34,7 @@ cp $SRC/ui/crow.png $ROOT/data/www/apps/crow/ix.png
 cp $SRC/platforms/aredn/admin.sh $ROOT/data/www/cgi-bin/apps/crow/admin
 cp $SRC/platforms/aredn/image.uc $ROOT/data/www/cgi-bin/apps/crow/image
 
-cp $SRC/platforms/aredn/raven.init $ROOT/data/etc/init.d/crow
+cp $SRC/platforms/aredn/crow.init $ROOT/data/etc/init.d/crow
 
 cp $SRC/platforms/aredn/upgrade.conf $ROOT/data/etc/arednsysupgrade.d/crow.conf
 
