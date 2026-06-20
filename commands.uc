@@ -7,8 +7,8 @@ const node = require("node");
 const crypto = require("crypto.crypto");
 const groups = require("groups");
 const aprs = require("aprs");
-import * as meshcore_discovery from "meshcore_tcp_discovery";  // NEW: for /cmd discover
-import * as gatekeeper from "gatekeeper";  // NEW: for channel access control
+const meshcore_discovery = require("meshcore_tcp_discovery");  // NEW: for /cmd discover
+const gatekeeper = require("gatekeeper");  // NEW: for channel access control
 
 function fmtBytes(n)
 {
