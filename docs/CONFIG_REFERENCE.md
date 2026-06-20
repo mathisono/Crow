@@ -1,6 +1,6 @@
 # Configuration Reference
 
-**Version:** 0.0.1+  
+**Version:** 0.0.2  
 **Updated:** 2026-06-20  
 **Audience:** Users wanting to understand all config options
 

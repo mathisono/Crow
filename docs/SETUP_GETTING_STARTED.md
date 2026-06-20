@@ -1,6 +1,6 @@
 # Crow: Getting Started Guide
 
-**Version:** 0.0.1+  
+**Version:** 0.0.2  
 **Updated:** 2026-06-20  
 **Audience:** New users, Raven migration, operators new to mesh protocols
 
@@ -24,7 +24,7 @@ Unlike Raven (which focuses on cross-platform APRS bridging), Crow is **purpose-
 Download the latest IPK from the Crow GitHub releases, or ask your mesh admin for the package:
 
 ```bash
-opkg install crow_0.0.1-r*.ipk
+opkg install crow_0.0.2-r*.ipk
 ```
 
 Crow should start automatically. Check status:

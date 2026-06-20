@@ -1,6 +1,6 @@
 # Meshtastic TCP Migration Guide
 
-**Version:** 0.0.1+  
+**Version:** 0.0.2  
 **Updated:** 2026-06-20  
 **Audience:** Users moving from UDP multicast to TCP Port-API
 

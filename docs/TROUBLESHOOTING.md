@@ -1,6 +1,6 @@
 # Troubleshooting Guide
 
-**Version:** 0.0.1+  
+**Version:** 0.0.2  
 **Updated:** 2026-06-20  
 **Audience:** Users experiencing issues with Crow
 

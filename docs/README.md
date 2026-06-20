@@ -146,7 +146,7 @@ Covers common issues:
 ### Installation
 
 ```bash
-opkg install crow_0.0.1-r*.ipk
+opkg install crow_0.0.2-r*.ipk
 /etc/init.d/crow status
 ```
 
@@ -362,9 +362,9 @@ meshtastic_backend: selected tcp-port-api backend
 
 ## Version Information
 
-**Crow Version:** 0.0.1+  
+**Crow Version:** 0.0.2  
 **Last Updated:** 2026-06-20  
-**Documentation:** 100% coverage of 0.0.1 features
+**Documentation:** 100% coverage of 0.0.2 features
 
 Planned for future versions:
 - ⏳ Mute channels

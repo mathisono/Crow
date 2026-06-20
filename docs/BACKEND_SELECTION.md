@@ -1,6 +1,6 @@
 # Backend Selection Guide: UDP vs TCP
 
-**Version:** 0.0.1+  
+**Version:** 0.0.2  
 **Updated:** 2026-06-20  
 **Audience:** Users wanting to understand or switch between UDP and TCP backends
 
