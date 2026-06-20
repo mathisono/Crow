@@ -20,6 +20,7 @@ global.channelByNameKey = {};
 global.channelsByMeshtasticHash = {};
 global.channelsByMeshcoreHash = {};
 global.localChannelByNameKey = {};
+global.channelsByMeshcoreSlot = {};  // NEW: MeshCore group slot (0-7) -> channel lookup
 let meshtasticChannel;
 
 function expandSymmetricKey(key)
@@ -167,6 +168,31 @@ export function getChannelsByMeshtasticHash(hash)
 export function getChannelsByMeshcoreHash(hash)
 {
     return channelsByMeshcoreHash[hash];
+};
+
+// NEW (Phase 1): Get channel by MeshCore group memory slot (0-7)
+// Used for routing group messages (CHANNEL_MSG_RECV, frame 0x08)
+export function getChannelByMeshcoreSlot(slot)
+{
+    if (slot === null || slot === undefined || slot < 0 || slot > 7) {
+        return null;
+    }
+    return channelsByMeshcoreSlot[slot];
+};
+
+// NEW (Phase 2): Register a channel for a MeshCore group slot
+// Called during auto-discovery to map slot->channel
+export function setMeshcoreSlotChannel(slot, channel)
+{
+    if (slot === null || slot === undefined || slot < 0 || slot > 7) {
+        return false;
+    }
+    if (!channel || !channel.namekey) {
+        return false;
+    }
+    channelsByMeshcoreSlot[slot] = channel;
+    DEBUG1("registered meshcore slot %d -> %s\n", slot, channel.namekey);
+    return true;
 };
 
 export function getLocalChannelByNameKey(namekey)

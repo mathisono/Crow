@@ -131,6 +131,7 @@ export function parseJoinArgs(args)
     }
 
     let backendName = null;
+    let keyDrop = null;
     const mems = [];
     let msgStart = -1;
 
@@ -140,6 +141,12 @@ export function parseJoinArgs(args)
         const bm = match(tok, /^backend=(.+)$/i);
         if (bm) {
             backendName = bm[1];
+            continue;
+        }
+        // NEW: key=PASSPHRASE (key drop)
+        const km = match(tok, /^key=(.+)$/i);
+        if (km) {
+            keyDrop = km[1];
             continue;
         }
         // Callsign: 1-6 alphanumeric with at least one digit, optional -SSID
@@ -169,6 +176,7 @@ export function parseJoinArgs(args)
         name: name,
         arednOnly: arednOnly,
         backendName: backendName,
+        keyDrop: keyDrop,
         members: mems,
         messageText: messageText
     };
@@ -179,14 +187,17 @@ export function parseJoinArgs(args)
 // arednOnly=true → %Name og== (AREDN-only, never bridged)
 // arednOnly=false → #Name <sha256key> (bridges to Meshtastic+MeshCore+AREDN)
 
-export function createGroupChannel(name, arednOnly, backendName)
+export function createGroupChannel(name, arednOnly, backendName, symmetricKey)
 {
     let chanName = name;
     let key;
 
-    if (arednOnly || ord(name, 0) === 37) {
+    if (symmetricKey) {
+        // Key drop: use provided key (already base64-encoded)
+        key = symmetricKey;
+    }
+    else if (arednOnly || ord(name, 0) === 37) {
         // AREDN-only: use og== key (unencrypted)
-        // Keep the user's original name — the og== key is what marks it AREDN-only
         key = "og==";
     }
     else {

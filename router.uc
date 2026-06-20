@@ -20,6 +20,23 @@ export function setGatekeeper(gk)
     gatekeeper = gk;
 };
 
+// NEW (Phase 1): Register temporary group channel for testing
+// Before Phase 2 implements auto-discovery, this allows manual setup
+// of group slot -> channel mappings for testing.
+// Usage: router.registerGroupChannel(0, group_channel_object)
+export function registerGroupChannel(slot, channelObj)
+{
+    if (slot === null || slot === undefined || slot < 0 || slot > 7) {
+        return false;
+    }
+    if (!channelObj || !channelObj.namekey) {
+        return false;
+    }
+    const result = channel.setMeshcoreSlotChannel(slot, channelObj);
+    DEBUG0("router: registered group slot %d -> %s\n", slot, channelObj.namekey);
+    return result;
+};
+
 export function registerApp(app)
 {
     push(apps, app);
@@ -148,10 +165,74 @@ export function queueId(id)
     return false;
 };
 
+// NEW (Phase 1): Resolve group message channel by slot index
+// Group messages from MeshCore TCP API have group_slot field (0-7)
+// which identifies the memory slot. Map this to a Crow channel.
+function resolveGroupChannel(msg)
+{
+    if (!msg.metadata?.is_group_message) {
+        return msg;  // Not a group message
+    }
+    
+    const slot = msg.group_slot;
+    if (slot === null || slot === undefined) {
+        DEBUG0("router: group message missing group_slot, dropping\n");
+        return null;
+    }
+    
+    // Look up which channel is mapped to this slot
+    const groupChannel = channel.getChannelByMeshcoreSlot(slot);
+    
+    if (!groupChannel) {
+        DEBUG0("router: group message slot %d not mapped to any channel, dropping\n", slot);
+        // TODO (Phase 2): Could queue for later once discovery runs
+        return null;
+    }
+    
+    // Set the channel for routing
+    msg.namekey = groupChannel.namekey;
+    msg.group_name = groupChannel.name;
+    
+    DEBUG1("router: routed group message (slot %d) to channel %s\n", 
+           slot, groupChannel.namekey);
+    return msg;
+};
+
+// NEW (Phase 4): Enforce channel-level access control
+// Verify sender has valid callsign and meets per-channel ACLs
+function enforceChannelAccess(msg)
+{
+    if (!gatekeeper || !gatekeeper.isEnabled()) {
+        return msg;  // Gatekeeper not enabled
+    }
+    
+    if (!msg || !msg.namekey) {
+        return msg;  // No channel specified
+    }
+    
+    // Call gatekeeper's channel access enforcement
+    const result = gatekeeper.enforceChannelAccess(msg, msg.namekey, global.config);
+    return result;  // null if access denied, msg if allowed
+};
+
 export function queue(msg)
 {
     if (!msg) {
         return;
+    }
+
+    // NEW (Phase 1): Resolve group message channel
+    if (msg.metadata?.is_group_message) {
+        msg = resolveGroupChannel(msg);
+        if (!msg) {
+            return;  // Group message couldn't be routed
+        }
+    }
+
+    // NEW (Phase 4): Enforce channel-level access control
+    msg = enforceChannelAccess(msg);
+    if (!msg) {
+        return;  // Access denied by per-channel ACL
     }
 
     if (gatekeeper?.isEnabled() && (msg.transport === "meshtastic" || msg.transport === "meshcore")) {

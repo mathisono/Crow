@@ -64,13 +64,17 @@ const SMART_MAX_PAYLOAD        = 256;
 const RESYNC_BUFFER_CAP        = 4096;
 
 // Async event command IDs we actually emit Crow messages for.
-const CMD_TXT_MSG              = 0x81;   // direct/private cleartext text msg
-const CMD_GRP_TXT              = 0x82;   // group/channel cleartext text msg
+// CORRECTED (per Mathison): Frame 0x07 is direct, 0x08 is group
+const CMD_DIRECT_MSG_RECV      = 0x07;   // direct/private cleartext text msg
+const CMD_CHANNEL_MSG_RECV     = 0x08;   // group/channel cleartext text msg
 
 // Outgoing command IDs (host -> radio). Sent once at connect, never
 // inspected on return.
 const CMD_HELLO                = 0x01;
 const CMD_SUBSCRIBE_EVENTS     = 0x02;
+
+// Event codes that are NOT message frames (to be explicitly skipped)
+const PUSH_CODE_SEND_CONFIRMED = 0x82;   // Ack/confirmation (NOT group messages!)
 
 // Encrypted / non-compliant command IDs that are always early-dropped
 // when Strict Gatekeeper is enabled, regardless of payload contents.
@@ -208,15 +212,18 @@ function openTcp()
 }
 
 // ---------------------------------------------------------------------
-// MeshMonitor-style boot handshake — fire-and-forget.
+// MeshCore boot handshake — fire-and-forget.
 //
-// On connect, send:
-//   [ MAGIC ][ CMD_HELLO         ][ len=0 ]
-//   [ MAGIC ][ CMD_SUBSCRIBE_EVT ][ len=0 ]
+// CORRECTED (per Mathison): Auto-push model — no subscription mask needed.
+// The radio autonomously pushes direct (0x07) and group (0x08) frames
+// for all programmed groups. No SUBSCRIBE_EVENTS needed.
 //
-// The radio then autonomously pushes TXT_MSG / GRP_TXT frames over the
-// socket. The HELLO response (CMD_HELLO_RESP) is consumed by the
-// unknown-cmd gate — we don't need to validate it for routing.
+// Send only:
+//   [ MAGIC ][ CMD_HELLO ][ len=0 ]
+//
+// The HELLO response (if any) is consumed by the unknown-cmd gate —
+// we don't need to validate it for routing. Groups must be programmed
+// into the radio's memory slots (0-7) via CMD_SET_CHANNEL.
 // ---------------------------------------------------------------------
 
 function buildFrame(cmd, payload)
@@ -230,8 +237,9 @@ function sendBootHandshake()
     if (!s) return;
     try {
         s.send(buildFrame(CMD_HELLO, ""));
-        s.send(buildFrame(CMD_SUBSCRIBE_EVENTS, ""));
-        log1("handshake sent (HELLO + SUBSCRIBE_EVENTS)\n");
+        // CORRECTED: No SUBSCRIBE_EVENTS needed (auto-push model)
+        log1("handshake sent (HELLO)\n");
+        log1("  Radio will auto-push: 0x07=Direct msg, 0x08=Group msg\n");
     }
     catch (_) {
         closeSocket("handshake send failed: " + socket.error());
@@ -325,11 +333,11 @@ function smartAccumulate(data)
             continue;
         }
 
-        // 3c. Anything outside { TXT_MSG, GRP_TXT } is dropped without
-        //     decode. This catches HELLO_RESP, ADVERT, unencrypted DMs
-        //     of unknown shape, vendor extensions, and (with strict OFF)
+        // 3c. Anything outside { DIRECT_MSG_RECV, CHANNEL_MSG_RECV } is dropped without
+        //     decode. This catches HELLO_RESP, ADVERT, SEND_CONFIRMED (0x82),
+        //     unencrypted DMs of unknown shape, vendor extensions, and (with strict OFF)
         //     the encrypted commands too.
-        if (cmd !== CMD_TXT_MSG && cmd !== CMD_GRP_TXT) {
+        if (cmd !== CMD_DIRECT_MSG_RECV && cmd !== CMD_CHANNEL_MSG_RECV) {
             stats.early_drop_unknown_cmd++;
             log1("early-drop unknown cmd=0x%02x plen=%d\n", cmd, plen);
             advance(HEADER_BYTES, plen);
@@ -339,20 +347,32 @@ function smartAccumulate(data)
         // 4. Wait for full payload (fragmentation-safe).
         if (blen < HEADER_BYTES + plen) return frames;
 
-        // 5. Inline text-envelope sanity check. Reject malformed frames
-        //    here instead of letting decode allocate a half-msg object.
-        if (plen < TEXT_ENVELOPE_BYTES) {
-            stats.early_drop_malformed_text++;
-            log1("early-drop short text plen=%d < %d\n", plen, TEXT_ENVELOPE_BYTES);
-            tcpbuf = substr(tcpbuf, HEADER_BYTES + plen);
-            continue;
-        }
-        const tlen = ord(tcpbuf, HEADER_BYTES + 8);
-        if (TEXT_ENVELOPE_BYTES + tlen > plen) {
-            stats.early_drop_malformed_text++;
-            log1("early-drop malformed text tlen=%d plen=%d\n", tlen, plen);
-            tcpbuf = substr(tcpbuf, HEADER_BYTES + plen);
-            continue;
+        // 5. Inline text-envelope sanity check (frame-type dependent).
+        //    CORRECTED per Mathison: Direct and group frames have different structures.
+        if (cmd === CMD_DIRECT_MSG_RECV) {
+            // Direct: sender(4) + recipient(4) + text_len(1) + text
+            if (plen < TEXT_ENVELOPE_BYTES) {
+                stats.early_drop_malformed_text++;
+                log1("early-drop short direct plen=%d < %d\n", plen, TEXT_ENVELOPE_BYTES);
+                tcpbuf = substr(tcpbuf, HEADER_BYTES + plen);
+                continue;
+            }
+            const tlen = ord(tcpbuf, HEADER_BYTES + 8);
+            if (TEXT_ENVELOPE_BYTES + tlen > plen) {
+                stats.early_drop_malformed_text++;
+                log1("early-drop malformed direct tlen=%d plen=%d\n", tlen, plen);
+                tcpbuf = substr(tcpbuf, HEADER_BYTES + plen);
+                continue;
+            }
+        } else if (cmd === CMD_CHANNEL_MSG_RECV) {
+            // Group: sender(4) + slot(1) + text (no explicit length)
+            // Minimum: 5 bytes (sender + slot)
+            if (plen < 5) {
+                stats.early_drop_malformed_text++;
+                log1("early-drop short group plen=%d < 5\n", plen);
+                tcpbuf = substr(tcpbuf, HEADER_BYTES + plen);
+                continue;
+            }
         }
 
         // 6. Emit the validated frame.
@@ -377,50 +397,108 @@ function advance(hdrBytes, payloadBytes)
 }
 
 // ---------------------------------------------------------------------
-// Decoder — TXT_MSG / GRP_TXT only.
-// ---------------------------------------------------------------------
+// Decoder — DIRECT_MSG_RECV (0x07) and CHANNEL_MSG_RECV (0x08) only.
+// =====================================================================
 //
-// Cleartext text payload:
+// CORRECTED per Mathison (2026-06-19):
+//
+// Direct Message (0x07) payload structure:
 //   Off  Size  Field
 //   0    4     sender node id      (uint32 LE)
-//   4    4     target node id      (uint32 LE)   (0 = broadcast/group)
+//   4    4     recipient node id   (uint32 LE)
 //   8    1     text length (n)
 //   9    n     UTF-8 text bytes
+//
+// Group Message (0x08) payload structure:
+//   Off  Size  Field
+//   0    4     sender node id      (uint32 LE)
+//   4    1     group slot index    (0-7, identifies which memory slot)
+//   5    ?     text (no explicit length, rest of payload)
+//
+// Note: Group messages DON'T have an explicit text length byte like
+// direct messages. Text is from byte 5 to end of payload.
 //
 // All length validation already happened in the accumulator, so this
 // is straight unpack.
 
 function decodeTextFrame(cmd, payload)
 {
-    const fromId = u32le(payload, 0);
-    const toId   = u32le(payload, 4);
-    const tlen   = ord(payload, 8);
-    const text   = cstr(substr(payload, 9, tlen));
-    if (!length(text)) {
-        log1("decode: empty text from=%08x\n", fromId);
-        return null;
-    }
-
-    msgSeq = (msgSeq + 1) & 0xFFFFFFFF;
-    const msg = {
-        id:                   msgSeq,
-        from:                 fromId,
-        to:                   toId,
-        rx_time:              time(),
-        hop_limit:            1,
-        transport:            "meshcore",
-        backend:              "tcp_api",
-        originating_callsign: callsign,
-        data: {
-            text_message: text
+    if (cmd === CMD_DIRECT_MSG_RECV) {
+        // Direct message: sender(4) + recipient(4) + text_len(1) + text
+        const fromId = u32le(payload, 0);
+        const toId   = u32le(payload, 4);
+        const tlen   = ord(payload, 8);
+        const text   = cstr(substr(payload, 9, tlen));
+        
+        if (!length(text)) {
+            log1("decode: empty direct text from=%08x\n", fromId);
+            return null;
         }
-    };
-    if (cmd === CMD_GRP_TXT) msg.is_group = true;
 
-    log1("decoded %s from=%08x to=%08x text=%d bytes\n",
-        cmd === CMD_GRP_TXT ? "GRP_TXT" : "TXT_MSG",
-        fromId, toId, length(text));
-    return msg;
+        msgSeq = (msgSeq + 1) & 0xFFFFFFFF;
+        const msg = {
+            id:                   msgSeq,
+            from:                 fromId,
+            to:                   toId,
+            rx_time:              time(),
+            hop_limit:            1,
+            transport:            "meshcore",
+            backend:              "tcp_api",
+            originating_callsign: callsign,
+            data: {
+                text_message: text
+            },
+            metadata: {
+                is_group_message: false,
+                identity_strength: "strong"
+            }
+        };
+
+        log1("decoded DIRECT_MSG(0x07) from=%08x to=%08x text=%d bytes\n",
+            fromId, toId, length(text));
+        return msg;
+        
+    } else if (cmd === CMD_CHANNEL_MSG_RECV) {
+        // Group message: sender(4) + group_slot(1) + text
+        const fromId = u32le(payload, 0);
+        const groupSlot = ord(payload, 4);  // 0-7, identifies memory slot
+        const text = cstr(substr(payload, 5));
+        
+        if (!length(text)) {
+            log1("decode: empty group text from=%08x slot=%d\n", fromId, groupSlot);
+            return null;
+        }
+
+        msgSeq = (msgSeq + 1) & 0xFFFFFFFF;
+        const msg = {
+            id:                   msgSeq,
+            from:                 fromId,
+            group_slot:           groupSlot,  // 0-7, for slot-based routing
+            rx_time:              time(),
+            hop_limit:            1,
+            transport:            "meshcore",
+            backend:              "tcp_api",
+            originating_callsign: callsign,
+            data: {
+                text_message: text
+            },
+            metadata: {
+                is_group_message: true,
+                group_slot: groupSlot,
+                identity_strength: "weak",
+                symmetric_key: true,
+                requires_slot_lookup: true
+            }
+        };
+
+        log1("decoded CHANNEL_MSG(0x08) from=%08x slot=%d text=%d bytes\n",
+            fromId, groupSlot, length(text));
+        return msg;
+    }
+    
+    // Unknown frame type (shouldn't happen, smartAccumulate filters)
+    log1("decode: unknown frame cmd=0x%02x\n", cmd);
+    return null;
 }
 
 // ---------------------------------------------------------------------

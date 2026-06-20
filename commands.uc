@@ -7,6 +7,8 @@ import * as node from "node";
 import * as crypto from "crypto.crypto";
 import * as groups from "groups";
 import * as aprs from "aprs";
+import * as meshcore_discovery from "meshcore_tcp_discovery";  // NEW: for /cmd discover
+import * as gatekeeper from "gatekeeper";  // NEW: for channel access control
 
 function fmtBytes(n)
 {
@@ -73,6 +75,30 @@ function storageSupported(id, fn)
     return true;
 }
 
+// NEW (Phase 4): Derive encryption key from passphrase
+// Input: passphrase (user-provided string)
+// Output: 32-byte key derived via SHA256
+function deriveKeyFromPassphrase(passphrase)
+{
+    // Hash the passphrase to get a 32-byte key
+    // Note: This is one-shot (not stored), suitable for LAN environments
+    const hash = crypto.sha256hash(passphrase);
+    // hash is already [byte0, byte1, ..., byte31]
+    return hash;
+}
+
+// NEW (Phase 4): Convert key bytes to base64 for namekey
+function keyBytesToBase64(keyBytes)
+{
+    // keyBytes is array of 32 bytes
+    // We need to convert to string for b64enc
+    let keyStr = "";
+    for (let i = 0; i < length(keyBytes); i++) {
+        keyStr += chr(keyBytes[i]);
+    }
+    return b64enc(keyStr);
+}
+
 export function post(cmd, id)
 {
     switch (cmd[0]) {
@@ -83,13 +109,25 @@ export function post(cmd, id)
                 event.queue({ cmd: "/reply", reply: [
                     "Usage:",
                     "/join #name &mdash; join/create shared-key channel (Meshtastic+MeshCore+AREDN)",
+                    "/join #name key=passphrase &mdash; join with derived key from passphrase",
                     "/join %name &mdash; join/create AREDN-only channel",
                     "/join #name CALL1 CALL2 message &mdash; create APRS group + channel + send",
                     "/join #name backend=NAME CALL1 message &mdash; APRS group on specific backend"
                 ], socket: id });
                 break;
             }
-            const namekey = groups.createGroupChannel(parsed.name, parsed.arednOnly, parsed.backendName);
+            
+            // NEW (Phase 4): Handle key drop via passphrase
+            let keyDropUsed = false;
+            if (parsed.keyDrop) {
+                const derivedKeyBytes = deriveKeyFromPassphrase(parsed.keyDrop);
+                const base64Key = keyBytesToBase64(derivedKeyBytes);
+                parsed.symmetricKey = base64Key;  // Override with derived key
+                keyDropUsed = true;
+                DEBUG0("commands: key drop used for passphrase (not logged)\n");
+            }
+            
+            const namekey = groups.createGroupChannel(parsed.name, parsed.arednOnly, parsed.backendName, parsed.symmetricKey);
             if (length(parsed.members) > 0) {
                 groups.putGroup(parsed.name, parsed.members, {
                     backend: parsed.backendName,
@@ -110,13 +148,20 @@ export function post(cmd, id)
                 if (parsed.backendName) {
                     push(reply, `Backend: ${parsed.backendName}`);
                 }
+                if (keyDropUsed) {
+                    push(reply, "⚠️ <i>Key derived from passphrase (not stored)</i>");
+                }
                 if (parsed.messageText) {
                     push(reply, `Sent: &ldquo;${parsed.messageText}&rdquo;`);
                 }
                 event.queue({ cmd: "/reply", reply: reply, socket: id });
             }
             else {
-                event.queue({ cmd: "/reply", reply: [ `Joined channel ${parsed.name}` ], socket: id });
+                const reply = [ `Joined channel ${parsed.name}` ];
+                if (keyDropUsed) {
+                    push(reply, "⚠️ <i>Key derived from passphrase (not stored)</i>");
+                }
+                event.queue({ cmd: "/reply", reply: reply, socket: id });
             }
             break;
         }
@@ -163,6 +208,99 @@ export function post(cmd, id)
                     push(reply, `<b>${g.name}</b>${be}${rpt}: ${mems}`);
                 }
                 event.queue({ cmd: "/reply", reply: reply, socket: id });
+            }
+            break;
+        }
+        case "cmd":
+        {
+            // NEW (Phase 4): Discovery and discovery-related commands
+            switch (cmd[1]) {
+                case "discover":
+                {
+                    const backend = cmd[2] ?? "all";  // "meshcore", "meshtastic", "all"
+                    const discovered = [];
+                    const reply = [ "<b>Discovered Channels</b>", "&nbsp;" ];
+                    
+                    // Get MeshCore groups if requested
+                    if (backend === "all" || backend === "meshcore") {
+                        const groups_discovered = meshcore_discovery.getCachedGroups();
+                        if (groups_discovered && length(groups_discovered) > 0) {
+                            push(reply, "<b>═══ MeshCore Groups ═══</b>");
+                            for (let g of groups_discovered) {
+                                push(reply, `<b>Slot ${g.slot}: ${g.name}</b> (${g.key_size ?? "?"}-byte key)`);
+                                push(reply, `<div class="cj" onclick='cmd("/join ${g.name}")'>/join ${g.name}</div>`);
+                            }
+                            push(reply, "&nbsp;");
+                        }
+                    }
+                    
+                    // Get Meshtastic channels if requested
+                    if (backend === "all" || backend === "meshtastic") {
+                        const all_channels = channel.getAllChannelNamekeys();
+                        let meshtastic_count = 0;
+                        for (let nk of all_channels) {
+                            if (channel.isMeshtasticPreset(nk)) continue;
+                            const parts = split(nk, " ");
+                            if (ord(parts[0]) !== 35) continue;  // Must be #channel
+                            
+                            if (meshtastic_count === 0) {
+                                push(reply, "<b>═══ Meshtastic Channels ═══</b>");
+                            }
+                            meshtastic_count++;
+                            
+                            push(reply, `<b>${parts[0]}</b>`);
+                            push(reply, `<div class="cj" onclick='cmd("/join ${parts[0]}")'>/join ${parts[0]}</div>`);
+                        }
+                        if (meshtastic_count > 0) {
+                            push(reply, "&nbsp;");
+                        }
+                    }
+                    
+                    push(reply, "<b>═══ Summary ═══</b>");
+                    const meshcore_groups = meshcore_discovery.getCachedGroups();
+                    const mc_count = meshcore_groups ? length(meshcore_groups) : 0;
+                    push(reply, `MeshCore: ${mc_count} discovered groups`);
+                    push(reply, "");
+                    push(reply, "<i>Use /join &lt;channel_name&gt; to join</i>");
+                    
+                    event.queue({ cmd: "/reply", reply: reply, socket: id });
+                    break;
+                }
+                case "info":
+                {
+                    const namekey = cmd[2];
+                    if (!namekey) {
+                        event.queue({ cmd: "/reply", reply: [ "Usage: /cmd info &lt;namekey&gt;" ], socket: id });
+                        break;
+                    }
+                    const chan = channel.getChannelByNameKey(namekey);
+                    if (!chan) {
+                        event.queue({ cmd: "/reply", reply: [ `Channel not found: ${namekey}` ], socket: id });
+                        break;
+                    }
+                    const reply = [
+                        `<b>Channel:</b> ${chan.namekey}`,
+                        `<b>Key size:</b> ${length(chan.symmetrickey)} bytes`,
+                        `<b>Backend:</b> ${chan.backend ?? "unknown"}`,
+                        `<b>Telemetry:</b> ${chan.telemetry ? "yes" : "no"}`
+                    ];
+                    if (chan.slot_index !== undefined && chan.slot_index !== null) {
+                        push(reply, `<b>MeshCore Slot:</b> ${chan.slot_index}`);
+                    }
+                    event.queue({ cmd: "/reply", reply: reply, socket: id });
+                    break;
+                }
+                default:
+                {
+                    event.queue({ cmd: "/reply", reply: [
+                        "Usage:",
+                        "/cmd discover — List all discovered channels",
+                        "/cmd discover meshcore — MeshCore groups only",
+                        "/cmd discover meshtastic — Meshtastic channels only",
+                        "/cmd info &lt;namekey&gt; — Channel details"
+                    ], socket: id });
+                    break;
+                }
             }
             break;
         }
