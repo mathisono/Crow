@@ -1,4 +1,4 @@
-const socket = require("socket");
+import * as socket from "socket";
 
 const PORT = 4404;
 

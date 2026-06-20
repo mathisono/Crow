@@ -1,6 +1,5 @@
-// AREDN ucode: use require() instead of ES6 import for compatibility
-const udp = require("meshtastic");
-const api = require("meshtastic_API");
+import * as udp from "meshtastic";
+import * as api from "meshtastic_API";
 
 let active = null;
 let activeName = null;

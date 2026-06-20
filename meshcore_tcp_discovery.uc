@@ -25,8 +25,8 @@
 // Total: 50 bytes exactly
 // =====================================================================
 
-const channel = require("channel");
-const struct = require("struct");
+import * as channel from "channel";
+import * as struct from "struct";
 
 // API Details (Confirmed by Mathison 2026-06-20 00:00 PDT)
 const CMD_GET_CHANNEL             = 0x1F;  // Query channel info from radio

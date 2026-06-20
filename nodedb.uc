@@ -1,7 +1,7 @@
-const struct = require("struct");
-const timers = require("timers");
-const node = require("node");
-const utils = require("utils");
+import * as struct from "struct";
+import * as timers from "timers";
+import * as node from "node";
+import * as utils from "utils";
 
 const SAVE_INTERVAL = 31 * 60; // 31 minutes
 const KEEP_WINDOW = 7 * 24 * 60 * 60; // 7 days

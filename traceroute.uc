@@ -1,6 +1,6 @@
-const message = require("message");
-const router = require("router");
-const node = require("node");
+import * as message from "message";
+import * as router from "router";
+import * as node from "node";
 
 const ROUTE_SIZE = 8;
 

@@ -42,8 +42,8 @@
 //
 // =====================================================================
 
-const socket = require("socket");
-const timers = require("timers");
+import * as socket from "socket";
+import * as timers from "timers";
 
 // ---------------------------------------------------------------------
 // Wire protocol constants

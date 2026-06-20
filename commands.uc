@@ -1,14 +1,14 @@
-const struct = require("struct");
-const channel = require("channel");
-const router = require("router");
-const message = require("message");
-const textmessage = require("textmessage");
-const node = require("node");
-const crypto = require("crypto.crypto");
-const groups = require("groups");
-const aprs = require("aprs");
-const meshcore_discovery = require("meshcore_tcp_discovery");  // NEW: for /cmd discover
-const gatekeeper = require("gatekeeper");  // NEW: for channel access control
+import * as struct from "struct";
+import * as channel from "channel";
+import * as router from "router";
+import * as message from "message";
+import * as textmessage from "textmessage";
+import * as node from "node";
+import * as crypto from "crypto.crypto";
+import * as groups from "groups";
+import * as aprs from "aprs";
+import * as meshcore_discovery from "meshcore_tcp_discovery";  // NEW: for /cmd discover
+import * as gatekeeper from "gatekeeper";  // NEW: for channel access control
 
 function fmtBytes(n)
 {

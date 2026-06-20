@@ -1,14 +1,13 @@
-// AREDN ucode: use require() instead of ES6 import for compatibility
-const meshtastic = require("meshtastic_backend");
-const meshcore = require("meshcore_backend");
-const meship = require("meship");
-const aprs = require("aprs");
-const node = require("node");
-const nodedb = require("nodedb");
-const socket = require("socket");
-const timers = require("timers");
-const channel = require("channel");
-const websocket = require("websocket");
+import * as meshtastic from "meshtastic_backend";
+import * as meshcore from "meshcore_backend";
+import * as meship from "meship";
+import * as aprs from "aprs";
+import * as node from "node";
+import * as nodedb from "nodedb";
+import * as socket from "socket";
+import * as timers from "timers";
+import * as channel from "channel";
+import * as websocket from "websocket";
 
 const MAX_RECENT = 128;
 const recent = [];

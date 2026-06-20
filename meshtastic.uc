@@ -1,12 +1,12 @@
-const socket = require("socket");
-const math = require("math");
-const struct = require("struct");
-const protobuf = require("protobuf");
-const crypto = require("crypto.crypto");
-const channel = require("channel");
-const node = require("node");
-const nodedb = require("nodedb");
-const timers = require("timers");
+import * as socket from "socket";
+import * as math from "math";
+import * as struct from "struct";
+import * as protobuf from "protobuf";
+import * as crypto from "crypto.crypto";
+import * as channel from "channel";
+import * as node from "node";
+import * as nodedb from "nodedb";
+import * as timers from "timers";
 
 const ADDRESS = "224.0.0.69";
 const PORT = 4403;

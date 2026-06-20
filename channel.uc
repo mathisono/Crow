@@ -1,5 +1,5 @@
-const struct = require("struct");
-const crypto = require("crypto.crypto");
+import * as struct from "struct";
+import * as crypto from "crypto.crypto";
 
 const meshtasticChannelPresets = [
     "ShortTurbo AQ==",

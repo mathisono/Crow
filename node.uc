@@ -1,6 +1,6 @@
-const struct = require("struct");
-const math = require("math");
-const crypto = require("crypto.crypto");
+import * as struct from "struct";
+import * as math from "math";
+import * as crypto from "crypto.crypto";
 
 const LOCATION_PRECISION = 16;
 const LOCATION_SOURCE_MANUAL = 1;

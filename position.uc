@@ -1,9 +1,9 @@
-const timers = require("timers");
-const message = require("message");
-const router = require("router");
-const nodedb = require("nodedb");
-const node = require("node");
-const channel = require("channel");
+import * as timers from "timers";
+import * as message from "message";
+import * as router from "router";
+import * as nodedb from "nodedb";
+import * as node from "node";
+import * as channel from "channel";
 
 const DEFAULT_INTERVAL = 60 * 60;
 

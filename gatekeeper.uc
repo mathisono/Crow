@@ -1,5 +1,5 @@
-const node = require("node");
-const nodedb = require("nodedb");
+import * as node from "node";
+import * as nodedb from "nodedb";
 
 const US_CALLSIGN_RE = /^[A-Z]{1,2}[0-9][A-Z]{1,3}$/;
 

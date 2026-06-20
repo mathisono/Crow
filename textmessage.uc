@@ -1,10 +1,10 @@
-const node = require("node");
-const nodedb = require("nodedb");
-const channel = require("channel");
-const message = require("message");
-const timers = require("timers");
-const router = require("router");
-const utils = require("utils");
+import * as node from "node";
+import * as nodedb from "nodedb";
+import * as channel from "channel";
+import * as message from "message";
+import * as timers from "timers";
+import * as router from "router";
+import * as utils from "utils";
 
 let enabled = false;
 

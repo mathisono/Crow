@@ -1,4 +1,4 @@
-const meshtastic = require("meshtastic");
+import * as meshtastic from "meshtastic";
 
 /*
  * Known port numbers
