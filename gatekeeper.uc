@@ -25,7 +25,7 @@ function norm(s)
     // "KJ6DZB mobile" or "KJ6DZB-7". Do not accept arbitrary embedded text.
     const m = match(s, /^([A-Z]{1,2}[0-9][A-Z]{1,3})(?:[-/ ][A-Z0-9 _.-]*)?$/);
     return m ? m[1] : null;
-}
+};
 
 function loadAllowed(list)
 {
@@ -41,14 +41,14 @@ function loadAllowed(list)
             allowed_count++;
         }
     }
-}
+};
 
 export function setup(config)
 {
-    const gk = config.strict_gatekeeper ?? {};
+    const gk = config.strict_gatekeeper != null ? config.strict_gatekeeper : {};
     strict_enabled = !!gk.enabled;
-    gateway_callsign = norm(gk.gateway_callsign ?? config.callsign);
-    loadAllowed(gk.allowed_callsigns ?? config.allowed_callsigns);
+    gateway_callsign = norm(gk.gateway_callsign != null ? gk.gateway_callsign : config.callsign);
+    loadAllowed(gk.allowed_callsigns != null ? gk.allowed_callsigns : config.allowed_callsigns);
     if (strict_enabled && !gateway_callsign) {
         DEBUG0("gatekeeper: strict mode enabled but no valid gateway callsign configured\n");
     }
@@ -66,8 +66,11 @@ export function gatewayCallsign()
 
 export function senderCallsignFromNodeId(id)
 {
-    const info = nodedb.getNode(id, false)?.nodeinfo;
-    return norm(info?.short_name) ?? norm(info?.long_name) ?? null;
+    const node_record = nodedb.getNode(id, false);
+    const info = node_record ? node_record.nodeinfo : null;
+    const short_name = info && info.short_name ? norm(info.short_name) : null;
+    const long_name = info && info.long_name ? norm(info.long_name) : null;
+    return short_name != null ? short_name : (long_name != null ? long_name : null);
 };
 
 export function senderCallsignFromTextName(name)
@@ -110,7 +113,7 @@ export function annotateViaGateway(msg, sender_callsign)
     if (!sender_callsign) {
         return null;
     }
-    if (!msg?.data?.text_message) {
+    if (!msg || !msg.data || !msg.data.text_message) {
         DEBUG1("gatekeeper: drop, bridged packet is not a text message\n");
         return null;
     }
@@ -130,20 +133,20 @@ export function filterInboundBridge(msg)
         DEBUG0("gatekeeper: drop encrypted bridged packet\n");
         return null;
     }
-    if (!msg.data?.text_message) {
+    if (!msg.data || !msg.data.text_message) {
         DEBUG1("gatekeeper: drop non-text bridged packet\n");
         return null;
     }
     if (msg.from === node.id() && msg.originating_callsign === gateway_callsign) {
         return msg;
     }
-    const sender = msg.data?.text_from ? allowSenderCallsign(msg.data.text_from) : allowSenderNode(msg.from);
+    const sender = msg.data && msg.data.text_from ? allowSenderCallsign(msg.data.text_from) : allowSenderNode(msg.from);
     if (!sender) {
         return null;
     }
 
     // Phase 3: Group message weak-identity tagging for AREDN bridge
-    if (msg.metadata?.is_group_message && msg.metadata?.symmetric_key) {
+    if (msg.metadata && msg.metadata.is_group_message && msg.metadata.symmetric_key) {
         return annotateGroupViaGateway(msg, sender);
     }
 
@@ -162,12 +165,12 @@ export function annotateGroupViaGateway(msg, sender_callsign)
     if (!sender_callsign) {
         return null;
     }
-    if (!msg?.data?.text_message) {
+    if (!msg || !msg.data || !msg.data.text_message) {
         DEBUG1("gatekeeper: drop, group bridged packet is not a text message\n");
         return null;
     }
 
-    const groupName = msg.group_name ?? "UnknownGroup";
+    const groupName = msg.group_name != null ? msg.group_name : "UnknownGroup";
 
     msg.from = node.id();
     msg.originating_callsign = gateway_callsign;
@@ -236,7 +239,7 @@ function simpleWildcardMatch(text, pattern)
     
     // All pattern consumed; text must also be consumed
     return text_idx === length(text);
-}
+};
 
 function matchCallsignPattern(callsign, patterns)
 {
@@ -252,7 +255,7 @@ function matchCallsignPattern(callsign, patterns)
         }
     }
     return false;
-}
+};
 
 export function enforceChannelAccess(msg, namekey, config)
 {
@@ -264,15 +267,16 @@ export function enforceChannelAccess(msg, namekey, config)
     }
     
     // Get channel-specific ACL config
-    const chan_config = config?.channels?.[namekey];
-    const acl = chan_config?.access_control;
+    const channels = config && config.channels ? config.channels : null;
+    const chan_config = channels ? channels[namekey] : null;
+    const acl = chan_config ? chan_config.access_control : null;
     
     if (!acl || !acl.require_callsign) {
         return msg;  // No ACL configured for this channel
     }
     
     // Extract sender callsign
-    const sender_callsign = msg.data?.text_from ?? senderCallsignFromNodeId(msg.from);
+    const sender_callsign = (msg.data && msg.data.text_from) ? msg.data.text_from : senderCallsignFromNodeId(msg.from);
     
     if (!sender_callsign) {
         DEBUG0("gatekeeper: channel access DENIED (no callsign) channel=%s from=%08x\n",
@@ -302,7 +306,7 @@ export function enforceChannelAccess(msg, namekey, config)
     DEBUG1("gatekeeper: channel access ALLOWED channel=%s callsign=%s\n",
            namekey, sender_callsign);
     return msg;
-}
+};
 
 export function tick()
 {

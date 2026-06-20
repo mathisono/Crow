@@ -15,7 +15,7 @@ const apps = [];
 const q = [];
 let gatekeeper = null;
 
-function setGatekeeper(gk)
+export function setGatekeeper(gk)
 {
     gatekeeper = gk;
 };
@@ -24,7 +24,7 @@ function setGatekeeper(gk)
 // Before Phase 2 implements auto-discovery, this allows manual setup
 // of group slot -> channel mappings for testing.
 // Usage: router.registerGroupChannel(0, group_channel_object)
-function registerGroupChannel(slot, channelObj)
+export function registerGroupChannel(slot, channelObj)
 {
     if (slot === null || slot === undefined || slot < 0 || slot > 7) {
         return false;
@@ -37,12 +37,12 @@ function registerGroupChannel(slot, channelObj)
     return result;
 };
 
-function registerApp(app)
+export function registerApp(app)
 {
     push(apps, app);
 };
 
-function process()
+export function process()
 {
     while (length(q) > 0) {
         const msg = shift(q);
@@ -152,7 +152,7 @@ function process()
     }
 };
 
-function queueId(id)
+export function queueId(id)
 {
     // Remember messages we queued for a little while and don't queue them again.
     if (index(recent, id) === -1) {
@@ -215,7 +215,7 @@ function enforceChannelAccess(msg)
     return result;  // null if access denied, msg if allowed
 };
 
-function queue(msg)
+export function queue(msg)
 {
     if (!msg) {
         return;
@@ -248,7 +248,7 @@ function queue(msg)
 };
 
 
-function tick()
+export function tick()
 {
     for (let i = 0; i < length(apps); i++) {
         apps[i].tick();
@@ -365,5 +365,10 @@ function tick()
     meshtastic.tick();
     meshcore.tick();
     aprs.tick();
-    timers.process();
+    if (timers && timers.process) {
+        timers.process();
+    }
+    else if (timers && timers.tick) {
+        timers.tick();
+    }
 };

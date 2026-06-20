@@ -191,11 +191,12 @@ export function setup()
 
     DEBUG0("Starting up\nConfiguring\n");
 
-    if (config.platform_aredn) {
-        global.platform = require(`platforms.aredn.platform`);
-    }
-    else if (config.platform_debian) {
+    if (config.platform_debian) {
         global.platform = require(`platforms.debian.platform`);
+    }
+    else {
+        // Default to AREDN/OpenWrt when platform flags are absent
+        global.platform = require(`platforms.aredn.platform`);
     }
     global.platform.setup(config);
     router.registerApp(global.platform);

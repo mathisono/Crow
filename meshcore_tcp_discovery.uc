@@ -65,12 +65,12 @@ let stats = {
 function log0(fmt, ...args)
 {
     DEBUG0("meshcore_discovery: " + fmt, ...args);
-}
+};
 
 function log1(fmt, ...args)
 {
     DEBUG1("meshcore_discovery: " + fmt, ...args);
-}
+};
 
 // =====================================================================
 // PACKET_CHANNEL_INFO (0x12) Parser
@@ -90,7 +90,7 @@ function parseChannelInfo(data)
 {
     if (!data || length(data) < CHANNEL_RESPONSE_SIZE) {
         log1("parseChannelInfo: insufficient data (%d bytes)\\n", 
-             length(data) ?? 0);
+             (length(data) != null ? length(data) : 0));
         return null;
     }
     
@@ -112,7 +112,7 @@ function parseChannelInfo(data)
     // Extract channel name (32 bytes, null-padded)
     let nameBytes = [];
     for (let i = 0; i < CHANNEL_NAME_LENGTH; i++) {
-        push(nameBytes, data[CHANNEL_NAME_OFFSET + i] ?? 0);
+        push(nameBytes, (data[CHANNEL_NAME_OFFSET + i] != null ? data[CHANNEL_NAME_OFFSET + i] : 0));
     }
     
     // Convert to string and trim null padding
@@ -126,7 +126,7 @@ function parseChannelInfo(data)
     // Extract secret key (16 bytes)
     let secretKey = [];
     for (let i = 0; i < SECRET_KEY_LENGTH; i++) {
-        push(secretKey, data[SECRET_KEY_OFFSET + i] ?? 0);
+        push(secretKey, (data[SECRET_KEY_OFFSET + i] != null ? data[SECRET_KEY_OFFSET + i] : 0));
     }
     
     // Detect if this slot is empty
@@ -146,10 +146,10 @@ function parseChannelInfo(data)
     };
     
     log1("parseChannelInfo: slot %d, name=%s, configured=%s\\n",
-         channelIndex, nameStr ?? "[empty]", isConfigured);
+         channelIndex, (nameStr != null ? nameStr : "[empty]"), isConfigured);
     
     return parsed;
-}
+};
 
 function isAllZeros(data)
 {
@@ -158,7 +158,7 @@ function isAllZeros(data)
         if (data[i] !== 0x00) return false;
     }
     return true;
-}
+};
 
 // =====================================================================
 // Group Query — Iterative slot scanning
@@ -245,7 +245,7 @@ export function queryDeviceGroups()
     
     log0("discovered %d groups from radio\\n", length(groups));
     return groups;
-}
+};
 
 // =====================================================================
 // State Comparison & Change Detection
@@ -262,7 +262,7 @@ function keysEqual(key1, key2)
         if (key1[i] !== key2[i]) return false;
     }
     return true;
-}
+};
 
 function getCachedGroup(slot)
 {
@@ -271,7 +271,7 @@ function getCachedGroup(slot)
         if (g.slot === slot) return g;
     }
     return null;
-}
+};
 
 function detectNewGroups(current)
 {
@@ -289,7 +289,7 @@ function detectNewGroups(current)
             autoDiscoverGroup(group);
         }
     }
-}
+};
 
 function detectDeletedGroups(current)
 {
@@ -314,7 +314,7 @@ function detectDeletedGroups(current)
             deprecateGroup(cached);
         }
     }
-}
+};
 
 function detectKeyChanges(current)
 {
@@ -342,7 +342,7 @@ function detectKeyChanges(current)
             renameGroup(cached.slot, group.name);
         }
     }
-}
+};
 
 // =====================================================================
 // Group Channel Management
@@ -373,7 +373,7 @@ function autoDiscoverGroup(group)
     channel.setMeshcoreSlotChannel(group.slot, channelObj);
     
     log1("auto-discovered: %s (slot %d)\\n", namekey, group.slot);
-}
+};
 
 function deprecateGroup(group)
 {
@@ -383,7 +383,7 @@ function deprecateGroup(group)
     // TODO: Call channel.uc to mark as deprecated
     // For now: log only
     log1("deprecated: slot %d, name=%s\\n", group.slot, group.name);
-}
+};
 
 function alertKeyRotation(newGroup, oldGroup)
 {
@@ -392,7 +392,7 @@ function alertKeyRotation(newGroup, oldGroup)
     
     log0("ALERT: Group '%s' key has changed!\\n", newGroup.name);
     log0("  Please review the change on your radio.\\n");
-}
+};
 
 function updateGroupKey(group)
 {
@@ -400,7 +400,7 @@ function updateGroupKey(group)
     // TODO: Update channel.uc with new key
     
     log1("updated key for slot %d: %s\\n", group.slot, group.name);
-}
+};
 
 function renameGroup(slot, newName)
 {
@@ -408,7 +408,7 @@ function renameGroup(slot, newName)
     // TODO: Rename channel in channel.uc
     
     log1("renamed slot %d to: %s\\n", slot, newName);
-}
+};
 
 // =====================================================================
 // Utility: Encode group key for namekey
@@ -426,7 +426,7 @@ function encodeGroupKey(keyBytes)
         }
     }
     return hex;
-}
+};
 
 // =====================================================================
 // Periodic Sync
@@ -443,7 +443,7 @@ export function tick()
     
     syncChannelSlots();
     lastSyncTime = now;
-}
+};
 
 function syncChannelSlots()
 {
@@ -463,7 +463,7 @@ function syncChannelSlots()
     log1("sync: complete (new=%d, deleted=%d, key_changes=%d)\\n",
          stats.new_groups_detected, stats.deleted_groups_detected,
          stats.key_changes_detected);
-}
+};
 
 // =====================================================================
 // Public API
@@ -471,18 +471,18 @@ function syncChannelSlots()
 
 export function setup(config)
 {
-    if (!config?.meshcore_discovery?.enabled) {
+    if (!config || !config.meshcore_discovery || !config.meshcore_discovery.enabled) {
         return;
     }
     
     enabled = true;
-    syncIntervalMs = config.meshcore_discovery.sync_interval_ms ?? 300000;
+    syncIntervalMs = config.meshcore_discovery.sync_interval_ms != null ? config.meshcore_discovery.sync_interval_ms : 300000;
     
     log0("discovery enabled (sync interval: %d ms)\\n", syncIntervalMs);
     
     // Initial discovery on startup
     startup();
-}
+};
 
 export function startup()
 {
@@ -500,22 +500,22 @@ export function startup()
     lastSyncTime = systime() * 1000;
     
     log0("initial discovery: found %d groups\\n", length(groups));
-}
+};
 
 export function shutdown()
 {
     enabled = false;
-}
+};
 
 export function getStats()
 {
     return stats;
-}
+};
 
 export function getCachedGroups()
 {
     return cachedGroups;
-}
+};
 
 export function getSyncStatus()
 {
@@ -526,13 +526,13 @@ export function getSyncStatus()
         cached_groups: length(cachedGroups),
         stats: stats
     };
-}
+};
 
 // Export parser for testing
 export function parseChannelInfoForTest(data)
 {
     return parseChannelInfo(data);
-}
+};
 
 // =====================================================================
 // PHASE 2 IMPLEMENTATION STATUS
