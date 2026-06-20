@@ -677,7 +677,20 @@ export function setup(config)
     cfg.callsign = normcall(cfg.callsign ?? config.callsign);
     cfg.channel = cfg.channel ?? `${DEFAULT_CHANNEL_NAME} ${DEFAULT_CHANNEL_KEY}`;
     channelKey = split(cfg.channel, " ", 2)[1];
-    channel.updateLocalChannels([ { namekey: cfg.channel } ]);
+
+    // Keep existing local channels; only ensure APRS channel is present.
+    const localChannels = channel.getAllLocalChannels();
+    let hasAprsChannel = false;
+    for (let i = 0; i < length(localChannels); i++) {
+        if (localChannels[i].namekey === cfg.channel) {
+            hasAprsChannel = true;
+            break;
+        }
+    }
+    if (!hasAprsChannel) {
+        push(localChannels, { namekey: cfg.channel });
+    }
+    channel.updateLocalChannels(localChannels);
     router = config.router;
 
     // --- Initialize backends ---
