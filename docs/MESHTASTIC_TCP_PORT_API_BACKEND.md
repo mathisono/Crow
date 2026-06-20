@@ -1,278 +1,441 @@
 # Meshtastic TCP Port-API Backend Plan
 
-Status: **active backend plan**.
+Status: **active experimental backend plan**.
 
-Crow's Meshtastic backend should move to a direct TCP Port-API connection to a Meshtastic ESP32 node. This is the current backend focus. MeshCore work is planned separately and should not be rewritten in this pass.
+Crow now keeps the existing Meshtastic UDP/multicast backend and the experimental Meshtastic TCP Port-API backend separate:
 
-## Goal
+```text
+meshtastic.uc       # existing UDP/multicast backend; keep unchanged
+meshtastic_API.uc   # experimental TCP Port-API backend
+```
 
-Build a Meshtastic backend that talks directly to a Meshtastic node over TCP, decodes Port-API protobuf traffic, normalizes inbound packets into Crow messages, and sends Crow-originated messages back through the same connection.
+The current development focus for `meshtastic_API.uc` is **read-only channel auto-discovery and periodic read-only refresh**. Do not implement two-way channel writes in this pass.
 
-This backend should not depend on MQTT and should not implement serial support.
+## Current direction
 
-## Non-goals
+- Do not modify `meshtastic.uc`; it must remain the existing UDP/multicast backend.
+- Do not wire `meshtastic_API.uc` into `router.uc` by default.
+- Do not touch MeshCore for this task.
+- Do not use Python, npm, protoc, generated protobuf files, or external protobuf libraries.
+- Use pure ucode buffer parsing and the existing Crow coding style.
+- Use Crow's existing `timers.setInterval()` / `timers.tick()` pattern.
+- Do not introduce raw `uloop.timer` in this path unless the repo already uses it there.
+- Do not implement serial support.
+- Do not require MQTT.
 
-- Do not implement serial Meshtastic support.
-- Do not use MQTT as the required Meshtastic path.
-- Do not rewrite MeshCore during this pass.
-- Do not mix MeshCore packet parsing into Meshtastic code.
-- Do not remove APRS, AREDN, or existing MeshCore functionality.
-- Do not forward unsupported/encrypted payloads unless Crow can safely identify and route them.
+## Current capability
 
-## Proposed config
+`meshtastic_API.uc` already has first-pass TCP Port-API plumbing:
+
+- maintains a TCP socket to a Meshtastic node on port `4403`;
+- handles the `0x94 0xc3` Meshtastic TCP Port-API frame header;
+- extracts payload lengths;
+- decodes `FromRadio.packet`;
+- sends outbound text using `ToRadio.packet`;
+- keeps the original `meshtastic.uc` backend unchanged.
+
+## Proposed experimental config
 
 ```json
 {
-  "meshtastic": {
+  "meshtastic_api": {
     "enabled": true,
-    "transport": "tcp",
     "host": "192.168.4.1",
-    "port": 4403
+    "port": 4403,
+    "channel_discovery": true,
+    "channel_sync": "read_only",
+    "channel_refresh_seconds": 600
   }
 }
 ```
 
-Rules:
+Defaults:
 
-- `transport` should be `tcp`.
-- Default TCP port is `4403`.
-- `host` should be the Meshtastic node IP address.
-- Old Meshtastic config keys can remain compatibility fallbacks, but new config should prefer this explicit TCP shape.
+- `channel_discovery`: `false`
+- `channel_sync`: `"off"`
+- `channel_refresh_seconds`: `600`
+
+`channel_sync` must remain read-only or off for now. Bidirectional radio configuration writes are future work.
+
+## Correct Meshtastic protobuf tags
+
+Use these corrected field numbers and precomputed tags. Do not use older or generic Meshtastic field assumptions.
+
+| Object | Field | Wire type | Tag |
+| --- | ---: | --- | --- |
+| `FromRadio.packet` | 2 | length-delimited | `0x12` |
+| `FromRadio.config_complete_id` | 7 | varint | `0x38` |
+| `FromRadio.channel` | 10 | length-delimited | `0x52` |
+| `ToRadio.packet` | 1 | length-delimited | `0x0A` |
+| `ToRadio.want_config_id` | 3 | varint | `0x18` |
+| `Channel.index` | 1 | varint | `0x08` |
+| `Channel.settings` | 2 | length-delimited | `0x12` |
+| `ChannelSettings.name` | 3 | length-delimited string | `0x1A` |
+| `ChannelSettings.psk` | 4 | length-delimited bytes | `0x22` |
+
+Important rejected assumptions:
+
+- Do not treat `FromRadio.channel` as field 3.
+- Do not treat `ToRadio.packet` as field 2.
+- Do not assume the UDP backend's protobuf registration can safely cover TCP API config discovery.
 
 ## Backend boundary
-
-Meshtastic-specific work should stay inside `meshtastic.uc` or Meshtastic-specific helper modules.
 
 Inbound path:
 
 ```text
 TCP Port-API stream
-  -> Meshtastic frame/protobuf decode
-  -> normalized Crow message
-  -> strict gatekeeper / router decision
+  -> 0x94 0xc3 frame parser
+  -> FromRadio envelope parser
+  -> packet OR channel/config handler
+  -> normalized Crow message OR read-only channel discovery map
 ```
 
-Outbound path:
+Outbound text path:
 
 ```text
 Crow router message
-  -> Meshtastic backend send function
-  -> Meshtastic protobuf/frame encode
-  -> TCP Port-API stream
+  -> Meshtastic API send function
+  -> ToRadio.packet field 1
+  -> 0x94 0xc3 TCP Port-API frame
+```
+
+Read-only discovery path:
+
+```text
+ToRadio.want_config_id field 3
+  -> Meshtastic config dump
+  -> FromRadio.channel field 10
+  -> channel index/name/PSK extraction
+  -> runtime discoveredChannels map
 ```
 
 The router should remain protocol-neutral.
 
-## Required behavior
+## Implementation phases
 
-### Connection management
+### Phase 1: Fix core Port-API envelope protos
 
-- Open a persistent TCP connection to `host:port`.
-- Reconnect on disconnect.
-- Use bounded reconnect/backoff.
-- Do not block the main event loop.
-- Log connect, disconnect, reconnect, and retry events.
+Update `meshtastic_API.uc` built-in proto registration:
 
-### Inbound decode
+- `fromradio` should include:
+  - field 2: `proto packet packet`
+  - field 7: `uint32 config_complete_id`
+  - field 10: `proto channel channel`
+- `toradio` should include:
+  - field 1: `proto packet packet`
+  - field 3: `uint32 want_config_id`
 
-Receive streamed Port-API protobuf packets and decode enough to identify:
+Preserve existing packet RX/TX behavior. Ensure outbound packet wrapping uses `ToRadio.packet` field 1.
 
-- sender node ID
-- destination node ID or broadcast
-- channel/index if available
-- text payload
-- RSSI/SNR if available
-- packet ID
-- timestamp if available
-- encrypted/unsupported packet state
+Acceptance:
 
-Unsupported or encrypted payloads should be dropped or logged with a clear reason unless Crow can safely identify and route them.
+- inbound text packets still decode;
+- outbound text still sends;
+- `ToRadio.packet` no longer uses the old field-2 assumption;
+- no changes are made to `meshtastic.uc`.
 
-### Normalized Crow message
+### Phase 2: Add lightweight TLV helpers
 
-Decoded Meshtastic text should normalize toward Crow's existing message shape. Exact field names should follow the current router/message conventions, but the normalized object should include the equivalent of:
+Add defensive local helpers in `meshtastic_API.uc`:
 
-```json
-{
-  "transport": "meshtastic",
-  "backend": "tcp-port-api",
-  "from": 123456789,
-  "to": 4294967295,
-  "packet_id": 123,
-  "namekey": "Meshtastic LongFast",
-  "rx": {
-    "rssi": -72,
-    "snr": 7.5
-  },
-  "data": {
-    "text_message": "hello"
-  }
-}
+```ucode
+readVarint(buf, off)
+readLenDelimited(buf, off)
+skipField(buf, off, wire_type)
+extractChannels(buf)
 ```
 
-### Outbound send
+Only protobuf wire types required in this pass:
 
-Crow-originated outbound text should be encoded and sent through the same TCP Port-API connection.
+- wire type 0: varint;
+- wire type 2: length-delimited.
 
-Required outbound cases:
+Requirements:
 
-- broadcast/channel text
-- direct text if the current Crow model supports a destination
-- send failure logging
-- disconnected queue/drop behavior clearly documented in code comments
+- check bounds before every read;
+- reject varints longer than 10 bytes;
+- reject length-delimited fields whose length exceeds remaining buffer;
+- never throw on malformed data;
+- return partial/null on malformed data;
+- log bounded parser detail with `DEBUG2`, not byte-by-byte spam.
 
-### Strict gatekeeper
+### Phase 3: Extract channel records
 
-Before any Meshtastic-derived message is bridged into AREDN/Part 97 paths:
+`extractChannels(buffer)` should scan a generic `FromRadio` payload:
 
-- preserve strict-gatekeeper checks
-- keep sender identity context when available
-- do not upgrade weak identity into strong identity without validation
-- log drop reasons when strict gatekeeper rejects traffic
+1. Find tag `0x52` for `FromRadio.channel`.
+2. Read the channel message length.
+3. Inside the channel message, extract:
+   - index from tag `0x08`;
+   - settings block from tag `0x12`.
+4. Inside settings, extract:
+   - name from tag `0x1A`;
+   - PSK from tag `0x22`.
+5. Ignore all other fields.
+6. Return an array like:
 
-## MeshCore relationship
+```ucode
+[
+  {
+    index: 0,
+    name: "LongFast",
+    psk: <raw bytes>,
+    psk_b64: <base64 string>,
+    namekey: "LongFast <base64>"
+  }
+]
+```
 
-MeshCore is planned for a later cleanup pass. During this Meshtastic work:
+Do not log raw PSKs.
 
-- leave `meshcore.uc` functional
-- do not route MeshCore through Meshtastic code
-- do not change MeshCore parser behavior unless required by a narrow bug fix
-- keep the future shared backend shape in mind:
+### Phase 4: Add runtime discovery map
+
+Add a module-level map:
+
+```ucode
+let discoveredChannels = {};
+```
+
+Key it by channel index and/or channel name.
+
+When a discovered channel arrives:
+
+- ignore empty names;
+- ignore empty PSKs unless the firmware uses a known default/public key representation;
+- do not log raw PSKs;
+- log only index, name, and whether it was added or updated;
+- include only a short PSK hash/fingerprint if needed;
+- add missing channels to `discoveredChannels`;
+- update `discoveredChannels` if the PSK changes;
+- do not write permanent config files.
+
+### Phase 5: Integrate with Crow channel memory carefully
+
+For this pass, do read-only runtime integration only.
+
+Convert discovered channels to Crow-compatible `namekey` form:
 
 ```text
-setup(config)
-tick()
-recv()
-send(msg)
-shutdown()
+<channel-name> <base64-psk>
 ```
 
-## Suggested implementation phases
+If a safe helper exists to register runtime/remote channel namekeys, use it. If no safe helper exists, keep the mapping internal to `meshtastic_API.uc` and add a TODO.
 
-### Phase 1: config and connection skeleton
+Rules:
 
-- Add explicit TCP config handling.
-- Connect to `host:port`.
-- Add reconnect/backoff.
-- Add debug logs.
-- Do not route packets yet unless decode is reliable.
+- do not overwrite operator-configured Crow channels;
+- do not mutate `config.channels`;
+- do not persist to `/etc/crow.conf`;
+- do not persist to Crow override files;
+- do not auto-enable routing over newly discovered channels until validated.
+
+### Phase 6: Send config request on connect
+
+Add:
+
+```ucode
+function buildWantConfigId(id)
+```
+
+It should build:
+
+- protobuf payload: tag `0x18` + varint request ID;
+- Meshtastic TCP frame: `0x94 0xc3` + two-byte big-endian protobuf length + protobuf payload.
+
+Add:
+
+```ucode
+function requestConfig(reason)
+```
+
+It should:
+
+- generate a monotonic or random request ID;
+- write the framed `want_config_id` request to the TCP socket;
+- remember the last request ID;
+- log the request ID and reason.
+
+Call `requestConfig("connect")` immediately after TCP connect succeeds, but only when `channel_discovery` is true.
+
+### Phase 7: Intercept channel/config frames
+
+Update `decodeFromRadio(payload)`:
+
+- packet frames still decode and queue as messages;
+- channel frames update discovery state and return null;
+- `config_complete_id` logs completion and returns null;
+- unknown frames are ignored safely.
+
+A channel frame must never be queued as a Crow message.
+
+### Phase 8: Add periodic read-only refresh
+
+Use Crow timers:
+
+```ucode
+timers.setInterval("meshtastic_API.channel_refresh", refresh_seconds)
+```
+
+In `tick()`, call:
+
+```ucode
+requestConfig("refresh")
+```
+
+when the timer fires and discovery is enabled.
 
 Acceptance:
 
-- Crow starts when Meshtastic is disabled.
-- Crow attempts TCP connection when enabled.
-- Disconnect/reconnect does not crash Crow.
+- discovery can be disabled entirely;
+- no config requests are sent unless `channel_discovery` is true;
+- refresh does not block the router event loop;
+- reconnect triggers another connect-time config request;
+- no persistent Crow config file is modified.
 
-### Phase 2: Port-API frame/protobuf decode
+### Phase 9: Do not implement push/write sync yet
 
-- Decode streamed Meshtastic packets.
-- Identify text payloads.
-- Identify unsupported/encrypted payloads and drop/log them.
+Do not write channel config back to the Meshtastic node in this pass.
 
-Acceptance:
+Add TODO comments only:
 
-- Valid text packets become normalized Crow messages.
-- Unsupported/encrypted packets do not crash or route incorrectly.
+```text
+encodeChannelProto(index, name, psk)
+admin/channel-set request
+firmware compatibility testing
+ACK/config-complete verification
+operator confirmation before changing radio config
+```
 
-### Phase 3: router integration
+Two-way channel sync can change the physical LoRa radio configuration and must wait until read-only discovery is proven on hardware.
 
-- Feed normalized messages into the existing router path.
-- Preserve strict gatekeeper behavior.
-- Preserve current APRS/AREDN/MeshCore behavior.
+### Phase 10: Logging limits
 
-Acceptance:
+Use:
 
-- Meshtastic inbound text appears in Crow using expected channels/directs.
-- Gatekeeper can drop traffic based on configured policy.
+- `DEBUG1` for channel added/updated/config complete;
+- `DEBUG2` for skipped unknown fields and TLV parser detail;
+- no raw PSK logs;
+- no byte-by-byte config dump logs.
 
-### Phase 4: outbound send
+## Test plan
 
-- Encode Crow-originated text for Meshtastic.
-- Send through TCP Port-API stream.
-- Log send result.
+Add tests if practical:
 
-Acceptance:
+- varint decode;
+- length-delimited decode;
+- malformed varint rejection;
+- malformed length rejection;
+- synthetic `FromRadio.channel` decode;
+- `ToRadio.want_config_id` frame generation;
+- packet RX still works;
+- packet TX uses `ToRadio.packet` field 1;
+- unknown fields are ignored;
+- raw PSK is not printed.
 
-- Crow can send broadcast/channel text through Meshtastic.
-- Direct send behavior is implemented or explicitly marked unsupported.
-- Send while disconnected has deterministic behavior.
+Manual hardware validation:
 
-### Phase 5: test and field validation
-
-- Add mock/dry-run decode tests if practical.
-- Add debug capture logs for real device testing.
-- Validate with ESP32 Wi-Fi enabled and Port-API reachable on TCP port `4403`.
-
-Acceptance:
-
-- RX text works.
-- TX text works.
-- Reconnect works.
-- Unsupported/encrypted packet behavior is safe.
-- Existing APRS/AREDN/MeshCore paths do not regress.
+1. Enable `meshtastic_api.channel_discovery=true`.
+2. Manually wire the experimental backend only for the test.
+3. Confirm TCP connect.
+4. Confirm `want_config_id` is sent.
+5. Confirm channel records arrive.
+6. Confirm names/indexes are logged.
+7. Confirm raw PSKs are not logged.
+8. Confirm normal inbound text still routes.
+9. Confirm outbound text still sends.
+10. Confirm reconnect triggers another config request.
+11. Confirm no persistent Crow config file is modified.
 
 ## OpenClaw implementation prompt
 
 ```text
-In mathisono/Crow, start the backend rework by focusing only on the Meshtastic direct TCP backend. Do not rework MeshCore yet, but keep the design compatible with a later MeshCore backend cleanup.
+You are an expert OpenWrt embedded systems engineer working on the Crow repo: mathisono/Crow.
+
+I am re-architecting the experimental ucode backend: meshtastic_API.uc.
+
+Current capability:
+- Maintains a TCP socket to a Meshtastic node on port 4403.
+- Handles the 0x94 0xc3 Meshtastic TCP Port-API frame header.
+- Extracts payload lengths.
+- Decodes FromRadio.packet.
+- Sends outbound text using ToRadio.packet.
+
+Current direction:
+- Do not modify meshtastic.uc; it must remain the existing UDP/multicast backend.
+- Do not wire meshtastic_API.uc into router.uc by default.
+- Do not touch MeshCore for this task.
+- Do not use Python, npm, protoc, generated protobuf files, or external protobuf libraries.
+- Use pure ucode buffer parsing and the existing Crow coding style.
+- Use Crow's existing timers.setInterval() / timers.tick() pattern. Do not introduce raw uloop.timer unless the repo already uses it in this path.
 
 Goal:
-Move Meshtastic to a direct TCP Port-API backend that talks to the ESP32 Meshtastic node directly. Do not implement serial support.
+Add read-only Meshtastic channel auto-discovery and periodic read-only channel refresh to meshtastic_API.uc.
 
-Requirements:
-- Use TCP only, default endpoint tcp://<meshtastic-ip>:4403.
-- Add config: meshtastic.enabled, meshtastic.transport="tcp", meshtastic.host, meshtastic.port.
-- Open and maintain a persistent TCP stream to the Meshtastic node.
-- Receive streamed Port-API protobuf packets.
-- Decode sender, destination/broadcast, channel, text payload, RSSI/SNR if available, packet ID, timestamp if available.
-- Convert decoded packets into Crow's existing internal/router message shape.
-- Send Crow-originated messages back through the same TCP stream.
-- Handle disconnect/reconnect/backoff cleanly.
-- Do not block the main event loop.
-- Drop unsupported/encrypted payloads unless Crow can safely identify and route them.
-- Preserve strict_gatekeeper checks before bridged messages are queued or forwarded.
+Do not implement two-way channel sync in this pass.
 
-Architecture:
-- Keep Meshtastic framing/protobuf handling inside meshtastic.uc or Meshtastic-specific helpers.
-- Router remains protocol-neutral.
-- Use boundary: backend packet -> normalized Crow message -> router; router message -> backend send function.
-- Do not mix MeshCore parsing into Meshtastic code.
+Critical Meshtastic protobuf field numbers:
+- FromRadio.packet = field 2, length-delimited, tag 0x12
+- FromRadio.channel = field 10, length-delimited, tag 0x52
+- FromRadio.config_complete_id = field 7, varint, tag 0x38
+- ToRadio.packet = field 1, length-delimited, tag 0x0A
+- ToRadio.want_config_id = field 3, varint, tag 0x18
 
-MeshCore planning only:
-- Leave MeshCore functional as-is.
-- Do not rewrite MeshCore in this pass.
-- Plan for MeshCore to later expose setup(config), tick(), recv(), send(msg), shutdown().
+Inside FromRadio.channel:
+- index = field 1, varint, tag 0x08
+- settings = field 2, length-delimited, tag 0x12
 
-Testing:
-- Add debug logging for connect, disconnect, reconnect, decode, packet drop reason, and send result.
-- Add mock/dry-run decode tests if practical.
-- Confirm text RX/TX, broadcast, direct message if supported, reconnect, and unsupported/encrypted packet handling.
+Inside settings:
+- name = field 3, length-delimited string, tag 0x1A
+- psk = field 4, length-delimited bytes, tag 0x22
 
-Do not remove APRS, AREDN, or current MeshCore functionality.
-Keep changes focused and reviewable.
-Commit message: Add Meshtastic TCP Port-API backend
+Important:
+Do not use older or generic Meshtastic field assumptions. Do not treat FromRadio.channel as field 3. Do not treat ToRadio.packet as field 2.
+
+Implementation tasks:
+1. Fix meshtastic_API.uc built-in envelope protos.
+2. Add defensive local TLV helpers: readVarint, readLenDelimited, skipField, extractChannels.
+3. Extract channel index, name, and PSK from FromRadio.channel.
+4. Add runtime discoveredChannels map.
+5. Convert discovered channels to Crow-compatible namekey form but do not persist or overwrite operator config.
+6. Send ToRadio.want_config_id on connect when channel_discovery is true.
+7. Intercept FromRadio.channel and config_complete_id in decodeFromRadio.
+8. Add periodic read-only refresh using Crow timers.
+9. Do not implement push/write sync yet; add TODOs only.
+10. Limit logging and never print raw PSKs.
+11. Add tests for TLV parser, want_config frame generation, and packet RX/TX preservation.
+
+Docs:
+After code is working, update Crow.wik/Meshtastic-API.md:
+- read-only channel discovery supported when explicitly enabled
+- periodic read-only refresh supported
+- persistent channel sync not supported yet
+- bidirectional writes are future work
+
+Commit message:
+Add read-only Meshtastic API channel discovery
 ```
 
-## Validation checklist
+## Release/merge checks
 
 ```sh
-# Inspect Meshtastic/MeshCore separation
-grep -n "meshcore" meshtastic*.uc
-grep -n "meshtastic" meshcore*.uc
+# Backend separation
+grep -n "meshtastic_API" router.uc
+grep -n "channel_discovery\|want_config_id\|0x52\|0x18" meshtastic_API.uc
+grep -n "fromradio\|toradio" meshtasticprotobufs.uc
 
 # Static syntax where available
+ucode -R -L . meshtastic_API.uc
 ucode -R -L . meshtastic.uc
 
 # Package scripts
 sh -n platforms/aredn/build.sh platforms/aredn/postinst platforms/aredn/postinstall platforms/aredn/postupgrade platforms/aredn/prerm
 ```
 
-Manual field checks:
+Expected:
 
-- Meshtastic node Wi-Fi or LAN IP reachable.
-- TCP port `4403` reachable from Crow host.
-- Crow reconnects after Meshtastic node reboot.
-- Inbound text appears once, not duplicated.
-- Outbound text sends once, not looped back incorrectly.
-- Unsupported/encrypted packet is dropped/logged safely.
-- Strict gatekeeper drop/allow behavior is visible in logs.
+- `router.uc` is not switched to `meshtastic_API.uc` by default.
+- `meshtastic.uc` remains UDP/multicast.
+- `meshtastic_API.uc` contains discovery code only when explicitly enabled.
+- `meshtasticprotobufs.uc` does not register TCP API-only envelopes into the old UDP backend.
+- No persistent Crow config files are modified by discovery.
