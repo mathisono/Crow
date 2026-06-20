@@ -14,9 +14,20 @@ const PORTAPI_MAGIC1 = 0xc3;
 const PORTAPI_MAX_FRAME = 8192;
 const SAVE_INTERVAL = 19 * 60; // 19 minutes
 const RECONNECT_INTERVAL = 15;
+const DEFAULT_CHANNEL_REFRESH = 600;
 const BITFIELD_MQTT_OKAY = 1;
 const TRANSPORT_MECHANISM_TCP = 8;
 const MAX_TEXT_MESSAGE_LENGTH = 200;
+
+const FROMRADIO_PACKET_TAG = 0x12;
+const FROMRADIO_CONFIG_COMPLETE_ID_TAG = 0x38;
+const FROMRADIO_CHANNEL_TAG = 0x52;
+const TORADIO_PACKET_TAG = 0x0a;
+const TORADIO_WANT_CONFIG_ID_TAG = 0x18;
+const CHANNEL_INDEX_TAG = 0x08;
+const CHANNEL_SETTINGS_TAG = 0x12;
+const CHANNEL_SETTINGS_NAME_TAG = 0x1a;
+const CHANNEL_SETTINGS_PSK_TAG = 0x22;
 
 let s = null;
 let cfg = null;
@@ -33,6 +44,12 @@ let gatekeeper = null;
 let callsign = null;
 let dirty = false;
 let builtinProtos = false;
+let channelDiscovery = false;
+let channelSync = "off";
+let channelRefreshSeconds = DEFAULT_CHANNEL_REFRESH;
+let lastConfigRequestId = 0;
+let configRequestSeq = 0;
+let discoveredChannels = {};
 export let enabled = false;
 
 export function registerProto(name, portnum, decode)
@@ -74,11 +91,22 @@ function registerBuiltinProtos()
         "20": "uint32 tx_after",
         "21": "enum transport_mechanism"
     });
+    registerProto("channelsettings", null, {
+        "3": "string name",
+        "4": "bytes psk"
+    });
+    registerProto("channel", null, {
+        "1": "uint32 index",
+        "2": "proto channelsettings settings"
+    });
     registerProto("fromradio", null, {
-        "6": "proto packet packet"
+        "2": "proto packet packet",
+        "7": "uint32 config_complete_id",
+        "10": "proto channel channel"
     });
     registerProto("toradio", null, {
-        "2": "proto packet packet"
+        "1": "proto packet packet",
+        "3": "uint32 want_config_id"
     });
     registerProto("data", null, {
         "1": "enum portnum",
@@ -98,6 +126,16 @@ let sharedKeys = {};
 function log0(fmt, ...args)
 {
     DEBUG0("meshtastic_API: " + fmt, ...args);
+}
+
+function log1(fmt, ...args)
+{
+    DEBUG1("meshtastic_API: " + fmt, ...args);
+}
+
+function log2(fmt, ...args)
+{
+    DEBUG2("meshtastic_API: " + fmt, ...args);
 }
 
 function getSharedKey(priv, pub)
@@ -226,6 +264,309 @@ function extractPortApiFrames(data)
     }
 }
 
+function encodeVarint(v)
+{
+    let out = "";
+    v = v ?? 0;
+    for (;;) {
+        let b = v & 0x7f;
+        v = v >> 7;
+        if (v) {
+            out += chr(b | 0x80);
+        }
+        else {
+            out += chr(b);
+            return out;
+        }
+    }
+}
+
+function readVarint(buf, off)
+{
+    let value = 0;
+    let shift = 0;
+    for (let i = 0; i < 10; i++) {
+        if (off + i >= length(buf)) {
+            log2("tlv: truncated varint at off=%d\n", off);
+            return null;
+        }
+        const b = ord(buf, off + i);
+        value |= (b & 0x7f) << shift;
+        if (!(b & 0x80)) {
+            return { value: value, off: off + i + 1 };
+        }
+        shift += 7;
+    }
+    log2("tlv: overlong varint at off=%d\n", off);
+    return null;
+}
+
+function readLenDelimited(buf, off)
+{
+    const l = readVarint(buf, off);
+    if (!l) {
+        return null;
+    }
+    if (l.value < 0 || l.off + l.value > length(buf)) {
+        log2("tlv: bad length-delimited field off=%d len=%d remaining=%d\n", off, l.value, length(buf) - l.off);
+        return null;
+    }
+    return { data: substr(buf, l.off, l.value), off: l.off + l.value, len: l.value };
+}
+
+function skipField(buf, off, wire_type)
+{
+    switch (wire_type) {
+        case 0:
+        {
+            const v = readVarint(buf, off);
+            return v ? v.off : null;
+        }
+        case 2:
+        {
+            const d = readLenDelimited(buf, off);
+            return d ? d.off : null;
+        }
+        default:
+            log2("tlv: unsupported wire type %d at off=%d\n", wire_type, off);
+            return null;
+    }
+}
+
+function decodeChannelSettings(buf)
+{
+    let off = 0;
+    let name = null;
+    let psk = null;
+
+    while (off < length(buf)) {
+        const k = readVarint(buf, off);
+        if (!k) {
+            return { name: name, psk: psk };
+        }
+        off = k.off;
+        const tag = k.value;
+        const wire = tag & 7;
+
+        if (tag === CHANNEL_SETTINGS_NAME_TAG && wire === 2) {
+            const d = readLenDelimited(buf, off);
+            if (!d) {
+                return { name: name, psk: psk };
+            }
+            name = d.data;
+            off = d.off;
+        }
+        else if (tag === CHANNEL_SETTINGS_PSK_TAG && wire === 2) {
+            const d = readLenDelimited(buf, off);
+            if (!d) {
+                return { name: name, psk: psk };
+            }
+            psk = d.data;
+            off = d.off;
+        }
+        else {
+            const noff = skipField(buf, off, wire);
+            if (noff === null) {
+                return { name: name, psk: psk };
+            }
+            log2("tlv: skip channelsettings tag=0x%02x wire=%d len=%d\n", tag, wire, noff - off);
+            off = noff;
+        }
+    }
+    return { name: name, psk: psk };
+}
+
+function decodeChannelProto(buf)
+{
+    let off = 0;
+    let index = null;
+    let settings = null;
+
+    while (off < length(buf)) {
+        const k = readVarint(buf, off);
+        if (!k) {
+            break;
+        }
+        off = k.off;
+        const tag = k.value;
+        const wire = tag & 7;
+
+        if (tag === CHANNEL_INDEX_TAG && wire === 0) {
+            const v = readVarint(buf, off);
+            if (!v) {
+                break;
+            }
+            index = v.value;
+            off = v.off;
+        }
+        else if (tag === CHANNEL_SETTINGS_TAG && wire === 2) {
+            const d = readLenDelimited(buf, off);
+            if (!d) {
+                break;
+            }
+            settings = decodeChannelSettings(d.data);
+            off = d.off;
+        }
+        else {
+            const noff = skipField(buf, off, wire);
+            if (noff === null) {
+                break;
+            }
+            log2("tlv: skip channel tag=0x%02x wire=%d len=%d\n", tag, wire, noff - off);
+            off = noff;
+        }
+    }
+
+    const name = settings?.name;
+    const psk = settings?.psk;
+    if (index === null || !name || !psk) {
+        return null;
+    }
+    if (length(name) === 0 || length(psk) === 0) {
+        return null;
+    }
+    const psk_b64 = b64enc(psk);
+    return {
+        index: index,
+        name: name,
+        psk: psk,
+        psk_b64: psk_b64,
+        namekey: `${name} ${psk_b64}`
+    };
+}
+
+function extractChannels(buf)
+{
+    const channels = [];
+    let off = 0;
+
+    while (off < length(buf)) {
+        const k = readVarint(buf, off);
+        if (!k) {
+            return channels;
+        }
+        off = k.off;
+        const tag = k.value;
+        const wire = tag & 7;
+
+        if (tag === FROMRADIO_CHANNEL_TAG && wire === 2) {
+            const d = readLenDelimited(buf, off);
+            if (!d) {
+                return channels;
+            }
+            const ch = decodeChannelProto(d.data);
+            if (ch) {
+                push(channels, ch);
+            }
+            off = d.off;
+        }
+        else {
+            const noff = skipField(buf, off, wire);
+            if (noff === null) {
+                return channels;
+            }
+            log2("tlv: skip fromradio tag=0x%02x wire=%d len=%d\n", tag, wire, noff - off);
+            off = noff;
+        }
+    }
+    return channels;
+}
+
+function extractConfigCompleteId(buf)
+{
+    let off = 0;
+    let id = null;
+    while (off < length(buf)) {
+        const k = readVarint(buf, off);
+        if (!k) {
+            return id;
+        }
+        off = k.off;
+        const tag = k.value;
+        const wire = tag & 7;
+        if (tag === FROMRADIO_CONFIG_COMPLETE_ID_TAG && wire === 0) {
+            const v = readVarint(buf, off);
+            if (!v) {
+                return id;
+            }
+            id = v.value;
+            off = v.off;
+        }
+        else {
+            const noff = skipField(buf, off, wire);
+            if (noff === null) {
+                return id;
+            }
+            off = noff;
+        }
+    }
+    return id;
+}
+
+function channelFingerprint(psk)
+{
+    const h = crypto.sha256hash(psk);
+    return b64enc(substr(h, 0, 4));
+}
+
+function updateDiscoveredChannel(ch)
+{
+    if (!ch || ch.index === null || !ch.name || !ch.psk) {
+        return;
+    }
+    const key = `${ch.index}`;
+    const old = discoveredChannels[key];
+    const fp = channelFingerprint(ch.psk);
+    if (!old) {
+        discoveredChannels[key] = ch;
+        log1("channel discovered index=%d name=%s pskfp=%s\n", ch.index, ch.name, fp);
+        // TODO: If Crow grows a safe incremental runtime remote-channel helper,
+        // register ch.namekey there. Do not mutate config.channels or write files here.
+    }
+    else if (old.name !== ch.name || old.psk_b64 !== ch.psk_b64) {
+        discoveredChannels[key] = ch;
+        log1("channel updated index=%d name=%s pskfp=%s\n", ch.index, ch.name, fp);
+    }
+}
+
+function processDiscoveredChannels(buf)
+{
+    const chans = extractChannels(buf);
+    for (let i = 0; i < length(chans); i++) {
+        updateDiscoveredChannel(chans[i]);
+    }
+    const complete = extractConfigCompleteId(buf);
+    if (complete !== null) {
+        log1("config complete id=%d last_request=%d\n", complete, lastConfigRequestId);
+    }
+    return length(chans) > 0 || complete !== null;
+}
+
+function buildWantConfigId(id)
+{
+    return portApiFrame(chr(TORADIO_WANT_CONFIG_ID_TAG) + encodeVarint(id));
+}
+
+function requestConfig(reason)
+{
+    if (!channelDiscovery || !s) {
+        return false;
+    }
+    configRequestSeq = (configRequestSeq + 1) & 0x7fffffff;
+    if (!configRequestSeq) {
+        configRequestSeq = 1;
+    }
+    lastConfigRequestId = configRequestSeq;
+    const r = writeSocket(buildWantConfigId(lastConfigRequestId));
+    if (r) {
+        log1("config request sent id=%d reason=%s\n", lastConfigRequestId, reason ?? "unknown");
+    }
+    else {
+        log0("config request failed id=%d reason=%s\n", lastConfigRequestId, reason ?? "unknown");
+    }
+    return r;
+}
+
 function decodePacketData(msg)
 {
     if (msg.decoded) {
@@ -312,6 +653,10 @@ function decodePacket(pkt)
 
 function decodeFromRadio(payload)
 {
+    if (processDiscoveredChannels(payload)) {
+        return null;
+    }
+
     const fromradio = protobuf.decode(protos, "fromradio", payload);
     if (fromradio?.packet) {
         return decodePacketObject(fromradio.packet);
@@ -390,11 +735,25 @@ export function setup(config)
     gatekeeper = config._gatekeeper;
     tcpHost = cfg.host;
     tcpPort = cfg.port ?? DEFAULT_PORT;
+    channelDiscovery = !!cfg.channel_discovery;
+    channelSync = cfg.channel_sync ?? "off";
+    channelRefreshSeconds = cfg.channel_refresh_seconds ?? DEFAULT_CHANNEL_REFRESH;
+
+    if (channelSync !== "off" && channelSync !== "read_only") {
+        log0("unsupported channel_sync mode %s; forcing off\n", channelSync);
+        channelSync = "off";
+    }
 
     s = openTcp();
+    if (s && channelDiscovery) {
+        requestConfig("connect");
+    }
     timers.setInterval("meshtastic_API.reconnect", RECONNECT_INTERVAL);
     loadSharedKeys();
     timers.setInterval("meshtastic_API.save", SAVE_INTERVAL);
+    if (channelDiscovery) {
+        timers.setInterval("meshtastic_API.channel_refresh", channelRefreshSeconds);
+    }
 };
 
 export function shutdown()
@@ -559,9 +918,22 @@ export function tick()
     }
     if (!s && timers.tick("meshtastic_API.reconnect")) {
         s = openTcp();
+        if (s && channelDiscovery) {
+            requestConfig("connect");
+        }
+    }
+    if (s && channelDiscovery && timers.tick("meshtastic_API.channel_refresh")) {
+        requestConfig("refresh");
     }
 };
 
 export function process(msg)
 {
 };
+
+// TODO future write support, deliberately not implemented in this read-only pass:
+// - encodeChannelProto(index, name, psk)
+// - admin/channel-set request
+// - firmware compatibility testing
+// - ACK/config-complete verification
+// - operator confirmation before changing radio config
