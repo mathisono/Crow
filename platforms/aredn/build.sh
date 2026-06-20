@@ -25,6 +25,7 @@ cp $SRC/crypto/*.uc $ROOT/data/usr/local/crow/crypto/
 cp $SRC/platforms/aredn/*.uc $ROOT/data/usr/local/crow/platforms/aredn/
 cp $SRC/platforms/aredn/raven.conf $ROOT/data/usr/local/crow/crow.conf
 cp $SRC/platforms/aredn/crow-migrate-raven.sh $ROOT/data/usr/local/crow/platforms/aredn/crow-migrate-raven.sh
+cp $SRC/platforms/aredn/crow-runner.sh $ROOT/data/usr/local/crow/platforms/aredn/crow-runner.sh
 echo "export const version = '${VERSION}';" > $ROOT/data/usr/local/crow/version.uc
 
 cp $SRC/ui/ui.js $SRC/ui/ui.css $SRC/ui/crow.svg $ROOT/data/www/apps/crow/
@@ -40,6 +41,7 @@ cp $SRC/platforms/aredn/upgrade.conf $ROOT/data/etc/arednsysupgrade.d/crow.conf
 
 chmod 755 $ROOT/data/etc/local/mesh-firewall/21-crow
 chmod 755 $ROOT/data/www/apps/crow/* $ROOT/data/www/cgi-bin/apps/crow/admin $ROOT/data/www/cgi-bin/apps/crow/image
+chmod 755 $ROOT/data/usr/local/crow/platforms/aredn/crow-runner.sh $ROOT/data/usr/local/crow/platforms/aredn/crow-migrate-raven.sh
 
 mkdir -p $ROOT/data/usr/local/crow/winlink/forms
 cp -R $SRC/winlink/forms/* $ROOT/data/usr/local/crow/winlink/forms
