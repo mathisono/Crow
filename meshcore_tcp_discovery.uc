@@ -266,7 +266,8 @@ function keysEqual(key1, key2)
 
 function getCachedGroup(slot)
 {
-    for (let g of cachedGroups) {
+    for (let i = 0; i < length(cachedGroups); i++) {
+        const g = cachedGroups[i];
         if (g.slot === slot) return g;
     }
     return null;
@@ -275,7 +276,8 @@ function getCachedGroup(slot)
 function detectNewGroups(current)
 {
     // Find groups in current that aren't in cached
-    for (let group of current) {
+    for (let i = 0; i < length(current); i++) {
+        const group = current[i];
         const cached = getCachedGroup(group.slot);
         
         if (!cached) {
@@ -292,9 +294,11 @@ function detectNewGroups(current)
 function detectDeletedGroups(current)
 {
     // Find groups in cached that aren't in current
-    for (let cached of cachedGroups) {
-        const currentGroup = null;
-        for (let g of current) {
+    for (let i = 0; i < length(cachedGroups); i++) {
+        const cached = cachedGroups[i];
+        let currentGroup = null;
+        for (let j = 0; j < length(current); j++) {
+            const g = current[j];
             if (g.slot === cached.slot) {
                 currentGroup = g;
                 break;
@@ -315,7 +319,8 @@ function detectDeletedGroups(current)
 function detectKeyChanges(current)
 {
     // Find groups with changed keys
-    for (let group of current) {
+    for (let i = 0; i < length(current); i++) {
+        const group = current[i];
         const cached = getCachedGroup(group.slot);
         
         if (cached && !keysEqual(group.key, cached.key)) {
@@ -486,7 +491,8 @@ export function startup()
     log1("initial discovery...\\n");
     const groups = queryDeviceGroups();
     
-    for (let group of groups) {
+    for (let i = 0; i < length(groups); i++) {
+        const group = groups[i];
         autoDiscoverGroup(group);
     }
     

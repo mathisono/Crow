@@ -245,7 +245,8 @@ function matchCallsignPattern(callsign, patterns)
         return true;  // No restrictions
     }
     
-    for (let pattern of patterns) {
+    for (let i = 0; i < length(patterns); i++) {
+        const pattern = patterns[i];
         if (simpleWildcardMatch(callsign, pattern)) {
             return true;
         }
