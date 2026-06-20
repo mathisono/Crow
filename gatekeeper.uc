@@ -23,7 +23,8 @@ function norm(s)
 
     // Accept a callsign only when it is the leading identity token, such as
     // "KJ6DZB mobile" or "KJ6DZB-7". Do not accept arbitrary embedded text.
-    const m = match(s, /^([A-Z]{1,2}[0-9][A-Z]{1,3})(?:[-/ ][A-Z0-9 _.-]*)?$/);
+    // AREDN ucode regex compatibility: avoid non-capturing groups (?:...)
+    const m = match(s, /^([A-Z]{1,2}[0-9][A-Z]{1,3})([-/ ][A-Z0-9 _.-]*)?$/);
     return m ? m[1] : null;
 };
 
