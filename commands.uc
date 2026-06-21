@@ -39,7 +39,7 @@ function getPublicChannels()
             push(channels, `<div class="cj">${split(namekey, " ")[0]}</div>`);
         }
         else if (ord(namekey) === 35 /* # */ || ord(namekey) === 37 /* % */ || channel.isAREDNOnly(namekey)) {
-            push(channels, `<div class="cj" onclick='cmd("/channels join ${namekey}")'>${split(namekey, " ")[0]}</div>`);
+            push(channels, `<div class="cj" onclick='cmd("/channels join ${namekey}")'>${namekey}</div>`);
         }
     }
     return sort(channels);
@@ -181,7 +181,64 @@ function backendStatusReply()
 export function post(cmd, id)
 {
     switch (cmd[0]) {
-        case "join":
+        // ----- New short‑form join commands (MeshCore / Meshtastic) -----
+        case "MC":
+            {
+                const name = cmd[1];
+                if (!name) { break; }
+                // Build the key as for a standard MeshCore channel
+                const key = b64enc(struct.pack("16B", ...crypto.sha256hash(name)));
+                const namekey = `${name} ${key}`;
+                // Reuse existing logic to add channel if not present
+                const currchannels = currentChannelsAsSettings();
+                let exists = false;
+                for (let i=0; i<length(currchannels); i++) {
+                    if (currchannels[i].namekey === namekey) { exists=true; break; }
+                }
+                if (!exists) {
+                    event.queue({ cmd: "newchannels", channels: [...currchannels, { namekey, max:100, badge:true, images:false, telemetry:false, winlink:false } ] });
+                    event.queue({ cmd: "/reply", reply: [ `Joined MeshCore channel ${name}` ], socket: id });
+                }
+            }
+            break;
+        case "MT":
+            {
+                const name = cmd[1];
+                if (!name) { break; }
+                // For Meshtastic we use the same key generation as MeshCore
+                const key = b64enc(struct.pack("16B", ...crypto.sha256hash(name)));
+                const namekey = `${name} ${key}`;
+                const currchannels = currentChannelsAsSettings();
+                let exists = false;
+                for (let i=0; i<length(currchannels); i++) {
+                    if (currchannels[i].namekey === namekey) { exists=true; break; }
+                }
+                if (!exists) {
+                    event.queue({ cmd: "newchannels", channels: [...currchannels, { namekey, max:100, badge:true, images:false, telemetry:false, winlink:false } ] });
+                    event.queue({ cmd: "/reply", reply: [ `Joined Meshtastic channel ${name}` ], socket: id });
+                }
+            }
+            break;
+        case "leave":
+            {
+                const name = cmd[1];
+                if (!name) { break; }
+                // Support leaving via MC or MT as well
+                let key = null;
+                if (cmd.length > 2 && cmd[2] === "MC") {
+                    key = b64enc(struct.pack("16B", ...crypto.sha256hash(name)));
+                } else if (cmd.length > 2 && cmd[2] === "MT") {
+                    key = b64enc(struct.pack("16B", ...crypto.sha256hash(name)));
+                }
+                const namekey = `${name} ${key}`;
+                const currchannels = channel.getAllLocalChannels();
+                const newchannels = filter(currchannels, c => !c.namekey.startsWith(`${name} `));
+                if (length(currchannels) !== length(newchannels)) {
+                    event.queue({ cmd: "newchannels", channels: map(newchannels, c=>{ const s=textmessage.state(c.namekey); return { namekey:c.namekey,max:s.max,badge:s.badge,images:s.images,telemetry:s.telemetry,winlink:s.winlink } }) });
+                    event.queue({ cmd: "/reply", reply: [ `Left channel ${name}` ], socket: id });
+                }
+            }
+            break;
         {
             const parsed = groups.parseJoinArgs(slice(cmd, 1));
             if (!parsed) {
