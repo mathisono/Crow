@@ -279,6 +279,33 @@ function htmlNodeDetail(node)
 }
 
 
+function renderChannelsList(rawHtml)
+{
+    // Parse channels list HTML and rebuild with safe event handlers
+    const parser = new DOMParser();
+    try {
+        const doc = parser.parseFromString(rawHtml, 'text/html');
+        const divs = doc.querySelectorAll('div.cj');
+        if (divs.length === 0) {
+            return null; // Not a channels list
+        }
+        
+        const result = [];
+        for (const div of divs) {
+            const text = div.textContent || '';
+            const onclick = div.getAttribute('onclick') || '';
+            // Extract channel name from text
+            const channelName = text.trim();
+            // Safely re-render the element
+            result.push(`<div class="cj" onclick="${attr(onclick)}">${esc(channelName)}</div>`);
+        }
+        
+        return result.length > 0 ? result.join('') : null;
+    } catch (e) {
+        return null;
+    }
+}
+
 function htmlText(text, useimage)
 {
     let n = nodes[text.from];
@@ -342,15 +369,24 @@ function htmlText(text, useimage)
         }
     }
     if (!textmsg) {
-        textmsg = `<div class="b"><div class="ack ${text.ack ? 'true' : ''}"></div><div class="t">`
-            + linkifyEscaped(plaintext)
-            + '</div><a href="#" class="re" onclick="setupReply(event)">Reply</a></div>';
+        // Check if this is a channels list output
+        const rawText = String(text.text ?? '').trim();
+        const channelsListHtml = (rawText.indexOf('<div class="cj"') >= 0) ? renderChannelsList(rawText) : null;
+        
+        if (channelsListHtml) {
+            textmsg = `<div class="b"><div class="ack ${text.ack ? 'true' : ''}"></div><div class="t">${channelsListHtml}</div><a href="#" class="re" onclick="setupReply(event)">Reply</a></div>`;
+        } else {
+            textmsg = `<div class="b"><div class="ack ${text.ack ? 'true' : ''}"></div><div class="t">`
+                + linkifyEscaped(plaintext)
+                + '</div><a href="#" class="re" onclick="setupReply(event)">Reply</a></div>';
+        }
     }
     const textId = safeInt(text.id);
     const isMe = safeInt(n.num, null) === safeInt(me.num, undefined);
     const ownerClass = isMe ? `me ${safeClass(me.align)}` : '';
     const platform = safeClass(n.platform);
-    return `<div id="${attr(textId)}" class="text ${ownerClass} ${platform}">
+    const textClass = (String(text.text ?? '').indexOf('<div class="cj"') >= 0) ? 'command' : '';
+    return `<div id="${attr(textId)}" class="text ${ownerClass} ${platform} ${textClass}">
         ${reply}
         <div>
             <div class="s" style="color:${attr(n.colors.fcolor)};background-color:${attr(n.colors.bcolor)}">${esc(n.short_name)}</div>
@@ -366,7 +402,12 @@ function htmlText(text, useimage)
 
 function htmlCommand(reply)
 {
-    const lines = reply.map(line => `<div>${esc(line)}</div>`).join("");
+    const commandMarkup = line => esc(line)
+        .replaceAll('&lt;b&gt;', '<b>')
+        .replaceAll('&lt;/b&gt;', '</b>')
+        .replaceAll('&amp;nbsp;', '&nbsp;')
+        .replaceAll('&amp;mdash;', '&mdash;');
+    const lines = reply.map(line => `<div>${commandMarkup(line)}</div>`).join("");
     return `<div class="text me command ${safeClass(me.align)}">
         <div>
             <div class="s"></div>
@@ -633,6 +674,9 @@ function updateTexts(msg)
 {
     clearTimeout(updateTextTimeout);
     const channel = getChannel(msg.namekey);
+    if (!channel) {
+        return;
+    }
     channel.state = msg.state;
     resetPost(false);
     const t = I("texts");
@@ -642,7 +686,12 @@ function updateTexts(msg)
     if (channel.state.cursor) {
         const item = (focusid && I(focusid)) || I(channel.state.cursor);
         focusid = null;
-        item.scrollIntoView({ behavior: "instant", block: "end", inline: "nearest" });
+        if (!item) {
+            channel.state.cursor = null;
+        }
+        else {
+            item.scrollIntoView({ behavior: "instant", block: "end", inline: "nearest" });
+        }
         for (let txt = t.firstElementChild; txt; txt = txt.nextSibling) {
             if (txt.id == channel.state.cursor) {
                 for (txt = txt.nextSibling; txt; txt = txt.nextSibling) {
@@ -652,7 +701,7 @@ function updateTexts(msg)
             }
         }
     }
-    else if (t.firstElementChild) {
+    if (!channel.state.cursor && t.firstElementChild) {
         const container = t.getBoundingClientRect();
         function onScreen(e)
         {
@@ -662,8 +711,8 @@ function updateTexts(msg)
         t.firstElementChild.scrollIntoView({ behavior: "instant", block: "start", inline: "nearest" });
         for (let txt = t.firstElementChild; txt; txt = txt.nextSibling) {
             if (onScreen(txt)) {
-                channel.state.count--;
-                channel.state.cursor = parseInt(txt.id)
+                channel.state.count = Math.max(0, channel.state.count - 1);
+                channel.state.cursor = parseInt(txt.id);
             }
             else {
                 textObs.observe(txt);
@@ -729,6 +778,7 @@ function commandReply(msg)
 
 function toggleFav(event, nodenum)
 {
+    event.stopPropagation();
     const node = nodes[nodenum];
     if (node) {
         node.favorite = !node.favorite;
@@ -744,6 +794,15 @@ function toggleFav(event, nodenum)
         }
         send({ cmd: "fav", id: nodenum, favorite: node.favorite });
     }
+}
+
+function selectFromClick(event)
+{
+    const item = event.target.closest("[data-namekey]");
+    if (!item || !item.closest("#left")) {
+        return;
+    }
+    showNamekey(item.dataset.namekey);
 }
 
 function cmd(text)
@@ -1296,6 +1355,8 @@ function showNamekey(namekey)
                 setTimeout(_ => send({ cmd: "winshow", namekey: pnamekey, id: id }), 500);
             }
             else {
+                I("texts").innerHTML = "";
+                resetPost(false);
                 if (isDirect(namekey)) {
                     addDirect(namekey);
                     send({ cmd: "fullnode", id: namekey.split(" ")[1] });
@@ -1303,11 +1364,6 @@ function showNamekey(namekey)
                 }
                 send({ cmd: "texts", namekey: namekey });
             }
-            clearTimeout(updateTextTimeout);
-            updateTextTimeout = setTimeout(_ => {
-                I("texts").innerHTML = "";
-                resetPost(false);
-            }, 500);
         }
     }
 }
@@ -1360,14 +1416,20 @@ function startup()
                     updateFavorites(msg);
                     break;
                 case "channels":
-                    if (!rightSelection) {
-                        rightSelection = msg.channels[0].namekey;
-                    }
+                {
+                    const selectFirst = !rightSelection;
                     updateChannels(msg);
-                    if (rightSelection.indexOf("DirectMessages ") === -1 && !msg.channels.find(c => c.namekey === rightSelection)) {
-                        showNamekey(msg.channels[0].namekey)
+                    if (msg.channels.length === 0) {
+                        break;
+                    }
+                    if (selectFirst) {
+                        showNamekey(msg.channels[0].namekey);
+                    }
+                    else if (rightSelection.indexOf("DirectMessages ") === -1 && !msg.channels.find(c => c.namekey === rightSelection)) {
+                        showNamekey(msg.channels[0].namekey);
                     }
                     break;
+                }
                 case "texts":
                     if (rightSelection == msg.namekey) {
                         updateTexts(msg);
@@ -1445,4 +1507,5 @@ function startup()
     });
 }
 
+document.addEventListener("click", selectFromClick);
 document.addEventListener("DOMContentLoaded", startup);
