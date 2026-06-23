@@ -292,12 +292,14 @@ function renderChannelsList(rawHtml)
         
         const result = [];
         for (const div of divs) {
-            const text = div.textContent || '';
+            const channelName = div.textContent || '';
             const onclick = div.getAttribute('onclick') || '';
-            // Extract channel name from text
-            const channelName = text.trim();
-            // Safely re-render the element
-            result.push(`<div class="cj" onclick="${attr(onclick)}">${esc(channelName)}</div>`);
+            // Safely re-render: escape channel name, preserve onclick command
+            if (onclick) {
+                result.push(`<div class="cj" onclick='${onclick.replace(/'/g, "&#39;")}">${esc(channelName)}</div>`);
+            } else {
+                result.push(`<div class="cj">${esc(channelName)}</div>`);
+            }
         }
         
         return result.length > 0 ? result.join('') : null;
@@ -330,6 +332,10 @@ function htmlText(text, useimage)
             };
         }
     }
+    // Check for channels list HTML BEFORE escaping
+    const rawText = String(text.text ?? '');
+    const isChannelsList = rawText.indexOf('<div class="cj"') >= 0;
+    
     let plaintext = T(text.text);
     let reply = "";
     if (text.replyid) {
@@ -338,7 +344,7 @@ function htmlText(text, useimage)
             reply = `<div class="r"><div>${T(r.text.replace(/\n/g," "))}</div></div>`;
         }
     }
-    else if (plaintext.indexOf("@[") === 0) {
+    else if (!isChannelsList && plaintext.indexOf("@[") === 0) {
         const rs = [];
         while (plaintext.indexOf("@[") === 0) {
             const end = plaintext.indexOf("]");
@@ -369,11 +375,8 @@ function htmlText(text, useimage)
         }
     }
     if (!textmsg) {
-        // Check if this is a channels list output
-        const rawText = String(text.text ?? '').trim();
-        const channelsListHtml = (rawText.indexOf('<div class="cj"') >= 0) ? renderChannelsList(rawText) : null;
-        
-        if (channelsListHtml) {
+        if (isChannelsList) {
+            const channelsListHtml = renderChannelsList(rawText);
             textmsg = `<div class="b"><div class="ack ${text.ack ? 'true' : ''}"></div><div class="t">${channelsListHtml}</div><a href="#" class="re" onclick="setupReply(event)">Reply</a></div>`;
         } else {
             textmsg = `<div class="b"><div class="ack ${text.ack ? 'true' : ''}"></div><div class="t">`
@@ -385,7 +388,7 @@ function htmlText(text, useimage)
     const isMe = safeInt(n.num, null) === safeInt(me.num, undefined);
     const ownerClass = isMe ? `me ${safeClass(me.align)}` : '';
     const platform = safeClass(n.platform);
-    const textClass = (String(text.text ?? '').indexOf('<div class="cj"') >= 0) ? 'command' : '';
+    const textClass = isChannelsList ? 'command' : '';
     return `<div id="${attr(textId)}" class="text ${ownerClass} ${platform} ${textClass}">
         ${reply}
         <div>
