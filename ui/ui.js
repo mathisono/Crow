@@ -296,7 +296,7 @@ function renderChannelsList(rawHtml)
             const onclick = div.getAttribute('onclick') || '';
             // Safely re-render: escape channel name, preserve onclick command
             if (onclick) {
-                result.push(`<div class="cj" onclick='${onclick.replace(/'/g, "&#39;")}">${esc(channelName)}</div>`);
+                result.push(`<div class="cj" onclick='${onclick.replace(/'/g, "&#39;")}'>${esc(channelName)}</div>`);
             } else {
                 result.push(`<div class="cj">${esc(channelName)}</div>`);
             }
