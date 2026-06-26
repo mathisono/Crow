@@ -5,7 +5,7 @@
 # Installs the kernel modules and tools needed for USB mass storage
 # on AREDN nodes. Run once before using /storage usb commands.
 #
-# Usage: sh /usr/local/raven/platforms/aredn/usb-setup.sh [format <device>]
+# Usage: sh /usr/local/crow/platforms/aredn/usb-setup.sh [format <device>]
 #
 #   sh usb-setup.sh            — install USB packages only
 #   sh usb-setup.sh format     — install packages + format first USB drive as ext4
