@@ -6,8 +6,6 @@ Crow is the upgraded Raven!!! Crow has add fetures. Crow is a decentralized mesh
 
 Send mesages, share a file, have group chats with your APRS stations. Dose your AREDN node have a USB port? Use it for file storage. 
 
-Documentation can be found here [https://github.com/mathison/Crow/wiki](https://github.com/mathisono/Crow/wiki)
+Documentation can be found here [https://github.com/mathisono/Crow/wiki](https://github.com/mathisono/Crow/wiki)
 
 The name APRS™ (Automatic Packet Reporting System) is a registered trademark originally held by its creator, the late Bob Bruninga (WB4APR).
-
-
