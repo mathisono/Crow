@@ -2,43 +2,26 @@
 // meshcore_tcp_api.uc
 // =====================================================================
 //
-// Crow MeshCore TCP Companion API backend — text-message bridge only.
+// Crow MeshCore TCP / Serial-WiFi backend — text-message bridge scaffold.
 //
-// Speaks the MeshCore Companion Protocol over TCP (default 127.0.0.1:4403),
-// the same binary protocol used by MeshMonitor. This is NOT Meshtastic's
-// port 4403 (which streams raw protobufs). MeshCore Companion frames:
+// This file uses the stock MeshCore serial/Wi-Fi outer framing:
 //
-//     [ Magic=0x3E ][ CmdID ][ PayloadLen (2 bytes BE) ][ Payload ... ]
+//     Radio -> client: [ '>' ][ length LSB ][ length MSB ][ frame payload ]
+//     Client -> radio: [ '<' ][ length LSB ][ length MSB ][ frame payload ]
 //
-// Scope: this backend ONLY surfaces cleartext text messages (TXT_MSG +
-// GRP_TXT) into the Crow router. Every other frame — handshake responses,
-// adverts, encrypted blobs, unknown commands — is dropped at the buffer
-// layer without payload allocation. This minimises RAM exposure on
-// OpenWrt nodes and keeps the regulatory surface tight (FCC Part 97).
+// The frame payload begins with the MeshCore command/response/push code.
+// This is NOT Meshtastic's port 4403 protocol.
 //
-// Design pillars:
+// Receive model:
 //
-//   1. Non-blocking ucode socket integrated with Crow's timer-driven
-//      recv/send loop (same shape as meshtastic_API.uc).
-//   2. "Smart Accumulator" — Strict Gatekeeper / Part 97 rules are
-//      enforced AT the buffer level. Oversized frames, encrypted payload
-//      types, and any command outside { TXT_MSG, GRP_TXT } are skipped
-//      from the wire BEFORE allocating a payload buffer.
-//   3. MeshMonitor-style boot handshake — HELLO + SUBSCRIBE_EVENTS,
-//      fire-and-forget. The response is consumed by the unknown-cmd
-//      gate (we don't need to inspect it).
-//   4. Reconnect backoff with stable state-machine reset.
-//   5. Decoded messages are queued raw; router.uc runs the canonical
-//      gatekeeper.filterInboundBridge() pass (no double-filtering).
+//     0x83 PUSH_CODE_MSG_WAITING
+//       -> client sends CMD_SYNC_NEXT_MESSAGE (0x0A)
+//       -> radio returns a queued message response:
+//          0x07 / 0x08 older direct/channel response
+//          0x10 / 0x11 newer v3 direct/channel response
 //
-// This backend is EXPERIMENTAL. It is not wired into router.uc by default.
-// Enable via config:
-//
-//     "meshcore_tcp_api": {
-//         "enabled": true,
-//         "host": "127.0.0.1",
-//         "port": 4403
-//     }
+// Outbound text sending through this backend is still not implemented;
+// production outbound MeshCore traffic continues through meshcore.uc.
 //
 // =====================================================================
 
@@ -49,52 +32,38 @@ import * as timers from "timers";
 // Wire protocol constants
 // ---------------------------------------------------------------------
 
-const COMPANION_MAGIC          = 0x3E;   // '>' — MeshMonitor-observed sync byte
-const HEADER_BYTES             = 4;       // magic(1) + cmd(1) + len(2)
+const FRAME_FROM_RADIO          = 0x3E;   // '>'
+const FRAME_TO_RADIO            = 0x3C;   // '<'
+const HEADER_BYTES              = 3;      // marker(1) + len_le(2)
 
-// Hard ceiling on per-frame payload bytes we will buffer. MeshCore text
-// MTU is ~150 bytes; with the 9-byte text envelope (from/to/len) the
-// observed maximum is ~159. 256 gives headroom for future variants while
-// still being a small RAM target. Anything bigger is dropped from the
-// wire (Smart Accumulator rule 1).
-const SMART_MAX_PAYLOAD        = 256;
+const SMART_MAX_PAYLOAD         = 256;
+const RESYNC_BUFFER_CAP         = 4096;
 
-// Cap the rolling resync window. Without this, a steady stream of
-// garbage without a magic byte could grow tcpbuf without bound.
-const RESYNC_BUFFER_CAP        = 4096;
+const PUSH_CODE_MSG_WAITING     = 0x83;
+const CMD_SYNC_NEXT_MESSAGE     = 0x0A;
+const CMD_GET_CHANNEL           = 0x1F;
 
-// Async event command IDs we actually emit Crow messages for.
-// CORRECTED (per Mathison): Frame 0x07 is direct, 0x08 is group
-const CMD_DIRECT_MSG_RECV      = 0x07;   // direct/private cleartext text msg
-const CMD_CHANNEL_MSG_RECV     = 0x08;   // group/channel cleartext text msg
+const RESP_DIRECT_MSG_RECV      = 0x07;
+const RESP_CHANNEL_MSG_RECV     = 0x08;
+const RESP_DIRECT_MSG_RECV_V3   = 0x10;
+const RESP_CHANNEL_MSG_RECV_V3  = 0x11;
+const RESP_CHANNEL_INFO         = 0x12;
 
-// Outgoing command IDs (host -> radio). Sent once at connect, never
-// inspected on return.
-const CMD_HELLO                = 0x01;
-const CMD_SUBSCRIBE_EVENTS     = 0x02;
-
-// Event codes that are NOT message frames (to be explicitly skipped)
-const PUSH_CODE_SEND_CONFIRMED = 0x82;   // Ack/confirmation (NOT group messages!)
-
-// Encrypted / non-compliant command IDs that are always early-dropped
-// when Strict Gatekeeper is enabled, regardless of payload contents.
-// (Without strict mode, the unknown-cmd gate catches them too — strict
-// mode just gives them their own stat bucket.)
-const CMD_ENCRYPTED_DM         = 0x90;
-const CMD_ENCRYPTED_BIN        = 0x91;
+const CMD_ENCRYPTED_DM          = 0x90;
+const CMD_ENCRYPTED_BIN         = 0x91;
 
 const PART97_BLOCKED_COMMANDS = {
     [CMD_ENCRYPTED_DM]:  true,
     [CMD_ENCRYPTED_BIN]: true
 };
 
-const DEFAULT_HOST             = "127.0.0.1";
-const DEFAULT_PORT             = 4403;
-const RECONNECT_INTERVAL       = 5;       // seconds
-const SOCKET_READ_CHUNK        = 2048;
+const DEFAULT_HOST              = "127.0.0.1";
+const DEFAULT_PORT              = 4403;
+const RECONNECT_INTERVAL        = 5;
+const SOCKET_READ_CHUNK         = 2048;
 
-// Text frame envelope: 4-byte from + 4-byte to + 1-byte length.
-const TEXT_ENVELOPE_BYTES      = 9;
+const DIRECT_TEXT_ENVELOPE_BYTES = 9;     // from(4) + to(4) + text_len(1)
+const GROUP_TEXT_ENVELOPE_BYTES  = 5;     // from(4) + slot(1)
 
 // ---------------------------------------------------------------------
 // Module state
@@ -106,19 +75,23 @@ let callsign         = null;
 let router           = null;
 let tcpHost          = null;
 let tcpPort          = DEFAULT_PORT;
-let strictHook       = null;     // function(): boolean   — cached strict-mode probe
+let strictHook       = null;
 
-let s                = null;     // active socket handle (null = disconnected)
-let tcpbuf           = "";       // TCP accumulator
-let pendingSkip      = 0;        // bytes still to discard from incoming stream
-let pendingRx        = [];       // decoded Crow message queue
-let msgSeq           = 0;        // monotonic local message id
+let s                = null;
+let tcpbuf           = "";
+let pendingSkip      = 0;
+let pendingRx        = [];
+let responseQueue    = [];
+let msgSeq           = 0;
 
 let stats            = {
     connects: 0,
     disconnects: 0,
     frames_in: 0,
     frames_decoded: 0,
+    commands_sent: 0,
+    message_waiting: 0,
+    responses_cached: 0,
     early_drop_oversize: 0,
     early_drop_encrypted: 0,
     early_drop_unknown_cmd: 0,
@@ -144,14 +117,14 @@ function log1(fmt, ...args)
 // Tiny binary helpers
 // ---------------------------------------------------------------------
 
-function be16(buf, off)
+function le16(buf, off)
 {
-    return ((ord(buf, off) << 8) & 0xFF00) | (ord(buf, off + 1) & 0xFF);
+    return (ord(buf, off) & 0xFF) | ((ord(buf, off + 1) << 8) & 0xFF00);
 }
 
-function pack_be16(n)
+function pack_le16(n)
 {
-    return chr((n >> 8) & 0xFF) + chr(n & 0xFF);
+    return chr(n & 0xFF) + chr((n >> 8) & 0xFF);
 }
 
 function u32le(buf, off)
@@ -162,13 +135,32 @@ function u32le(buf, off)
         | (ord(buf, off + 3) << 24)) & 0xFFFFFFFF;
 }
 
-// Strip trailing NULs from a C-style string payload field.
 function cstr(s)
 {
     if (!s) return "";
     let n = length(s);
     while (n > 0 && ord(s, n - 1) === 0) n--;
     return substr(s, 0, n);
+}
+
+function isMessageResponse(code)
+{
+    return code === RESP_DIRECT_MSG_RECV
+        || code === RESP_CHANNEL_MSG_RECV
+        || code === RESP_DIRECT_MSG_RECV_V3
+        || code === RESP_CHANNEL_MSG_RECV_V3;
+}
+
+function isGroupMessageResponse(code)
+{
+    return code === RESP_CHANNEL_MSG_RECV
+        || code === RESP_CHANNEL_MSG_RECV_V3;
+}
+
+function isDirectMessageResponse(code)
+{
+    return code === RESP_DIRECT_MSG_RECV
+        || code === RESP_DIRECT_MSG_RECV_V3;
 }
 
 // ---------------------------------------------------------------------
@@ -212,63 +204,58 @@ function openTcp()
 }
 
 // ---------------------------------------------------------------------
-// MeshCore boot handshake — fire-and-forget.
-//
-// CORRECTED (per Mathison): Auto-push model — no subscription mask needed.
-// The radio autonomously pushes direct (0x07) and group (0x08) frames
-// for all programmed groups. No SUBSCRIBE_EVENTS needed.
-//
-// Send only:
-//   [ MAGIC ][ CMD_HELLO ][ len=0 ]
-//
-// The HELLO response (if any) is consumed by the unknown-cmd gate —
-// we don't need to validate it for routing. Groups must be programmed
-// into the radio's memory slots (0-7) via CMD_SET_CHANNEL.
+// Stock MeshCore frame construction.
 // ---------------------------------------------------------------------
+
+function buildFramePayload(cmd, payload)
+{
+    payload = payload ?? "";
+    return chr(cmd & 0xFF) + payload;
+}
 
 function buildFrame(cmd, payload)
 {
-    payload = payload ?? "";
-    return chr(COMPANION_MAGIC) + chr(cmd & 0xFF) + pack_be16(length(payload)) + payload;
+    const framePayload = buildFramePayload(cmd, payload);
+    return chr(FRAME_TO_RADIO) + pack_le16(length(framePayload)) + framePayload;
+}
+
+export function sendCommand(cmd, payload)
+{
+    if (!s) {
+        log1("sendCommand: socket not connected cmd=0x%02x\n", cmd);
+        return false;
+    }
+    try {
+        s.send(buildFrame(cmd, payload ?? ""));
+        stats.commands_sent++;
+        log1("sendCommand: cmd=0x%02x payload=%d\n", cmd, length(payload ?? ""));
+        return true;
+    }
+    catch (_) {
+        closeSocket("sendCommand failed: " + socket.error());
+        return false;
+    }
 }
 
 function sendBootHandshake()
 {
     if (!s) return;
-    try {
-        s.send(buildFrame(CMD_HELLO, ""));
-        // CORRECTED: No SUBSCRIBE_EVENTS needed (auto-push model)
-        log1("handshake sent (HELLO)\n");
-        log1("  Radio will auto-push: 0x07=Direct msg, 0x08=Group msg\n");
-    }
-    catch (_) {
-        closeSocket("handshake send failed: " + socket.error());
-    }
+    sendCommand(0x01, "");
+}
+
+function requestNextMessage()
+{
+    sendCommand(CMD_SYNC_NEXT_MESSAGE, "");
 }
 
 // ---------------------------------------------------------------------
-// The "Smart Accumulator"
+// Smart Accumulator
 // ---------------------------------------------------------------------
-//
-// Pulls fully-formed Companion frames out of tcpbuf, but only for
-// commands we actually decode (TXT_MSG / GRP_TXT). Everything else is
-// dropped from the wire without payload allocation:
-//
-//   * Oversize early-drop  — frame length > SMART_MAX_PAYLOAD.
-//   * Encrypted early-drop — cmd in PART97_BLOCKED_COMMANDS when strict.
-//   * Unknown-cmd drop     — cmd not in { TXT_MSG, GRP_TXT }.
-//   * Malformed-text drop  — text-length byte is inconsistent with plen.
-//
-// When an early-drop fires mid-stream (payload not yet fully arrived),
-// `pendingSkip` records how many bytes to discard from future reads.
-//
-// Returns an array of { cmd, payload } records ready for decoding.
 
 function smartAccumulate(data)
 {
     const frames = [];
 
-    // 1. Discard any in-flight skip bytes first.
     if (pendingSkip > 0 && length(data) > 0) {
         const drop = pendingSkip < length(data) ? pendingSkip : length(data);
         data = substr(data, drop);
@@ -280,111 +267,117 @@ function smartAccumulate(data)
         tcpbuf += data;
     }
 
-    // Cache the strict-mode probe once per inject — strict-mode flips
-    // rarely, and re-calling it inside the loop is wasted work.
     const strictOn = strictHook ? strictHook() : false;
 
     for (;;) {
         const blen = length(tcpbuf);
         if (blen === 0) return frames;
 
-        // 2. Resync: find next magic byte.
-        if (ord(tcpbuf, 0) !== COMPANION_MAGIC) {
+        if (ord(tcpbuf, 0) !== FRAME_FROM_RADIO) {
             let start = -1;
             for (let i = 1; i < blen; i++) {
-                if (ord(tcpbuf, i) === COMPANION_MAGIC) { start = i; break; }
+                if (ord(tcpbuf, i) === FRAME_FROM_RADIO) { start = i; break; }
             }
             if (start < 0) {
                 if (blen > RESYNC_BUFFER_CAP) {
                     stats.resync_skips++;
-                    log1("resync: dropped %d bytes of pre-magic garbage\n", blen);
+                    log1("resync: dropped %d bytes of pre-frame garbage\n", blen);
                     tcpbuf = "";
                 }
                 return frames;
             }
             stats.resync_skips++;
-            log1("resync: skipped %d bytes before magic\n", start);
+            log1("resync: skipped %d bytes before frame marker\n", start);
             tcpbuf = substr(tcpbuf, start);
             continue;
         }
 
-        // 3. Need a full header before any further decisions.
         if (blen < HEADER_BYTES) return frames;
 
-        const cmd  = ord(tcpbuf, 1);
-        const plen = be16(tcpbuf, 2);
+        const plen = le16(tcpbuf, 1);
 
-        // ----- Smart Accumulator gates (BEFORE payload allocation) -----
+        if (plen < 1) {
+            stats.early_drop_malformed_text++;
+            tcpbuf = substr(tcpbuf, HEADER_BYTES);
+            continue;
+        }
 
-        // 3a. Oversize kill switch.
         if (plen > SMART_MAX_PAYLOAD) {
             stats.early_drop_oversize++;
-            log1("early-drop oversize cmd=0x%02x plen=%d > %d\n",
-                cmd, plen, SMART_MAX_PAYLOAD);
+            log1("early-drop oversize plen=%d > %d\n", plen, SMART_MAX_PAYLOAD);
             advance(HEADER_BYTES, plen);
             continue;
         }
 
-        // 3b. Encrypted / blocked command early drop under Strict mode.
-        if (strictOn && PART97_BLOCKED_COMMANDS[cmd]) {
-            stats.early_drop_encrypted++;
-            log1("early-drop encrypted cmd=0x%02x plen=%d (Part 97)\n", cmd, plen);
-            advance(HEADER_BYTES, plen);
-            continue;
-        }
-
-        // 3c. Anything outside { DIRECT_MSG_RECV, CHANNEL_MSG_RECV } is dropped without
-        //     decode. This catches HELLO_RESP, ADVERT, SEND_CONFIRMED (0x82),
-        //     unencrypted DMs of unknown shape, vendor extensions, and (with strict OFF)
-        //     the encrypted commands too.
-        if (cmd !== CMD_DIRECT_MSG_RECV && cmd !== CMD_CHANNEL_MSG_RECV) {
-            stats.early_drop_unknown_cmd++;
-            log1("early-drop unknown cmd=0x%02x plen=%d\n", cmd, plen);
-            advance(HEADER_BYTES, plen);
-            continue;
-        }
-
-        // 4. Wait for full payload (fragmentation-safe).
         if (blen < HEADER_BYTES + plen) return frames;
 
-        // 5. Inline text-envelope sanity check (frame-type dependent).
-        //    CORRECTED per Mathison: Direct and group frames have different structures.
-        if (cmd === CMD_DIRECT_MSG_RECV) {
-            // Direct: sender(4) + recipient(4) + text_len(1) + text
-            if (plen < TEXT_ENVELOPE_BYTES) {
-                stats.early_drop_malformed_text++;
-                log1("early-drop short direct plen=%d < %d\n", plen, TEXT_ENVELOPE_BYTES);
-                tcpbuf = substr(tcpbuf, HEADER_BYTES + plen);
-                continue;
-            }
-            const tlen = ord(tcpbuf, HEADER_BYTES + 8);
-            if (TEXT_ENVELOPE_BYTES + tlen > plen) {
-                stats.early_drop_malformed_text++;
-                log1("early-drop malformed direct tlen=%d plen=%d\n", tlen, plen);
-                tcpbuf = substr(tcpbuf, HEADER_BYTES + plen);
-                continue;
-            }
-        } else if (cmd === CMD_CHANNEL_MSG_RECV) {
-            // Group: sender(4) + slot(1) + text (no explicit length)
-            // Minimum: 5 bytes (sender + slot)
-            if (plen < 5) {
-                stats.early_drop_malformed_text++;
-                log1("early-drop short group plen=%d < 5\n", plen);
-                tcpbuf = substr(tcpbuf, HEADER_BYTES + plen);
-                continue;
-            }
+        const framePayload = substr(tcpbuf, HEADER_BYTES, plen);
+        tcpbuf = substr(tcpbuf, HEADER_BYTES + plen);
+
+        const code = ord(framePayload, 0);
+        const payload = substr(framePayload, 1);
+        stats.frames_in++;
+
+        if (code === PUSH_CODE_MSG_WAITING) {
+            stats.message_waiting++;
+            log1("message waiting push received; requesting next queued message\n");
+            requestNextMessage();
+            continue;
         }
 
-        // 6. Emit the validated frame.
-        const payload = substr(tcpbuf, HEADER_BYTES, plen);
-        tcpbuf = substr(tcpbuf, HEADER_BYTES + plen);
-        stats.frames_in++;
-        push(frames, { cmd: cmd, payload: payload });
+        if (strictOn && PART97_BLOCKED_COMMANDS[code]) {
+            stats.early_drop_encrypted++;
+            log1("early-drop encrypted code=0x%02x plen=%d (Part 97)\n", code, plen);
+            continue;
+        }
+
+        if (isMessageResponse(code)) {
+            if (!validTextPayload(code, payload)) {
+                stats.early_drop_malformed_text++;
+                continue;
+            }
+            push(frames, { cmd: code, payload: payload });
+            continue;
+        }
+
+        if (code === RESP_CHANNEL_INFO) {
+            stats.responses_cached++;
+            push(responseQueue, { cmd: code, payload: framePayload });
+            continue;
+        }
+
+        stats.early_drop_unknown_cmd++;
+        log1("early-drop unknown code=0x%02x plen=%d\n", code, plen);
     }
 }
 
-// Advance past a rejected frame. If the payload hasn't fully arrived
-// yet, arrange to discard the remainder from future socket reads.
+function validTextPayload(code, payload)
+{
+    const plen = length(payload);
+    if (isDirectMessageResponse(code)) {
+        if (plen < DIRECT_TEXT_ENVELOPE_BYTES) {
+            log1("early-drop short direct plen=%d < %d\n", plen, DIRECT_TEXT_ENVELOPE_BYTES);
+            return false;
+        }
+        const tlen = ord(payload, 8);
+        if (DIRECT_TEXT_ENVELOPE_BYTES + tlen > plen) {
+            log1("early-drop malformed direct tlen=%d plen=%d\n", tlen, plen);
+            return false;
+        }
+        return true;
+    }
+
+    if (isGroupMessageResponse(code)) {
+        if (plen < GROUP_TEXT_ENVELOPE_BYTES) {
+            log1("early-drop short group plen=%d < %d\n", plen, GROUP_TEXT_ENVELOPE_BYTES);
+            return false;
+        }
+        return true;
+    }
+
+    return false;
+}
+
 function advance(hdrBytes, payloadBytes)
 {
     const total = hdrBytes + payloadBytes;
@@ -397,39 +390,17 @@ function advance(hdrBytes, payloadBytes)
 }
 
 // ---------------------------------------------------------------------
-// Decoder — DIRECT_MSG_RECV (0x07) and CHANNEL_MSG_RECV (0x08) only.
-// =====================================================================
-//
-// CORRECTED per Mathison (2026-06-19):
-//
-// Direct Message (0x07) payload structure:
-//   Off  Size  Field
-//   0    4     sender node id      (uint32 LE)
-//   4    4     recipient node id   (uint32 LE)
-//   8    1     text length (n)
-//   9    n     UTF-8 text bytes
-//
-// Group Message (0x08) payload structure:
-//   Off  Size  Field
-//   0    4     sender node id      (uint32 LE)
-//   4    1     group slot index    (0-7, identifies which memory slot)
-//   5    ?     text (no explicit length, rest of payload)
-//
-// Note: Group messages DON'T have an explicit text length byte like
-// direct messages. Text is from byte 5 to end of payload.
-//
-// All length validation already happened in the accumulator, so this
-// is straight unpack.
+// Decoder — queued message responses.
+// ---------------------------------------------------------------------
 
 function decodeTextFrame(cmd, payload)
 {
-    if (cmd === CMD_DIRECT_MSG_RECV) {
-        // Direct message: sender(4) + recipient(4) + text_len(1) + text
+    if (isDirectMessageResponse(cmd)) {
         const fromId = u32le(payload, 0);
         const toId   = u32le(payload, 4);
         const tlen   = ord(payload, 8);
         const text   = cstr(substr(payload, 9, tlen));
-        
+
         if (!length(text)) {
             log1("decode: empty direct text from=%08x\n", fromId);
             return null;
@@ -450,20 +421,20 @@ function decodeTextFrame(cmd, payload)
             },
             metadata: {
                 is_group_message: false,
-                identity_strength: "strong"
+                identity_strength: "strong",
+                meshcore_response_code: cmd
             }
         };
 
-        log1("decoded DIRECT_MSG(0x07) from=%08x to=%08x text=%d bytes\n",
-            fromId, toId, length(text));
+        log1("decoded DIRECT_MSG(0x%02x) from=%08x to=%08x text=%d bytes\n",
+            cmd, fromId, toId, length(text));
         return msg;
-        
-    } else if (cmd === CMD_CHANNEL_MSG_RECV) {
-        // Group message: sender(4) + group_slot(1) + text
+
+    } else if (isGroupMessageResponse(cmd)) {
         const fromId = u32le(payload, 0);
-        const groupSlot = ord(payload, 4);  // 0-7, identifies memory slot
+        const groupSlot = ord(payload, 4);
         const text = cstr(substr(payload, 5));
-        
+
         if (!length(text)) {
             log1("decode: empty group text from=%08x slot=%d\n", fromId, groupSlot);
             return null;
@@ -473,7 +444,7 @@ function decodeTextFrame(cmd, payload)
         const msg = {
             id:                   msgSeq,
             from:                 fromId,
-            group_slot:           groupSlot,  // 0-7, for slot-based routing
+            group_slot:           groupSlot,
             rx_time:              time(),
             hop_limit:            1,
             transport:            "meshcore",
@@ -487,22 +458,22 @@ function decodeTextFrame(cmd, payload)
                 group_slot: groupSlot,
                 identity_strength: "weak",
                 symmetric_key: true,
-                requires_slot_lookup: true
+                requires_slot_lookup: true,
+                meshcore_response_code: cmd
             }
         };
 
-        log1("decoded CHANNEL_MSG(0x08) from=%08x slot=%d text=%d bytes\n",
-            fromId, groupSlot, length(text));
+        log1("decoded CHANNEL_MSG(0x%02x) from=%08x slot=%d text=%d bytes\n",
+            cmd, fromId, groupSlot, length(text));
         return msg;
     }
-    
-    // Unknown frame type (shouldn't happen, smartAccumulate filters)
+
     log1("decode: unknown frame cmd=0x%02x\n", cmd);
     return null;
 }
 
 // ---------------------------------------------------------------------
-// Public lifecycle API (mirrors meshtastic_API.uc)
+// Public lifecycle API
 // ---------------------------------------------------------------------
 
 export function setup(config)
@@ -518,10 +489,6 @@ export function setup(config)
     tcpHost  = cfg.host ?? DEFAULT_HOST;
     tcpPort  = cfg.port ?? DEFAULT_PORT;
 
-    // Cache a Strict-mode probe. We only need to know whether
-    // strict-mode is on; the router runs the full gatekeeper pass
-    // (filterInboundBridge) on every queued meshcore message, so we
-    // don't double-filter here.
     const gk = config._gatekeeper;
     strictHook = gk && typeof(gk.isEnabled) === "function"
         ? function () { return gk.isEnabled() === true; }
@@ -556,10 +523,8 @@ function readSocket()
 
 export function recv()
 {
-    // Drain any already-decoded messages first.
     if (length(pendingRx) > 0) return shift(pendingRx);
 
-    // Reconnect path.
     if (!s && timers.tick("meshcore_tcp_api.reconnect")) {
         s = openTcp();
         if (s) sendBootHandshake();
@@ -585,16 +550,29 @@ export function recv()
 
 export function send(msg)
 {
-    // Outbound send is not yet implemented for the TCP Companion backend.
-    // Production outbound continues via the existing meshcore.uc UDP path.
     log1("send: not implemented (msg.id=%s)\n", msg?.id);
     return false;
 };
 
+export function takeResponse(cmd)
+{
+    const keep = [];
+    let found = null;
+    for (let i = 0; i < length(responseQueue); i++) {
+        const r = responseQueue[i];
+        if (!found && r.cmd === cmd) {
+            found = r;
+        }
+        else {
+            push(keep, r);
+        }
+    }
+    responseQueue = keep;
+    return found;
+};
+
 // ---------------------------------------------------------------------
-// Test/introspection hooks (used by tests/test_meshcore_tcp_api.uc).
-// These are side-door entry points so the buffer state machine can be
-// exercised without a real socket.
+// Test/introspection hooks
 // ---------------------------------------------------------------------
 
 export function _test_inject(data, gatekeeperShim)
@@ -616,6 +594,7 @@ export function _test_reset()
 {
     resetState();
     pendingRx = [];
+    responseQueue = [];
     msgSeq = 0;
     for (let k in stats) stats[k] = 0;
 };
@@ -627,5 +606,16 @@ export function _test_stats()
 
 export function _test_build_frame(cmd, payload)
 {
-    return buildFrame(cmd, payload);
+    const framePayload = buildFramePayload(cmd, payload ?? "");
+    return chr(FRAME_FROM_RADIO) + pack_le16(length(framePayload)) + framePayload;
+};
+
+export function _test_build_command(cmd, payload)
+{
+    return buildFrame(cmd, payload ?? "");
+};
+
+export function _test_take_response(cmd)
+{
+    return takeResponse(cmd);
 };
