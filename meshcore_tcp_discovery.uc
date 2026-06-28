@@ -290,13 +290,16 @@ function renameGroup(slot, newName)
 
 function encodeGroupKey(keyBytes)
 {
-    let hex = "";
+    let raw = "";
     if (type(keyBytes) === "array") {
         for (let i = 0; i < length(keyBytes); i++) {
-            hex += sprintf("%02x", keyBytes[i]);
+            raw += chr(keyBytes[i] & 0xFF);
         }
     }
-    return hex;
+    else {
+        raw = keyBytes ?? "";
+    }
+    return b64enc(raw);
 }
 
 export function tick()
