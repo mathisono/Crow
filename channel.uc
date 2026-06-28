@@ -75,7 +75,7 @@ export function isMeshcorePreset(namekey)
     return namekey === meshcorePublicNamekey;
 };
 
-function addMessageNameKey(namekey)
+export function addMessageNameKey(namekey)
 {
     if (channelByNameKey[namekey]) {
         return channelByNameKey[namekey];
@@ -221,78 +221,17 @@ export function getAllLocalChannels()
     return values(localChannelByNameKey);
 };
 
-export function getTelemetryChannels()
+export function setLocalChannels(configs)
 {
-    const telemetry = [];
-    for (let namekey in channelByNameKey) {
-        const chan = channelByNameKey[namekey];
-        if (chan.telemetry) {
-            push(telemetry, chan);
-        }
-    }
-    return telemetry;
-};
-
-export function updateLocalChannels(channels)
-{
-    const oldLocalChannelByNameKey = localChannelByNameKey;
-    localChannelByNameKey = {};
-    for (let i = 0; i < length(channels); i++) {
-        setLocalChannel(channels[i]);
-    }
-    const newchannels = [];
     for (let namekey in localChannelByNameKey) {
-        if (!oldLocalChannelByNameKey[namekey]) {
-            push(newchannels, namekey);
-        }
-        else {
-            delete oldLocalChannelByNameKey[namekey];
+        removeMessageNameKey(namekey);
+    }
+    localChannelByNameKey = {};
+    meshtasticChannel = null;
+    for (let i = 0; i < length(configs); i++) {
+        if (!setLocalChannel(configs[i])) {
+            return false;
         }
     }
-    return { newchannels: newchannels, oldchannels: keys(oldLocalChannelByNameKey) };
-};
-
-export function updateRemoteNameKeys(namekeys)
-{
-    const remotekeys = {};
-    for (let nk in channelByNameKey) {
-        if (!localChannelByNameKey[nk]) {
-            remotekeys[nk] = true;
-        }
-    }
-    for (let i = 0; i < length(namekeys); i++) {
-        const namekey = namekeys[i];
-        if (!remotekeys[namekey]) {
-            addMessageNameKey(namekey);
-        }
-        else {
-            delete remotekeys[namekey];
-        }
-    }
-    for (let nk in remotekeys) {
-        removeMessageNameKey(nk);
-    }
-};
-
-export function isDirect(namekey)
-{
-    return index(namekey, "DirectMessages ") === 0;
-};
-
-export function setup(config)
-{
-    const channels = config.channels;
-    if (channels) {
-        for (let i = 0; i < length(channels); i++) {
-            setLocalChannel(channels[i]);
-        }
-    }
-};
-
-export function tick()
-{
-};
-
-export function process(msg)
-{
+    return true;
 };
