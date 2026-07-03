@@ -19,6 +19,9 @@ import * as traceroute from "traceroute";
 import * as textstore from "textstore";
 import * as commands from "commands";
 import * as groups from "groups";
+import * as device from "telemetry_device";
+import * as environmental_weewx from "telemetry_environmental_weewx";
+import * as airquality_purpleair from "telemetry_airquality_purpleair";
 import * as winlink from "winlink";
 import * as gatekeeper from "gatekeeper";
 
@@ -238,11 +241,6 @@ export function setup()
     router.registerApp(position);
     traceroute.setup(config);
     router.registerApp(traceroute);
-
-    // Lazy-load telemetry modules to break circular dependencies
-    import * as device from "telemetry_device";
-    import * as environmental_weewx from "telemetry_environmental_weewx";
-    import * as airquality_purpleair from "telemetry_airquality_purpleair";
     device.setup(config);
     router.registerApp(device);
     textstore.setup(config);
