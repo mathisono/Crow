@@ -1,4 +1,4 @@
-import * as meshtastic from "meshtastic";
+import * as meshtastic from "meshtastic_backend";
 
 /*
  * Known port numbers

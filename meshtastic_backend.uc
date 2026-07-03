@@ -5,6 +5,12 @@ let active = null;
 let activeName = null;
 export let enabled = false;
 
+export function registerProto(name, portnum, decode)
+{
+    udp.registerProto(name, portnum, decode);
+    api.registerProto(name, portnum, decode);
+};
+
 function log0(fmt, ...args)
 {
     DEBUG0("meshtastic_backend: " + fmt, ...args);
@@ -13,11 +19,14 @@ function log0(fmt, ...args)
 function wantsApi(config)
 {
     const mode = config.meshtastic?.backend ?? config.meshtastic?.transport;
-    if (mode === "api" || mode === "tcp-api" || mode === "port-api") {
+    if (mode === "api" || mode === "tcp" || mode === "tcp-api" || mode === "port-api") {
         return true;
     }
+    if (mode === "udp") {
+        return false;
+    }
     if (config.meshtastic_api?.enabled === true || config.meshtastic_API?.enabled === true) {
-        return config.meshtastic?.enabled === false || !config.meshtastic;
+        return true;
     }
     return false;
 }
@@ -25,6 +34,10 @@ function wantsApi(config)
 function wantsUdp(config)
 {
     if (!config.meshtastic) {
+        return false;
+    }
+    const mode = config.meshtastic?.backend ?? config.meshtastic?.transport;
+    if (mode === "api" || mode === "tcp" || mode === "tcp-api" || mode === "port-api") {
         return false;
     }
     return config.meshtastic.enabled !== false;

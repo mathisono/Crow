@@ -13,11 +13,14 @@ function log0(fmt, ...args)
 function wantsApi(config)
 {
     const mode = config.meshcore?.backend ?? config.meshcore?.transport;
-    if (mode === "api" || mode === "tcp-api" || mode === "companion-api") {
+    if (mode === "api" || mode === "tcp" || mode === "tcp-api" || mode === "companion-api") {
         return true;
     }
+    if (mode === "udp") {
+        return false;
+    }
     if (config.meshcore_tcp_api?.enabled === true) {
-        return config.meshcore?.enabled === false || !config.meshcore;
+        return true;
     }
     return false;
 }
@@ -25,6 +28,10 @@ function wantsApi(config)
 function wantsUdp(config)
 {
     if (!config.meshcore) {
+        return false;
+    }
+    const mode = config.meshcore?.backend ?? config.meshcore?.transport;
+    if (mode === "api" || mode === "tcp" || mode === "tcp-api" || mode === "companion-api") {
         return false;
     }
     return config.meshcore.enabled !== false;
@@ -60,32 +67,32 @@ export function setup(config)
 
 export function shutdown()
 {
-    active?.shutdown();
+    if (active) active.shutdown();
 };
 
 export function handle()
 {
-    return active?.handle();
+    if (active) return active.handle();
 };
 
 export function recv()
 {
-    return active?.recv();
+    if (active) return active.recv();
 };
 
 export function send(msg)
 {
-    return active?.send(msg);
+    if (active) return active.send(msg);
 };
 
 export function tick()
 {
-    active?.tick();
+    if (active) active.tick();
 };
 
 export function process(msg)
 {
-    active?.process(msg);
+    if (active) active.process(msg);
 };
 
 export function backendName()

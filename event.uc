@@ -239,6 +239,12 @@ export function tick()
                         c.namekey = `${substr(join("", slice(n, 0, -1)), 0, 13)} ${n[-1]}`;
                     }
                     const nochannels = channel.updateLocalChannels(msg.channels);
+                    if (aprs.enabled) {
+                        for (let i = 0; i < length(msg.channels); i++) {
+                            const c = msg.channels[i];
+                            aprs.updateChannelBackend(c.namekey, c.backend ?? "");
+                        }
+                    }
                     textmessage.updateSettings(msg.channels);
                     notify({ cmd: "channels" });
                     platform.publish(node.getInfo(), channel.getAllLocalChannels());

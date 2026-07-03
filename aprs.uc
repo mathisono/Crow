@@ -24,6 +24,7 @@ let cfg = null;
 let router = null;
 let channelKey = null;
 let seq = 1;
+let update = null;
 export let enabled = false;
 
 // --- Multi-backend registry ---
@@ -34,6 +35,32 @@ let defaultBackendName = null;
 // Channel → backend name mapping (namekey → backendName)
 const channelBackendMap = {};
 const lastChannelSender = {};
+
+function closeBackendSocket(inst)
+{
+    if (inst.socket) {
+        inst.socket.close();
+        inst.socket = null;
+    }
+}
+
+function clearObject(o)
+{
+    for (let k in o) {
+        delete o[k];
+    }
+}
+
+function resetRuntimeState()
+{
+    for (let name in backends) {
+        closeBackendSocket(backends[name]);
+        delete backends[name];
+    }
+    clearObject(channelBackendMap);
+    clearObject(lastChannelSender);
+    defaultBackendName = null;
+}
 
 function backendTypeLabel(btype)
 {
@@ -113,14 +140,6 @@ function checkPendingConnect(name, inst)
     }
 }
 
-function closeBackendSocket(inst)
-{
-    if (inst.socket) {
-        inst.socket.close();
-        inst.socket = null;
-    }
-}
-
 // --- Utility functions ---
 
 function now() { return time(); }
@@ -178,6 +197,7 @@ function putGroup(name, dsts, opts)
     if (opts?.repeat_member_messages != null) {
         g.repeat_member_messages = opts.repeat_member_messages;
     }
+    update?.("aprs_groups");
     return g;
 }
 
@@ -669,7 +689,10 @@ function recvFromBackend(inst)
 
 export function setup(config)
 {
+    resetRuntimeState();
+    enabled = false;
     cfg = config.aprs;
+    update = config.update;
     if (!cfg?.enabled) {
         return;
     }
@@ -737,9 +760,8 @@ export function setup(config)
 
 export function shutdown()
 {
-    for (let name in backends) {
-        closeBackendSocket(backends[name]);
-    }
+    resetRuntimeState();
+    enabled = false;
 };
 
 // Returns array of { socket, name, displayName } for router to poll

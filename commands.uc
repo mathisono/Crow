@@ -503,14 +503,25 @@ export function post(cmd, id)
             event.queue({ cmd: "/reply", reply: [
                 "<b>Crow Slash Commands</b>", "&nbsp;",
                 "<b>/join</b> #name &mdash; join/create shared-key channel (Meshtastic+MeshCore+AREDN)",
+                "<b>/join</b> #name key=passphrase &mdash; join with a key derived from passphrase",
                 "<b>/join</b> %name &mdash; join/create AREDN-only channel",
                 "<b>/join</b> #name CALL1 CALL2 message &mdash; create APRS group + channel + send message",
                 "<b>/join</b> #name backend=NAME CALL1 msg &mdash; APRS group on a specific backend",
                 "<b>/leave</b> #name &mdash; leave channel and remove APRS group",
                 "<b>/groups</b> &mdash; list all APRS groups and members",
                 "<b>/backends</b> &mdash; list configured APRS backends",
+                "<b>/backend</b> &mdash; alias for /backends",
+                "<b>/cmd</b> discover [meshcore|meshtastic] &mdash; list discovered channels",
+                "<b>/cmd</b> info &lt;namekey&gt; &mdash; show channel details",
+                "<b>/channels</b> local &mdash; list public channels on local node",
+                "<b>/channels</b> world &mdash; list public channels through bridge",
+                "<b>/channels</b> join &lt;namekey&gt; &mdash; join public channel",
+                "<b>/channels</b> leave &lt;name&gt; &mdash; leave public channel",
                 "<b>/storage</b> status &mdash; show active storage state",
-                "<b>/channels</b> &mdash; list public channels on local network"
+                "<b>/storage</b> usb scan &mdash; list removable storage",
+                "<b>/storage</b> usb enable &mdash; move Crow storage to USB",
+                "<b>/storage</b> usb disable &mdash; return Crow storage to internal flash",
+                "<b>/storage</b> quota images &lt;mb&gt; &mdash; set image storage quota"
             ], socket: id });
             break;
         }

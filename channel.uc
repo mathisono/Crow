@@ -147,7 +147,7 @@ function setLocalChannel(config)
     if (isAREDNPreset(namekey)) {
         chan.telemetry = true;
     }
-    if (config.telemetry !== null) {
+    if (config.telemetry != null) {
         chan.telemetry = config.telemetry;
     }
     if (config.backend != null) {

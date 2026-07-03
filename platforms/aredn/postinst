@@ -19,7 +19,9 @@ fi
 
 /etc/init.d/crow enable
 /etc/init.d/crow start
-/usr/local/bin/restart-firewall
+if [ -x /etc/local/mesh-firewall/21-crow ]; then
+    /etc/local/mesh-firewall/21-crow
+fi
 
 # Fixup badge color in 4.26.1.0
 user_css='/app/resource/css/user.css'

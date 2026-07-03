@@ -1,6 +1,6 @@
 #! /bin/sh
 
-VER=0.0.1
+VER=0.0.2
 REL=r$(($(date +%s) - $(date -d "2026-01-01 00:00:00" +%s)))
 VERSION=${VER}-${REL}
 
@@ -39,7 +39,7 @@ cp $SRC/platforms/aredn/crow.init $ROOT/data/etc/init.d/crow
 
 cp $SRC/platforms/aredn/upgrade.conf $ROOT/data/etc/arednsysupgrade.d/crow.conf
 
-chmod 755 $ROOT/data/etc/local/mesh-firewall/21-crow
+chmod 755 $ROOT/data/etc/local/mesh-firewall/21-crow $ROOT/data/etc/init.d/crow
 chmod 755 $ROOT/data/www/apps/crow/* $ROOT/data/www/cgi-bin/apps/crow/admin $ROOT/data/www/cgi-bin/apps/crow/image
 chmod 755 $ROOT/data/usr/local/crow/platforms/aredn/crow-runner.sh $ROOT/data/usr/local/crow/platforms/aredn/crow-migrate-raven.sh
 

@@ -939,6 +939,35 @@ function orderStores()
     fs.writefile(`${CROW_TMP_ROOT}/badge`, total == 0 ? "" : total > 999 ? "999+" : `${total}`);
 }
 
+function headerValue(headers, name)
+{
+    name = lc(name);
+    for (let i = 0; i < length(headers); i++) {
+        const kv = split(headers[i], ": ");
+        if (lc(kv[0]) === name) {
+            return kv[1];
+        }
+    }
+    return null;
+}
+
+function sameOrigin(headers)
+{
+    const host = trim(headerValue(headers, "host") ?? "");
+    const origin = trim(headerValue(headers, "origin") ?? "");
+    if (!host || !origin) {
+        return false;
+    }
+    const hostname = split(host, ":")[0];
+    const originParts = split(origin, "://");
+    if (length(originParts) !== 2) {
+        return false;
+    }
+    const originHost = split(originParts[1], "/")[0];
+    const originHostname = split(originHost, ":")[0];
+    return originHostname === hostname;
+}
+
 /* export */ function auth(headers)
 {
     for (let i = 0; i < length(headers); i++) {
@@ -965,7 +994,7 @@ function orderStores()
             break;
         }
     }
-    return false;
+    return sameOrigin(headers);
 };
 
 function refreshTargets()

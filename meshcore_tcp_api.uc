@@ -591,6 +591,23 @@ export function send(msg)
     return false;
 };
 
+export function tick()
+{
+    // Periodic maintenance for TCP API backend.
+    // Currently a stub; future enhancements could include:
+    // - Connection health checks
+    // - Reconnection logic on socket failure
+    // - Periodic polling for data
+};
+
+export function process(msg)
+{
+    // Message processing for TCP API backend.
+    // Currently a stub; future enhancements could include:
+    // - Outbound message routing
+    // - Priority queue management
+};
+
 // ---------------------------------------------------------------------
 // Test/introspection hooks (used by tests/test_meshcore_tcp_api.uc).
 // These are side-door entry points so the buffer state machine can be
