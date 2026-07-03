@@ -74,6 +74,11 @@ const CMD_CHANNEL_MSG_RECV     = 0x08;   // group/channel cleartext text msg
 const CMD_HELLO                = 0x01;
 const CMD_SUBSCRIBE_EVENTS     = 0x02;
 
+// Self-info response from radio (triggered by HELLO)
+const RESP_SELF_INFO           = 0x05;   // Device info: public key + name
+const SELF_INFO_PUBKEY_SIZE    = 32;     // Ed25519 public key
+const SELF_INFO_PUBKEY_OFFSET  = 1;      // Right after response code
+
 // Event codes that are NOT message frames (to be explicitly skipped)
 const PUSH_CODE_SEND_CONFIRMED = 0x82;   // Ack/confirmation (NOT group messages!)
 
@@ -267,6 +272,72 @@ function advance(hdrBytes, payloadBytes)
     tcpbuf = "";
 }
 
+
+// -----
+// parseSelfInfo() — Extract device name from RESP_SELF_INFO (0x05)
+// =====================================================================
+//
+// MeshCore sends this immediately after HELLO. Payload structure:
+//
+//   Byte 0:      0x05 (response code)
+//   Bytes 1-32:  Ed25519 public key (32 bytes)
+//   Bytes 33-34: MAC/Hardware hash (2 bytes in v1, reserved for 4 in v2)
+//   Byte 35:     Node Role/Type
+//   Bytes 36+:   Node Name (UTF-8, null-padded, up to 32 bytes)
+//
+// Returns device name (string) or null on error.
+// Uses safe scanning: skip known fixed fields, scan for first printable
+// character, then read until null terminator or end of payload.
+// =====================================================================
+
+function parseSelfInfo(payload)
+{
+    if (!payload || length(payload) < 36) {
+        log1("parseSelfInfo: insufficient data (%d bytes)\n", 
+             length(payload) ?? 0);
+        return null;
+    }
+    
+    // Verify response code
+    if (ord(payload, 0) !== RESP_SELF_INFO) {
+        log1("parseSelfInfo: wrong response code (0x%02x)\n", 
+             ord(payload, 0));
+        return null;
+    }
+    
+    // Safe name extraction:
+    // Skip the first 33 bytes (response code + 32-byte public key)
+    // Then scan for first printable ASCII character
+    let nameStart = SELF_INFO_PUBKEY_OFFSET + SELF_INFO_PUBKEY_SIZE; // = 33
+    const payloadLen = length(payload);
+    
+    // Skip non-printable bytes (MAC size, role/type, padding)
+    while (nameStart < payloadLen) {
+        const byte = ord(payload, nameStart);
+        // Accept printable ASCII (0x20-0x7E) and UTF-8 high bytes (0x80+)
+        if ((byte >= 0x20 && byte <= 0x7E) || byte >= 0x80) {
+            break;
+        }
+        nameStart++;
+    }
+    
+    if (nameStart >= payloadLen) {
+        log1("parseSelfInfo: no printable name found\n");
+        return null;
+    }
+    
+    // Extract name until null terminator or end of payload
+    let name = "";
+    for (let i = nameStart; i < payloadLen; i++) {
+        const byte = ord(payload, i);
+        if (byte === 0) break;  // Stop at null terminator
+        name += chr(byte);
+    }
+    
+    log0("parseSelfInfo: device name = %s\n", name);
+    return name;
+}
+
 // ---------------------------------------------------------------------
 // The "Smart Accumulator"
 // ---------------------------------------------------------------------
@@ -354,7 +425,22 @@ function smartAccumulate(data)
             continue;
         }
 
-        // 3c. Anything outside { DIRECT_MSG_RECV, CHANNEL_MSG_RECV } is dropped without
+        // 3c. EXCEPTION: RESP_SELF_INFO (0x05) is handled specially — we intercept it
+        //     to extract the device name for auto-channel creation, but DON'T queue it
+        //     as a message.
+        if (cmd === RESP_SELF_INFO) {
+            if (blen < HEADER_BYTES + plen) return frames;  // Wait for full payload
+            const payload = substr(tcpbuf, HEADER_BYTES, plen);
+            tcpbuf = substr(tcpbuf, HEADER_BYTES + plen);
+            
+            const name = parseSelfInfo(payload);
+            if (name) {
+                deviceName = name;  // Capture for channel creation
+            }
+            continue;
+        }
+
+        // 3d. Anything outside { DIRECT_MSG_RECV, CHANNEL_MSG_RECV } is dropped without
         //     decode. This catches HELLO_RESP, ADVERT, SEND_CONFIRMED (0x82),
         //     unencrypted DMs of unknown shape, vendor extensions, and (with strict OFF)
         //     the encrypted commands too.
