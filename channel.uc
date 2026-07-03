@@ -235,15 +235,3 @@ export function setLocalChannels(configs)
     }
     return true;
 };
-
-export function getTelemetryChannels()
-{
-    let telemetry = [];
-    for (let namekey in global.channelByNameKey) {
-        const chan = global.channelByNameKey[namekey];
-        if (chan.telemetry) {
-            push(telemetry, chan);
-        }
-    }
-    return telemetry;
-};
