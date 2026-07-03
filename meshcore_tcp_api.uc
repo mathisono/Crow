@@ -44,6 +44,7 @@
 
 import * as socket from "socket";
 import * as timers from "timers";
+import * as channel from "channel";
 
 // ---------------------------------------------------------------------
 // Wire protocol constants
@@ -102,6 +103,8 @@ const TEXT_ENVELOPE_BYTES      = 9;
 
 let cfg              = null;
 export let enabled   = false;
+export let channelNamekey = null; // "MeshCore <device> og==" — created at setup
+let deviceName       = null;     // device name from config or auto-detect
 let callsign         = null;
 let router           = null;
 let tcpHost          = null;
@@ -449,6 +452,7 @@ function decodeTextFrame(cmd, payload)
             transport:            "meshcore",
             backend:              "tcp_api",
             originating_callsign: callsign,
+            namekey:              channelNamekey,
             data: {
                 text_message: text
             },
@@ -483,6 +487,7 @@ function decodeTextFrame(cmd, payload)
             transport:            "meshcore",
             backend:              "tcp_api",
             originating_callsign: callsign,
+            namekey:              channelNamekey,
             data: {
                 text_message: text
             },
@@ -521,6 +526,30 @@ export function setup(config)
     router   = config.router;
     tcpHost  = cfg.host ?? DEFAULT_HOST;
     tcpPort  = cfg.port ?? DEFAULT_PORT;
+
+    // --- Device name & channel creation ---
+    // The device_name config field identifies the MeshCore companion hw.
+    // A channel "MeshCore <device_name> og==" is created and linked to
+    // this backend, following the same pattern APRS uses.
+    deviceName = cfg.device_name ?? null;
+    if (deviceName) {
+        channelNamekey = `MeshCore ${deviceName} og==`;
+        const localChannels = channel.getAllLocalChannels();
+        let found = false;
+        for (let i = 0; i < length(localChannels); i++) {
+            if (localChannels[i].namekey === channelNamekey) {
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            push(localChannels, { namekey: channelNamekey });
+            channel.updateLocalChannels(localChannels);
+        }
+        log0("channel created: %s\n", channelNamekey);
+    } else {
+        log0("no device_name configured — skipping channel creation\n");
+    }
 
     // Cache a Strict-mode probe. We only need to know whether
     // strict-mode is on; the router runs the full gatekeeper pass
