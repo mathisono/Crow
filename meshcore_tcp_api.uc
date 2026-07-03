@@ -109,7 +109,7 @@ const TEXT_ENVELOPE_BYTES      = 9;
 let cfg              = null;
 let rootConfig       = null;
 export let enabled   = false;
-export let channelNamekey = null; // "MeshCore <device> og==" — created on first tick
+export let channelNamekey = null; // "<device> og==" — created on first tick
 let deviceName       = null;     // device name from config
 let channelCreated   = false;    // one-shot flag for lazy channel init
 let callsign         = null;
@@ -622,7 +622,7 @@ export function setup(config)
     // This avoids timing issues with lazy tick-based creation.
     deviceName = cfg.device_name ?? null;
     if (deviceName) {
-        channelNamekey = `MeshCore ${deviceName} og==`;
+        channelNamekey = `${deviceName} og==`;
         if (!config.channels) config.channels = [];
         let found = false;
         for (let i = 0; i < length(config.channels); i++) {
@@ -727,8 +727,8 @@ export function tick()
 // Called lazily from tick() after SELF_INFO response is received
 // and deviceName is captured. Follows the same pattern as APRS backend.
 //
-// Channel name format: "MeshCore {device_name} og=="
-// Example: "MeshCore KJ6DZB-MLK og=="
+// Channel name format: "{device_name} og=="
+// Example: "KJ6DZB-MLK og=="
 //
 // =====================================================================
 
@@ -739,7 +739,7 @@ function createAutoChannel()
         return;
     }
 
-    channelNamekey = `MeshCore ${deviceName} og==`;
+    channelNamekey = `${deviceName} og==`;
 
     try {
         // Get all existing local channels
