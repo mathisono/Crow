@@ -56,17 +56,17 @@ let stats = {
 function log0(fmt, ...args)
 {
     DEBUG0("meshcore_discovery: " + fmt, ...args);
-}
+};
 
 function log1(fmt, ...args)
 {
     DEBUG1("meshcore_discovery: " + fmt, ...args);
-}
+};
 
 function byteAt(data, off)
 {
     return type(data) === "array" ? data[off] : ord(data, off);
-}
+};
 
 function parseChannelInfo(data)
 {
@@ -116,7 +116,7 @@ function parseChannelInfo(data)
         raw_name_bytes: nameBytes,
         raw_key_bytes: secretKey
     };
-}
+};
 
 function isAllZeros(data)
 {
@@ -125,7 +125,7 @@ function isAllZeros(data)
         if (data[i] !== 0x00) return false;
     }
     return true;
-}
+};
 
 function groupFromParsed(parsed)
 {
@@ -137,7 +137,7 @@ function groupFromParsed(parsed)
         is_programmed: parsed.is_configured,
         timestamp: systime()
     };
-}
+};
 
 export function queryDeviceGroups()
 {
@@ -177,7 +177,7 @@ export function queryDeviceGroups()
 
     log0("discovered %d groups from cached TCP responses\n", length(groups));
     return groups;
-}
+};
 
 function keysEqual(key1, key2)
 {
@@ -188,32 +188,36 @@ function keysEqual(key1, key2)
         if (key1[i] !== key2[i]) return false;
     }
     return true;
-}
+};
 
 function getCachedGroup(slot)
 {
-    for (let group of cachedGroups) {
+    for (let i = 0; i < length(cachedGroups); i++) {
+        const group = cachedGroups[i];
         if (group.slot === slot) return group;
     }
     return null;
-}
+};
 
 function detectNewGroups(current)
 {
-    for (let group of current) {
+    for (let i = 0; i < length(current); i++) {
+        const group = current[i];
         if (!getCachedGroup(group.slot)) {
             log0("NEW group detected: slot %d, name=%s\n", group.slot, group.name);
             stats.new_groups_detected++;
             autoDiscoverGroup(group);
         }
     }
-}
+};
 
 function detectDeletedGroups(current)
 {
-    for (let cached of cachedGroups) {
+    for (let i = 0; i < length(cachedGroups); i++) {
+        const cached = cachedGroups[i];
         let found = false;
-        for (let group of current) {
+        for (let j = 0; j < length(current); j++) {
+            const group = current[j];
             if (group.slot === cached.slot) {
                 found = true;
                 break;
@@ -225,11 +229,12 @@ function detectDeletedGroups(current)
             deprecateGroup(cached);
         }
     }
-}
+};
 
 function detectKeyChanges(current)
 {
-    for (let group of current) {
+    for (let i = 0; i < length(current); i++) {
+        const group = current[i];
         const cached = getCachedGroup(group.slot);
         if (cached && !keysEqual(group.key, cached.key)) {
             log0("KEY ROTATION: slot %d, name=%s\n", group.slot, group.name);
@@ -242,7 +247,7 @@ function detectKeyChanges(current)
             renameGroup(cached.slot, group.name);
         }
     }
-}
+};
 
 function autoDiscoverGroup(group)
 {
@@ -265,28 +270,28 @@ function autoDiscoverGroup(group)
     channel.setMeshcoreSlotChannel(group.slot, channelObj);
 
     log1("auto-discovered: %s (slot %d)\n", namekey, group.slot);
-}
+};
 
 function deprecateGroup(group)
 {
     log1("deprecated: slot %d, name=%s\n", group.slot, group.name);
-}
+};
 
 function alertKeyRotation(newGroup, oldGroup)
 {
     log0("ALERT: Group '%s' key has changed!\n", newGroup.name);
     log0("  Please review the change on your radio.\n");
-}
+};
 
 function updateGroupKey(group)
 {
     log1("updated key for slot %d: %s\n", group.slot, group.name);
-}
+};
 
 function renameGroup(slot, newName)
 {
     log1("renamed slot %d to: %s\n", slot, newName);
-}
+};
 
 function encodeGroupKey(keyBytes)
 {
@@ -300,7 +305,7 @@ function encodeGroupKey(keyBytes)
         raw = keyBytes ?? "";
     }
     return b64enc(raw);
-}
+};
 
 export function tick()
 {
@@ -313,7 +318,7 @@ export function tick()
 
     syncChannelSlots();
     lastSyncTime = now;
-}
+};
 
 function syncChannelSlots()
 {
@@ -331,7 +336,7 @@ function syncChannelSlots()
     log1("sync: complete (new=%d, deleted=%d, key_changes=%d)\n",
          stats.new_groups_detected, stats.deleted_groups_detected,
          stats.key_changes_detected);
-}
+};
 
 export function setup(config)
 {
@@ -344,7 +349,7 @@ export function setup(config)
 
     log0("discovery enabled (sync interval: %d ms)\n", syncIntervalMs);
     startup();
-}
+};
 
 export function startup()
 {
@@ -353,7 +358,8 @@ export function startup()
     log1("initial discovery...\n");
     const groups = queryDeviceGroups();
 
-    for (let group of groups) {
+    for (let i = 0; i < length(groups); i++) {
+        const group = groups[i];
         autoDiscoverGroup(group);
     }
 
@@ -361,22 +367,22 @@ export function startup()
     lastSyncTime = systime() * 1000;
 
     log0("initial discovery: found %d groups\n", length(groups));
-}
+};
 
 export function shutdown()
 {
     enabled = false;
-}
+};
 
 export function getStats()
 {
     return stats;
-}
+};
 
 export function getCachedGroups()
 {
     return cachedGroups;
-}
+};
 
 export function getSyncStatus()
 {
@@ -387,9 +393,9 @@ export function getSyncStatus()
         cached_groups: length(cachedGroups),
         stats: stats
     };
-}
+};
 
 export function parseChannelInfoForTest(data)
 {
     return parseChannelInfo(data);
-}
+};

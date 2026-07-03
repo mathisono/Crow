@@ -207,6 +207,11 @@ export function setup()
     gatekeeper.setup(config);
     config._gatekeeper = gatekeeper;
     router.setGatekeeper(gatekeeper);
+    router.setBackends({
+        meshtastic: meshtastic,
+        meshcore: meshcore,
+        aprs: aprs
+    });
     router.registerApp(gatekeeper);
 
     meship.setup(config);

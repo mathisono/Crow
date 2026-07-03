@@ -301,7 +301,8 @@ export function post(cmd, id)
                         const groups_discovered = meshcore_discovery.getCachedGroups();
                         if (groups_discovered && length(groups_discovered) > 0) {
                             push(reply, "<b>═══ MeshCore Groups ═══</b>");
-                            for (let g of groups_discovered) {
+                            for (let i = 0; i < length(groups_discovered); i++) {
+                                const g = groups_discovered[i];
                                 push(reply, `<b>Slot ${g.slot}: ${g.name}</b> (${g.key_size ?? "?"}-byte key)`);
                                 push(reply, `<div class="cj" onclick='cmd("/join ${g.name}")'>/join ${g.name}</div>`);
                             }
@@ -312,7 +313,8 @@ export function post(cmd, id)
                     if (backend === "all" || backend === "meshtastic") {
                         const all_channels = channel.getAllChannelNamekeys();
                         let meshtastic_count = 0;
-                        for (let nk of all_channels) {
+                        for (let i = 0; i < length(all_channels); i++) {
+                            const nk = all_channels[i];
                             if (channel.isMeshtasticPreset(nk)) continue;
                             const parts = split(nk, " ");
                             if (ord(parts[0]) !== 35) continue;
