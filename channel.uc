@@ -158,6 +158,9 @@ function setLocalChannel(config)
     if (config.backend != null) {
         chan.backend = config.backend;
     }
+    if (config.label != null) {
+        chan.label = config.label;
+    }
     localChannelByNameKey[namekey] = chan;
     return true;
 };

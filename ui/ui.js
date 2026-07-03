@@ -216,7 +216,7 @@ function htmlChannel(channel)
     const onclick = `showNamekey(${JSON.stringify(namekey)})`;
     return `<div class="channel ${rightSelection === namekey ? "selected" : ""}" data-namekey="${attr(namekey)}" onclick="${attr(onclick)}">
         <div class="n">
-            <div class="t">${channel.meshtastic ? "Meshtastic" : esc(nk[0])}</div>
+            <div class="t">${channel.label ? esc(channel.label) : (channel.meshtastic ? "Meshtastic" : esc(nk[0]))}</div>
         </div>
         <div class="unread">${channel.state.count > 0 ? safeInt(channel.state.count) : ''}</div>
     </div>`;

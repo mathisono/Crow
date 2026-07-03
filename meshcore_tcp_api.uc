@@ -45,6 +45,7 @@
 import * as socket from "socket";
 import * as timers from "timers";
 import * as channel from "channel";
+import * as fs from "fs";
 
 // ---------------------------------------------------------------------
 // Wire protocol constants
@@ -623,18 +624,30 @@ export function setup(config)
     deviceName = cfg.device_name ?? null;
     if (deviceName) {
         channelNamekey = `${deviceName} og==`;
+        // Build a friendly label combining local hostname, MeshCore device, and channel name.
+        // Channel name defaults to "Public" until Phase-2 slot discovery lands.
+        let hostname = "";
+        try {
+            const h = fs.readfile("/proc/sys/kernel/hostname");
+            if (h) hostname = replace(h, "\n", "");
+        } catch (e) {}
+        const chanName = cfg.channel_name ?? "Public";
+        const label = hostname
+            ? `${hostname} \u00b7 ${deviceName} \u00b7 ${chanName}`
+            : `${deviceName} \u00b7 ${chanName}`;
         if (!config.channels) config.channels = [];
         let found = false;
         for (let i = 0; i < length(config.channels); i++) {
             if (config.channels[i].namekey === channelNamekey) {
+                config.channels[i].label = label;
                 found = true;
                 break;
             }
         }
         if (!found) {
-            push(config.channels, { namekey: channelNamekey });
+            push(config.channels, { namekey: channelNamekey, label: label });
         }
-        log0("channel registered: %s\n", channelNamekey);
+        log0("channel registered: %s (label: %s)\n", channelNamekey, label);
     }
     channelCreated = true;
 
