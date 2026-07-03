@@ -523,7 +523,7 @@ export function setup(config)
     // (filterInboundBridge) on every queued meshcore message, so we
     // don't double-filter here.
     const gk = config._gatekeeper;
-    strictHook = gk && typeof(gk.isEnabled) === "function"
+    strictHook = gk && type(gk.isEnabled) === "function"
         ? function () { return gk.isEnabled() === true; }
         : null;
 
