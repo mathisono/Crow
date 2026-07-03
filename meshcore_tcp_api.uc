@@ -107,6 +107,7 @@ const TEXT_ENVELOPE_BYTES      = 9;
 // ---------------------------------------------------------------------
 
 let cfg              = null;
+let rootConfig       = null;
 export let enabled   = false;
 export let channelNamekey = null; // "MeshCore <device> og==" — created on first tick
 let deviceName       = null;     // device name from config
@@ -604,6 +605,7 @@ function decodeTextFrame(cmd, payload)
 export function setup(config)
 {
     cfg = config.meshcore_tcp_api;
+    rootConfig = config;
     if (!cfg || cfg.enabled === false) {
         return;
     }
@@ -756,6 +758,7 @@ function createAutoChannel()
         if (!hasChannel) {
             push(localChannels, { namekey: channelNamekey });
             channel.updateLocalChannels(localChannels);
+            rootConfig.update?.("channels");
             log0("auto-created channel: %s\n", channelNamekey);
         } else {
             log1("channel already exists: %s\n", channelNamekey);
