@@ -103,8 +103,9 @@ const TEXT_ENVELOPE_BYTES      = 9;
 
 let cfg              = null;
 export let enabled   = false;
-export let channelNamekey = null; // "MeshCore <device> og==" — created at setup
-let deviceName       = null;     // device name from config or auto-detect
+export let channelNamekey = null; // "MeshCore <device> og==" — created on first tick
+let deviceName       = null;     // device name from config
+let channelCreated   = false;    // one-shot flag for lazy channel init
 let callsign         = null;
 let router           = null;
 let tcpHost          = null;
@@ -528,28 +529,26 @@ export function setup(config)
     tcpPort  = cfg.port ?? DEFAULT_PORT;
 
     // --- Device name & channel creation ---
-    // The device_name config field identifies the MeshCore companion hw.
-    // A channel "MeshCore <device_name> og==" is created and linked to
-    // this backend, following the same pattern APRS uses.
+    // Inject our channel into config.channels so that channel.setup()
+    // (which runs after us in config.uc) picks it up automatically.
+    // This avoids timing issues with lazy tick-based creation.
     deviceName = cfg.device_name ?? null;
     if (deviceName) {
         channelNamekey = `MeshCore ${deviceName} og==`;
-        const localChannels = channel.getAllLocalChannels();
+        if (!config.channels) config.channels = [];
         let found = false;
-        for (let i = 0; i < length(localChannels); i++) {
-            if (localChannels[i].namekey === channelNamekey) {
+        for (let i = 0; i < length(config.channels); i++) {
+            if (config.channels[i].namekey === channelNamekey) {
                 found = true;
                 break;
             }
         }
         if (!found) {
-            push(localChannels, { namekey: channelNamekey });
-            channel.updateLocalChannels(localChannels);
+            push(config.channels, { namekey: channelNamekey });
         }
-        log0("channel created: %s\n", channelNamekey);
-    } else {
-        log0("no device_name configured — skipping channel creation\n");
+        log0("channel registered: %s\n", channelNamekey);
     }
+    channelCreated = true;
 
     // Cache a Strict-mode probe. We only need to know whether
     // strict-mode is on; the router runs the full gatekeeper pass
@@ -626,11 +625,7 @@ export function send(msg)
 
 export function tick()
 {
-    // Periodic maintenance for TCP API backend.
-    // Currently a stub; future enhancements could include:
-    // - Connection health checks
-    // - Reconnection logic on socket failure
-    // - Periodic polling for data
+    // Periodic maintenance stub.
 };
 
 export function process(msg)
