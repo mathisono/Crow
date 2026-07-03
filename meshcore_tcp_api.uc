@@ -101,7 +101,7 @@ const TEXT_ENVELOPE_BYTES      = 9;
 // ---------------------------------------------------------------------
 
 let cfg              = null;
-let enabled          = false;
+export let enabled   = false;
 let callsign         = null;
 let router           = null;
 let tcpHost          = null;
@@ -247,6 +247,23 @@ function sendBootHandshake()
 }
 
 // ---------------------------------------------------------------------
+// advance() — skip past rejected frames in the TCP buffer
+// ---------------------------------------------------------------------
+
+// Advance past a rejected frame. If the payload hasn't fully arrived
+// yet, arrange to discard the remainder from future socket reads.
+function advance(hdrBytes, payloadBytes)
+{
+    const total = hdrBytes + payloadBytes;
+    if (length(tcpbuf) >= total) {
+        tcpbuf = substr(tcpbuf, total);
+        return;
+    }
+    pendingSkip = total - length(tcpbuf);
+    tcpbuf = "";
+}
+
+// ---------------------------------------------------------------------
 // The "Smart Accumulator"
 // ---------------------------------------------------------------------
 //
@@ -381,19 +398,6 @@ function smartAccumulate(data)
         stats.frames_in++;
         push(frames, { cmd: cmd, payload: payload });
     }
-}
-
-// Advance past a rejected frame. If the payload hasn't fully arrived
-// yet, arrange to discard the remainder from future socket reads.
-function advance(hdrBytes, payloadBytes)
-{
-    const total = hdrBytes + payloadBytes;
-    if (length(tcpbuf) >= total) {
-        tcpbuf = substr(tcpbuf, total);
-        return;
-    }
-    pendingSkip = total - length(tcpbuf);
-    tcpbuf = "";
 }
 
 // ---------------------------------------------------------------------
