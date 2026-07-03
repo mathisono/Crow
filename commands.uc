@@ -124,10 +124,10 @@ function pushBackendStatus(reply, b)
         push(reply, `Transport: ${b.transport}`);
     }
     push(reply, `State: ${state}`);
-    if (b.host !== undefined && b.host !== null && b.port !== undefined && b.port !== null) {
+    if (exists(b, "host") && b.host !== null && exists(b, "port") && b.port !== null) {
         push(reply, `Target: ${b.host}:${b.port}`);
     }
-    if (b.pending_rx !== undefined) {
+    if (exists(b, "pending_rx")) {
         push(reply, `Pending RX: ${b.pending_rx}`);
     }
     if (b.reconnect_in_seconds > 0) {
@@ -359,7 +359,7 @@ export function post(cmd, id)
                         `<b>Backend:</b> ${chan.backend ?? "unknown"}`,
                         `<b>Telemetry:</b> ${chan.telemetry ? "yes" : "no"}`
                     ];
-                    if (chan.slot_index !== undefined && chan.slot_index !== null) {
+                    if (exists(chan, "slot_index") && chan.slot_index !== null) {
                         push(reply, `<b>MeshCore Slot:</b> ${chan.slot_index}`);
                     }
                     event.queue({ cmd: "/reply", reply: reply, socket: id });
