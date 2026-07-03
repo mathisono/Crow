@@ -7,8 +7,10 @@ import * as node from "node";
 import * as crypto from "crypto.crypto";
 import * as groups from "groups";
 import * as aprs from "aprs";
-import * as meshcore_discovery from "meshcore_tcp_discovery";  // NEW: for /cmd discover
-import * as gatekeeper from "gatekeeper";  // NEW: for channel access control
+import * as meshcore_backend from "meshcore_backend";
+import * as meshtastic_backend from "meshtastic_backend";
+import * as meshcore_discovery from "meshcore_tcp_discovery";
+import * as gatekeeper from "gatekeeper";
 
 function fmtBytes(n)
 {
@@ -57,7 +59,6 @@ function getBridge()
     return null;
 }
 
-
 function currentChannelsAsSettings()
 {
     return map(channel.getAllLocalChannels(), c => {
@@ -75,28 +76,106 @@ function storageSupported(id, fn)
     return true;
 }
 
-// NEW (Phase 4): Derive encryption key from passphrase
-// Input: passphrase (user-provided string)
-// Output: 32-byte key derived via SHA256
 function deriveKeyFromPassphrase(passphrase)
 {
-    // Hash the passphrase to get a 32-byte key
-    // Note: This is one-shot (not stored), suitable for LAN environments
-    const hash = crypto.sha256hash(passphrase);
-    // hash is already [byte0, byte1, ..., byte31]
-    return hash;
+    return crypto.sha256hash(passphrase);
 }
 
-// NEW (Phase 4): Convert key bytes to base64 for namekey
 function keyBytesToBase64(keyBytes)
 {
-    // keyBytes is array of 32 bytes
-    // We need to convert to string for b64enc
     let keyStr = "";
     for (let i = 0; i < length(keyBytes); i++) {
         keyStr += chr(keyBytes[i]);
     }
     return b64enc(keyStr);
+}
+
+function backendBadge(state)
+{
+    if (state === "connected" || state === "listening") {
+        return "🟢";
+    }
+    if (state === "connecting") {
+        return "🟡";
+    }
+    if (state === "waiting") {
+        return "🟠";
+    }
+    if (state === "configured-inactive") {
+        return "⚫";
+    }
+    if (state === "disconnected" || state === "enabled-no-socket") {
+        return "🔴";
+    }
+    return "⚪";
+}
+
+function pushBackendStatus(reply, b)
+{
+    const state = b.state ?? (b.active ? "active" : "configured");
+    const badge = backendBadge(state);
+    const active = b.active ? " <i>(active)</i>" : "";
+
+    push(reply, `${badge} <b>${b.key}</b> &mdash; ${b.label}${active}`);
+    if (b.family) {
+        push(reply, `Family: ${b.family}`);
+    }
+    if (b.transport) {
+        push(reply, `Transport: ${b.transport}`);
+    }
+    push(reply, `State: ${state}`);
+    if (b.host !== undefined && b.host !== null && b.port !== undefined && b.port !== null) {
+        push(reply, `Target: ${b.host}:${b.port}`);
+    }
+    if (b.pending_rx !== undefined) {
+        push(reply, `Pending RX: ${b.pending_rx}`);
+    }
+    if (b.reconnect_in_seconds > 0) {
+        push(reply, `Reconnect in: ${b.reconnect_in_seconds}s`);
+    }
+    if (b.reconnect_delay_seconds > 0 && state !== "connected") {
+        push(reply, `Retry delay: ${b.reconnect_delay_seconds}s`);
+    }
+    push(reply, "&nbsp;");
+}
+
+function backendStatusReply()
+{
+    const reply = [ "Backend status:", "&nbsp;" ];
+
+    if (!aprs.enabled) {
+        push(reply, "⚪ <b>aprs</b> &mdash; APRS is not enabled");
+        push(reply, "&nbsp;");
+    }
+    else {
+        const bes = aprs.getBackendStatus ? aprs.getBackendStatus() : aprs.getBackendNames();
+        if (!bes || length(bes) === 0) {
+            push(reply, "⚪ <b>aprs</b> &mdash; No APRS backends configured");
+            push(reply, "&nbsp;");
+        }
+        else {
+            for (let i = 0; i < length(bes); i++) {
+                const b = bes[i];
+                b.family = "aprs";
+                if (substr(b.key ?? "", 0, 5) !== "aprs.") {
+                    b.key = `aprs.${b.key}`;
+                }
+                pushBackendStatus(reply, b);
+            }
+        }
+    }
+
+    const meshcore = meshcore_backend.backendStatus ? meshcore_backend.backendStatus() : [];
+    for (let i = 0; i < length(meshcore); i++) {
+        pushBackendStatus(reply, meshcore[i]);
+    }
+
+    const meshtastic = meshtastic_backend.backendStatus ? meshtastic_backend.backendStatus() : [];
+    for (let i = 0; i < length(meshtastic); i++) {
+        pushBackendStatus(reply, meshtastic[i]);
+    }
+
+    return reply;
 }
 
 export function post(cmd, id)
@@ -116,17 +195,16 @@ export function post(cmd, id)
                 ], socket: id });
                 break;
             }
-            
-            // NEW (Phase 4): Handle key drop via passphrase
+
             let keyDropUsed = false;
             if (parsed.keyDrop) {
                 const derivedKeyBytes = deriveKeyFromPassphrase(parsed.keyDrop);
                 const base64Key = keyBytesToBase64(derivedKeyBytes);
-                parsed.symmetricKey = base64Key;  // Override with derived key
+                parsed.symmetricKey = base64Key;
                 keyDropUsed = true;
                 DEBUG0("commands: key drop used for passphrase (not logged)\n");
             }
-            
+
             const namekey = groups.createGroupChannel(parsed.name, parsed.arednOnly, parsed.backendName, parsed.symmetricKey);
             if (length(parsed.members) > 0) {
                 groups.putGroup(parsed.name, parsed.members, {
@@ -213,43 +291,36 @@ export function post(cmd, id)
         }
         case "cmd":
         {
-            // NEW (Phase 4): Discovery and discovery-related commands
             switch (cmd[1]) {
                 case "discover":
                 {
-                    const backend = cmd[2] ?? "all";  // "meshcore", "meshtastic", "all"
-                    const discovered = [];
+                    const backend = cmd[2] ?? "all";
                     const reply = [ "<b>Discovered Channels</b>", "&nbsp;" ];
-                    
-                    // Get MeshCore groups if requested
+
                     if (backend === "all" || backend === "meshcore") {
                         const groups_discovered = meshcore_discovery.getCachedGroups();
                         if (groups_discovered && length(groups_discovered) > 0) {
                             push(reply, "<b>═══ MeshCore Groups ═══</b>");
-                            for (let i = 0; i < length(groups_discovered); i++) {
-                                const g = groups_discovered[i];
+                            for (let g of groups_discovered) {
                                 push(reply, `<b>Slot ${g.slot}: ${g.name}</b> (${g.key_size ?? "?"}-byte key)`);
                                 push(reply, `<div class="cj" onclick='cmd("/join ${g.name}")'>/join ${g.name}</div>`);
                             }
                             push(reply, "&nbsp;");
                         }
                     }
-                    
-                    // Get Meshtastic channels if requested
+
                     if (backend === "all" || backend === "meshtastic") {
                         const all_channels = channel.getAllChannelNamekeys();
                         let meshtastic_count = 0;
-                        for (let i = 0; i < length(all_channels); i++) {
-                            const nk = all_channels[i];
+                        for (let nk of all_channels) {
                             if (channel.isMeshtasticPreset(nk)) continue;
                             const parts = split(nk, " ");
-                            if (ord(parts[0]) !== 35) continue;  // Must be #channel
-                            
+                            if (ord(parts[0]) !== 35) continue;
+
                             if (meshtastic_count === 0) {
                                 push(reply, "<b>═══ Meshtastic Channels ═══</b>");
                             }
                             meshtastic_count++;
-                            
                             push(reply, `<b>${parts[0]}</b>`);
                             push(reply, `<div class="cj" onclick='cmd("/join ${parts[0]}")'>/join ${parts[0]}</div>`);
                         }
@@ -257,14 +328,14 @@ export function post(cmd, id)
                             push(reply, "&nbsp;");
                         }
                     }
-                    
+
                     push(reply, "<b>═══ Summary ═══</b>");
                     const meshcore_groups = meshcore_discovery.getCachedGroups();
                     const mc_count = meshcore_groups ? length(meshcore_groups) : 0;
                     push(reply, `MeshCore: ${mc_count} discovered groups`);
                     push(reply, "");
                     push(reply, "<i>Use /join &lt;channel_name&gt; to join</i>");
-                    
+
                     event.queue({ cmd: "/reply", reply: reply, socket: id });
                     break;
                 }
@@ -313,7 +384,7 @@ export function post(cmd, id)
                 {
                     const bridge = getBridge();
                     if (bridge) {
-                        router.queue(message.createMessage(bridge, null,null, "command", {
+                        router.queue(message.createMessage(bridge, null, null, "command", {
                             id: id,
                             cmd: "get_public_channels"
                         }, {
@@ -321,7 +392,6 @@ export function post(cmd, id)
                         }));
                         break;
                     }
-                    // Fall through
                 }
                 case "local":
                 {
@@ -336,10 +406,10 @@ export function post(cmd, id)
                 {
                     const name = cmd[2];
                     let key;
-                    if (ord(name) === 35) { // #
+                    if (ord(name) === 35) {
                         key = b64enc(struct.pack("16B", ...crypto.sha256hash(name)));
                     }
-                    else if (ord(name) === 37) { // %
+                    else if (ord(name) === 37) {
                         key = "og==";
                     }
                     else {
@@ -387,21 +457,7 @@ export function post(cmd, id)
         case "backend":
         case "backends":
         {
-            if (!aprs.enabled) {
-                event.queue({ cmd: "/reply", reply: [ "APRS is not enabled" ], socket: id });
-                break;
-            }
-            const bes = aprs.getBackendNames();
-            if (length(bes) === 0) {
-                event.queue({ cmd: "/reply", reply: [ "No APRS backends configured" ], socket: id });
-            }
-            else {
-                const reply = [ "APRS backends:", "&nbsp;" ];
-                for (let i = 0; i < length(bes); i++) {
-                    push(reply, `<b>${bes[i].key}</b> &mdash; ${bes[i].label}`);
-                }
-                event.queue({ cmd: "/reply", reply: reply, socket: id });
-            }
+            event.queue({ cmd: "/reply", reply: backendStatusReply(), socket: id });
             break;
         }
         case "storage":
@@ -503,25 +559,14 @@ export function post(cmd, id)
             event.queue({ cmd: "/reply", reply: [
                 "<b>Crow Slash Commands</b>", "&nbsp;",
                 "<b>/join</b> #name &mdash; join/create shared-key channel (Meshtastic+MeshCore+AREDN)",
-                "<b>/join</b> #name key=passphrase &mdash; join with a key derived from passphrase",
                 "<b>/join</b> %name &mdash; join/create AREDN-only channel",
                 "<b>/join</b> #name CALL1 CALL2 message &mdash; create APRS group + channel + send message",
                 "<b>/join</b> #name backend=NAME CALL1 msg &mdash; APRS group on a specific backend",
                 "<b>/leave</b> #name &mdash; leave channel and remove APRS group",
                 "<b>/groups</b> &mdash; list all APRS groups and members",
-                "<b>/backends</b> &mdash; list configured APRS backends",
-                "<b>/backend</b> &mdash; alias for /backends",
-                "<b>/cmd</b> discover [meshcore|meshtastic] &mdash; list discovered channels",
-                "<b>/cmd</b> info &lt;namekey&gt; &mdash; show channel details",
-                "<b>/channels</b> local &mdash; list public channels on local node",
-                "<b>/channels</b> world &mdash; list public channels through bridge",
-                "<b>/channels</b> join &lt;namekey&gt; &mdash; join public channel",
-                "<b>/channels</b> leave &lt;name&gt; &mdash; leave public channel",
+                "<b>/backends</b> &mdash; show APRS, MeshCore, and Meshtastic backend status",
                 "<b>/storage</b> status &mdash; show active storage state",
-                "<b>/storage</b> usb scan &mdash; list removable storage",
-                "<b>/storage</b> usb enable &mdash; move Crow storage to USB",
-                "<b>/storage</b> usb disable &mdash; return Crow storage to internal flash",
-                "<b>/storage</b> quota images &lt;mb&gt; &mdash; set image storage quota"
+                "<b>/channels</b> &mdash; list public channels on local network"
             ], socket: id });
             break;
         }
@@ -545,7 +590,7 @@ export function process(msg)
         switch (msg.data.command.cmd) {
             case "get_public_channels":
             {
-                router.queue(message.createMessage(msg.from, null,null, "command", {
+                router.queue(message.createMessage(msg.from, null, null, "command", {
                     id: msg.data.command.id,
                     cmd: "reply_public_channels",
                     channels: getPublicChannels(),
@@ -561,6 +606,7 @@ export function process(msg)
                     ...msg.data.command.channels
                 ];
                 event.queue({ cmd: "/reply", reply: reply, socket: msg.data.command.id });
+                break;
             }
             default:
                 break;

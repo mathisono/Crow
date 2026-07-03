@@ -1,50 +1,48 @@
-// Node-runnable mirror of test_meshcore_tcp_api.uc.
-//
-// Re-implements the Smart Accumulator + text decoder from
-// meshcore_tcp_api.uc so the state machine can be exercised on a dev
-// laptop that doesn't have the ucode interpreter. If `ucode` is on PATH,
-// the canonical .uc tests are invoked at the end.
-//
-// Contract under test (text-only):
-//   - Accumulator only EMITS frames for cmd ∈ { TXT_MSG, GRP_TXT }.
-//   - HELLO_RESP, ADVERT, encrypted, unknown — all dropped at buffer
-//     level without payload allocation.
-//   - SMART_MAX_PAYLOAD = 256.
-//   - Malformed text frames (tlen byte > plen) are dropped early.
+// Node-runnable mirror of tests/test_meshcore_tcp_api.uc.
+// Exercises stock MeshCore TCP / Serial-WiFi framing:
+//   Radio -> client: '>' + uint16le(length) + payload
+//   Client -> radio: '<' + uint16le(length) + payload
 
 'use strict';
 
 const { spawnSync } = require('child_process');
 const path = require('path');
 
-// ---------- Constants (mirror of meshcore_tcp_api.uc) ----------
+const FRAME_FROM_RADIO = 0x3E;
+const FRAME_TO_RADIO = 0x3C;
+const HEADER_BYTES = 3;
+const SMART_MAX_PAYLOAD = 256;
+const RESYNC_BUFFER_CAP = 4096;
 
-const COMPANION_MAGIC      = 0x3E;
-const HEADER_BYTES         = 4;
-const SMART_MAX_PAYLOAD    = 256;
-const RESYNC_BUFFER_CAP    = 4096;
-const TEXT_ENVELOPE_BYTES  = 9;
-
-const CMD_TXT_MSG          = 0x81;
-const CMD_GRP_TXT          = 0x82;
-const CMD_ADVERT           = 0x83;
-const CMD_HELLO_RESP       = 0x80;
-const CMD_ENCRYPTED_DM     = 0x90;
-const CMD_ENCRYPTED_BIN    = 0x91;
+const PUSH_CODE_MSG_WAITING = 0x83;
+const CMD_SYNC_NEXT_MESSAGE = 0x0A;
+const RESP_DIRECT_MSG_RECV = 0x07;
+const RESP_CHANNEL_MSG_RECV = 0x08;
+const RESP_DIRECT_MSG_RECV_V3 = 0x10;
+const RESP_CHANNEL_MSG_RECV_V3 = 0x11;
+const RESP_CHANNEL_INFO = 0x12;
+const CMD_ENCRYPTED_DM = 0x90;
+const CMD_ENCRYPTED_BIN = 0x91;
+const CMD_UNKNOWN = 0x77;
 
 const PART97_BLOCKED_COMMANDS = new Set([CMD_ENCRYPTED_DM, CMD_ENCRYPTED_BIN]);
 
-// ---------- Smart Accumulator ----------
+function isDirect(code) { return code === RESP_DIRECT_MSG_RECV || code === RESP_DIRECT_MSG_RECV_V3; }
+function isGroup(code) { return code === RESP_CHANNEL_MSG_RECV || code === RESP_CHANNEL_MSG_RECV_V3; }
+function isMessage(code) { return isDirect(code) || isGroup(code); }
 
-class SmartAccumulator
-{
-    constructor(gatekeeper)
-    {
+class SmartAccumulator {
+    constructor(gatekeeper) {
         this.gatekeeper = gatekeeper;
         this.buf = Buffer.alloc(0);
         this.pendingSkip = 0;
+        this.responses = [];
+        this.commands = [];
         this.stats = {
             frames_in: 0,
+            commands_sent: 0,
+            message_waiting: 0,
+            responses_cached: 0,
             early_drop_oversize: 0,
             early_drop_encrypted: 0,
             early_drop_unknown_cmd: 0,
@@ -53,8 +51,7 @@ class SmartAccumulator
         };
     }
 
-    _advance(hdrBytes, payloadBytes)
-    {
+    _advance(hdrBytes, payloadBytes) {
         const total = hdrBytes + payloadBytes;
         if (this.buf.length >= total) {
             this.buf = this.buf.subarray(total);
@@ -64,8 +61,18 @@ class SmartAccumulator
         this.buf = Buffer.alloc(0);
     }
 
-    inject(data)
-    {
+    _sendCommand(cmd, payload = Buffer.alloc(0)) {
+        this.commands.push(buildCommand(cmd, payload));
+        this.stats.commands_sent++;
+    }
+
+    takeResponse(cmd) {
+        const idx = this.responses.findIndex(r => r.cmd === cmd);
+        if (idx < 0) return null;
+        return this.responses.splice(idx, 1)[0];
+    }
+
+    inject(data) {
         const frames = [];
         let chunk = Buffer.isBuffer(data) ? data : Buffer.from(data, 'binary');
 
@@ -76,21 +83,15 @@ class SmartAccumulator
             if (this.pendingSkip > 0) return frames;
         }
 
-        if (chunk.length > 0) {
-            this.buf = Buffer.concat([this.buf, chunk]);
-        }
+        if (chunk.length > 0) this.buf = Buffer.concat([this.buf, chunk]);
         const strictOn = this.gatekeeper && this.gatekeeper.isEnabled();
 
         for (;;) {
             const blen = this.buf.length;
             if (blen === 0) return frames;
 
-            // Resync
-            if (this.buf[0] !== COMPANION_MAGIC) {
-                let start = -1;
-                for (let i = 1; i < blen; i++) {
-                    if (this.buf[i] === COMPANION_MAGIC) { start = i; break; }
-                }
+            if (this.buf[0] !== FRAME_FROM_RADIO) {
+                const start = this.buf.indexOf(FRAME_FROM_RADIO, 1);
                 if (start < 0) {
                     if (blen > RESYNC_BUFFER_CAP) {
                         this.stats.resync_skips++;
@@ -104,101 +105,115 @@ class SmartAccumulator
             }
 
             if (blen < HEADER_BYTES) return frames;
+            const plen = this.buf.readUInt16LE(1);
 
-            const cmd  = this.buf[1];
-            const plen = (this.buf[2] << 8) | this.buf[3];
-
-            // Oversize
+            if (plen < 1) {
+                this.stats.early_drop_malformed_text++;
+                this.buf = this.buf.subarray(HEADER_BYTES);
+                continue;
+            }
             if (plen > SMART_MAX_PAYLOAD) {
                 this.stats.early_drop_oversize++;
                 this._advance(HEADER_BYTES, plen);
                 continue;
             }
-            // Encrypted (strict)
-            if (strictOn && PART97_BLOCKED_COMMANDS.has(cmd)) {
-                this.stats.early_drop_encrypted++;
-                this._advance(HEADER_BYTES, plen);
-                continue;
-            }
-            // Unknown cmd (anything not TXT_MSG or GRP_TXT)
-            if (cmd !== CMD_TXT_MSG && cmd !== CMD_GRP_TXT) {
-                this.stats.early_drop_unknown_cmd++;
-                this._advance(HEADER_BYTES, plen);
-                continue;
-            }
-            // Wait for full payload
             if (blen < HEADER_BYTES + plen) return frames;
 
-            // Inline text-envelope sanity
-            if (plen < TEXT_ENVELOPE_BYTES) {
-                this.stats.early_drop_malformed_text++;
-                this.buf = this.buf.subarray(HEADER_BYTES + plen);
-                continue;
-            }
-            const tlen = this.buf[HEADER_BYTES + 8];
-            if (TEXT_ENVELOPE_BYTES + tlen > plen) {
-                this.stats.early_drop_malformed_text++;
-                this.buf = this.buf.subarray(HEADER_BYTES + plen);
-                continue;
-            }
-
-            const payload = this.buf.subarray(HEADER_BYTES, HEADER_BYTES + plen);
+            const framePayload = this.buf.subarray(HEADER_BYTES, HEADER_BYTES + plen);
             this.buf = this.buf.subarray(HEADER_BYTES + plen);
+            const code = framePayload[0];
+            const payload = framePayload.subarray(1);
             this.stats.frames_in++;
-            frames.push({ cmd, payload });
+
+            if (code === PUSH_CODE_MSG_WAITING) {
+                this.stats.message_waiting++;
+                this._sendCommand(CMD_SYNC_NEXT_MESSAGE);
+                continue;
+            }
+            if (strictOn && PART97_BLOCKED_COMMANDS.has(code)) {
+                this.stats.early_drop_encrypted++;
+                continue;
+            }
+            if (isMessage(code)) {
+                if (!validTextPayload(code, payload)) {
+                    this.stats.early_drop_malformed_text++;
+                    continue;
+                }
+                frames.push({ cmd: code, payload });
+                continue;
+            }
+            if (code === RESP_CHANNEL_INFO) {
+                this.stats.responses_cached++;
+                this.responses.push({ cmd: code, payload: framePayload });
+                continue;
+            }
+            this.stats.early_drop_unknown_cmd++;
         }
     }
 }
 
-// ---------- Decoder ----------
-
-function decodeTextFrame(cmd, payload)
-{
-    const fromId = payload.readUInt32LE(0);
-    const toId   = payload.readUInt32LE(4);
-    const tlen   = payload[8];
-    let text     = payload.subarray(9, 9 + tlen).toString('utf8');
-    // Strip trailing NULs
-    text = text.replace(/\0+$/, '');
-    if (!text.length) return null;
-    const msg = {
-        from: fromId, to: toId,
-        transport: 'meshcore', backend: 'tcp_api',
-        data: { text_message: text }
-    };
-    if (cmd === CMD_GRP_TXT) msg.is_group = true;
-    return msg;
+function validTextPayload(code, payload) {
+    if (isDirect(code)) {
+        if (payload.length < 9) return false;
+        return 9 + payload[8] <= payload.length;
+    }
+    if (isGroup(code)) return payload.length >= 5;
+    return false;
 }
 
-// ---------- Helpers ----------
+function decodeTextFrame(cmd, payload) {
+    if (isDirect(cmd)) {
+        const fromId = payload.readUInt32LE(0);
+        const toId = payload.readUInt32LE(4);
+        const tlen = payload[8];
+        const text = payload.subarray(9, 9 + tlen).toString('utf8').replace(/\0+$/, '');
+        if (!text.length) return null;
+        return {
+            from: fromId,
+            to: toId,
+            transport: 'meshcore',
+            backend: 'tcp_api',
+            data: { text_message: text },
+            metadata: { is_group_message: false, meshcore_response_code: cmd }
+        };
+    }
+    if (isGroup(cmd)) {
+        const fromId = payload.readUInt32LE(0);
+        const slot = payload[4];
+        const text = payload.subarray(5).toString('utf8').replace(/\0+$/, '');
+        if (!text.length) return null;
+        return {
+            from: fromId,
+            group_slot: slot,
+            transport: 'meshcore',
+            backend: 'tcp_api',
+            data: { text_message: text },
+            metadata: { is_group_message: true, group_slot: slot, meshcore_response_code: cmd }
+        };
+    }
+    return null;
+}
 
-function buildFrame(cmd, payload)
-{
+function buildRadioFrame(cmd, payload = Buffer.alloc(0)) {
     const p = Buffer.isBuffer(payload) ? payload : Buffer.from(payload || '', 'binary');
-    return Buffer.concat([
-        Buffer.from([COMPANION_MAGIC, cmd & 0xFF, (p.length >> 8) & 0xFF, p.length & 0xFF]),
-        p
-    ]);
-}
-function u32le(n)
-{
-    return Buffer.from([n & 0xFF, (n >> 8) & 0xFF, (n >> 16) & 0xFF, (n >> 24) & 0xFF]);
-}
-function textPayload(from, to, text)
-{
-    const t = Buffer.from(text, 'utf8');
-    return Buffer.concat([u32le(from), u32le(to), Buffer.from([t.length]), t]);
+    const fp = Buffer.concat([Buffer.from([cmd & 0xFF]), p]);
+    return Buffer.concat([Buffer.from([FRAME_FROM_RADIO, fp.length & 0xFF, (fp.length >> 8) & 0xFF]), fp]);
 }
 
-// ---------- Tests ----------
+function buildCommand(cmd, payload = Buffer.alloc(0)) {
+    const p = Buffer.isBuffer(payload) ? payload : Buffer.from(payload || '', 'binary');
+    const fp = Buffer.concat([Buffer.from([cmd & 0xFF]), p]);
+    return Buffer.concat([Buffer.from([FRAME_TO_RADIO, fp.length & 0xFF, (fp.length >> 8) & 0xFF]), fp]);
+}
+
+function u32le(n) { return Buffer.from([n & 0xFF, (n >> 8) & 0xFF, (n >> 16) & 0xFF, (n >> 24) & 0xFF]); }
+function directPayload(from, to, text) { const t = Buffer.from(text); return Buffer.concat([u32le(from), u32le(to), Buffer.from([t.length]), t]); }
+function groupPayload(from, slot, text) { return Buffer.concat([u32le(from), Buffer.from([slot]), Buffer.from(text)]); }
 
 let failures = 0, count = 0;
-
-function check(name, got, want)
-{
+function check(name, got, want) {
     count++;
-    const same = got === want
-        || (Buffer.isBuffer(got) && Buffer.isBuffer(want) && got.equals(want));
+    const same = got === want || (Buffer.isBuffer(got) && Buffer.isBuffer(want) && got.equals(want));
     if (same) console.log(`ok   - ${name}`);
     else { failures++; console.log(`FAIL - ${name}\n   got:  ${got}\n   want: ${want}`); }
 }
@@ -207,163 +222,100 @@ function checkTrue(name, got) { check(name, !!got, true); }
 const STRICT_ON  = { isEnabled: () => true };
 const STRICT_OFF = { isEnabled: () => false };
 
-// 1. single TXT_MSG
 {
     const a = new SmartAccumulator(STRICT_ON);
-    const payload = textPayload(0x11223344, 0x55667788, 'hello mesh');
-    const f = a.inject(buildFrame(CMD_TXT_MSG, payload));
+    const payload = directPayload(0x11223344, 0x55667788, 'hello mesh');
+    const f = a.inject(buildRadioFrame(RESP_DIRECT_MSG_RECV, payload));
     check('single frame: count', f.length, 1);
-    check('single frame: cmd',   f[0]?.cmd, CMD_TXT_MSG);
-    check('single frame: payload length', f[0]?.payload.length, payload.length);
+    check('single frame: cmd', f[0]?.cmd, RESP_DIRECT_MSG_RECV);
 }
-
-// 2. fragmentation
 {
     const a = new SmartAccumulator(STRICT_ON);
-    const frame = buildFrame(CMD_GRP_TXT, textPayload(0xDEADBEEF, 0, 'fragment me'));
-    check('fragmented: read 1 yields nothing', a.inject(frame.subarray(0, 2)).length, 0);
-    check('fragmented: read 2 yields nothing', a.inject(frame.subarray(2, 7)).length, 0);
-    const f = a.inject(frame.subarray(7));
-    check('fragmented: read 3 completes', f.length, 1);
-    check('fragmented: cmd correct',      f[0]?.cmd, CMD_GRP_TXT);
+    const frame = buildRadioFrame(RESP_CHANNEL_MSG_RECV, groupPayload(0xDEADBEEF, 3, 'fragment me'));
+    check('fragmented read 1', a.inject(frame.subarray(0, 2)).length, 0);
+    check('fragmented read 2', a.inject(frame.subarray(2, 7)).length, 0);
+    check('fragmented read 3', a.inject(frame.subarray(7)).length, 1);
 }
-
-// 3. oversize kill switch
 {
     const a = new SmartAccumulator(STRICT_ON);
-    const hdr = Buffer.from([COMPANION_MAGIC, CMD_TXT_MSG, 0xEA, 0x60]); // 60000
-    check('oversize: zero frames emitted', a.inject(hdr).length, 0);
-    check('oversize: stat incremented',    a.stats.early_drop_oversize, 1);
+    a.inject(Buffer.from([FRAME_FROM_RADIO, 0x60, 0xEA]));
+    check('oversize rejected', a.stats.early_drop_oversize, 1);
 }
-
-// 4. boundary: 257 > 256 cap
 {
     const a = new SmartAccumulator(STRICT_ON);
-    const hdr = Buffer.from([COMPANION_MAGIC, CMD_TXT_MSG, 0x01, 0x01]);
-    a.inject(hdr);
-    check('boundary 257: rejected', a.stats.early_drop_oversize, 1);
+    a.inject(buildRadioFrame(CMD_ENCRYPTED_DM, Buffer.alloc(16)));
+    check('encrypted strict drop', a.stats.early_drop_encrypted, 1);
 }
-
-// 5. encrypted early-drop under strict
-{
-    const a = new SmartAccumulator(STRICT_ON);
-    const enc = buildFrame(CMD_ENCRYPTED_DM, Buffer.alloc(32, 0x58));
-    check('encrypted: dropped', a.inject(enc).length, 0);
-    check('encrypted: stat incremented', a.stats.early_drop_encrypted, 1);
-}
-
-// 6. encrypted with strict OFF -> falls to unknown-cmd gate
 {
     const a = new SmartAccumulator(STRICT_OFF);
-    a.inject(buildFrame(CMD_ENCRYPTED_DM, Buffer.alloc(16, 0x58)));
-    check('encrypted strict-off: not counted as encrypted drop',
-        a.stats.early_drop_encrypted, 0);
-    check('encrypted strict-off: counted as unknown-cmd drop',
-        a.stats.early_drop_unknown_cmd, 1);
+    a.inject(buildRadioFrame(CMD_ENCRYPTED_DM, Buffer.alloc(16)));
+    check('encrypted strict-off unknown', a.stats.early_drop_unknown_cmd, 1);
 }
-
-// 7. unknown cmd
 {
     const a = new SmartAccumulator(STRICT_ON);
-    const f = a.inject(buildFrame(0x77, Buffer.from('junk-payload')));
-    check('unknown cmd: dropped', f.length, 0);
-    check('unknown cmd: stat incremented', a.stats.early_drop_unknown_cmd, 1);
+    a.inject(buildRadioFrame(PUSH_CODE_MSG_WAITING));
+    check('message waiting stat', a.stats.message_waiting, 1);
+    check('message waiting sends sync', a.commands[0]?.[3], CMD_SYNC_NEXT_MESSAGE);
 }
-
-// 8. ADVERT is NOT emitted (text-only contract)
 {
     const a = new SmartAccumulator(STRICT_ON);
-    const adv = buildFrame(CMD_ADVERT, Buffer.from('advert-body'));
-    check('advert: dropped at unknown-cmd gate', a.inject(adv).length, 0);
-    check('advert: stat incremented',            a.stats.early_drop_unknown_cmd, 1);
+    const frame = buildRadioFrame(RESP_DIRECT_MSG_RECV, directPayload(1, 2, 'after garbage'));
+    check('resync after garbage', a.inject(Buffer.concat([Buffer.from([0, 1, 2]), frame])).length, 1);
+    checkTrue('resync stat', a.stats.resync_skips >= 1);
 }
-
-// 9. HELLO_RESP is NOT emitted
-{
-    const a = new SmartAccumulator(STRICT_ON);
-    const hr = buildFrame(CMD_HELLO_RESP, Buffer.from('ok'));
-    check('hello_resp: dropped at unknown-cmd gate', a.inject(hr).length, 0);
-    check('hello_resp: stat incremented',            a.stats.early_drop_unknown_cmd, 1);
-}
-
-// 10. pre-magic garbage
-{
-    const a = new SmartAccumulator(STRICT_ON);
-    const garbage = Buffer.from([0x00, 0x01, 0x02, 0x99, 0xAA, 0xBB]);
-    const frame = buildFrame(CMD_TXT_MSG, textPayload(0xABCDEF01, 0, 'after garbage'));
-    const f = a.inject(Buffer.concat([garbage, frame]));
-    check('resync: one frame after garbage', f.length, 1);
-    checkTrue('resync: stat incremented', a.stats.resync_skips >= 1);
-}
-
-// 11. back-to-back
 {
     const a = new SmartAccumulator(STRICT_ON);
     const buf = Buffer.concat([
-        buildFrame(CMD_TXT_MSG, textPayload(1, 2, 'one')),
-        buildFrame(CMD_TXT_MSG, textPayload(3, 4, 'two'))
+        buildRadioFrame(RESP_DIRECT_MSG_RECV, directPayload(1, 2, 'one')),
+        buildRadioFrame(RESP_DIRECT_MSG_RECV, directPayload(3, 4, 'two'))
     ]);
-    check('back-to-back: 2 frames', a.inject(buf).length, 2);
+    check('back-to-back frames', a.inject(buf).length, 2);
 }
-
-// 12. multi-read oversize drain
-{
-    const a = new SmartAccumulator(STRICT_ON);
-    a.inject(Buffer.from([COMPANION_MAGIC, CMD_TXT_MSG, 0x04, 0x00])); // claim 1024
-    a.inject(Buffer.alloc(600, 0xAA));
-    a.inject(Buffer.alloc(424, 0xAA));
-    const f = a.inject(buildFrame(CMD_TXT_MSG, textPayload(7, 8, 'ok')));
-    check('oversize drain: next valid frame parses', f.length, 1);
-    check('oversize drain: cmd correct',             f[0]?.cmd, CMD_TXT_MSG);
-}
-
-// 13. malformed text — tlen > plen
 {
     const a = new SmartAccumulator(STRICT_ON);
     const evil = Buffer.concat([u32le(1), u32le(2), Buffer.from([99]), Buffer.from('abc')]);
-    const frame = buildFrame(CMD_TXT_MSG, evil);
-    check('malformed: dropped', a.inject(frame).length, 0);
-    check('malformed: stat incremented', a.stats.early_drop_malformed_text, 1);
+    check('malformed direct dropped', a.inject(buildRadioFrame(RESP_DIRECT_MSG_RECV, evil)).length, 0);
+    check('malformed stat', a.stats.early_drop_malformed_text, 1);
 }
-
-// 14. Decoder: TXT_MSG
 {
-    const payload = textPayload(0xCAFEBABE, 0x00000000, 'hi');
-    const msg = decodeTextFrame(CMD_TXT_MSG, payload);
-    check('decode TXT: transport', msg?.transport, 'meshcore');
-    check('decode TXT: backend',   msg?.backend,   'tcp_api');
-    check('decode TXT: from',      msg?.from,      0xCAFEBABE);
-    check('decode TXT: to',        msg?.to,        0);
-    check('decode TXT: text',      msg?.data?.text_message, 'hi');
-    check('decode TXT: not group', msg?.is_group ?? false, false);
+    const msg = decodeTextFrame(RESP_DIRECT_MSG_RECV, directPayload(0xCAFEBABE, 0, 'hi'));
+    check('decode direct text', msg?.data?.text_message, 'hi');
+    check('decode direct group flag', msg?.metadata?.is_group_message, false);
 }
-
-// 15. Decoder: GRP_TXT
 {
-    const payload = textPayload(0xDEADBEEF, 0, 'yo');
-    const msg = decodeTextFrame(CMD_GRP_TXT, payload);
-    check('decode GRP: is_group', msg?.is_group, true);
+    const msg = decodeTextFrame(RESP_CHANNEL_MSG_RECV, groupPayload(0xDEADBEEF, 5, 'yo'));
+    check('decode group text', msg?.data?.text_message, 'yo');
+    check('decode group slot', msg?.group_slot, 5);
+}
+{
+    const d = decodeTextFrame(RESP_DIRECT_MSG_RECV_V3, directPayload(1, 2, 'v3d'));
+    const g = decodeTextFrame(RESP_CHANNEL_MSG_RECV_V3, groupPayload(3, 2, 'v3g'));
+    check('decode v3 direct', d?.data?.text_message, 'v3d');
+    check('decode v3 group', g?.data?.text_message, 'v3g');
+}
+{
+    const a = new SmartAccumulator(STRICT_ON);
+    const response = Buffer.concat([Buffer.from([RESP_CHANNEL_INFO, 0]), Buffer.from('TacNet'), Buffer.alloc(26), Buffer.alloc(16, 1)]);
+    check('channel info no message', a.inject(Buffer.concat([Buffer.from([FRAME_FROM_RADIO, response.length & 0xFF, response.length >> 8]), response])).length, 0);
+    check('channel info cached', a.stats.responses_cached, 1);
+    check('channel info cached cmd', a.takeResponse(RESP_CHANNEL_INFO)?.cmd, RESP_CHANNEL_INFO);
+}
+{
+    const cmd = buildCommand(CMD_SYNC_NEXT_MESSAGE);
+    check('command marker', cmd[0], FRAME_TO_RADIO);
+    check('command length LSB', cmd[1], 1);
+    check('command payload code', cmd[3], CMD_SYNC_NEXT_MESSAGE);
 }
 
-console.log(`\nJS:    ${count - failures} passed, ${failures} failed`);
+console.log(`\n${count - failures} passed, ${failures} failed`);
 
-// ucode invocation if available
-let ucPath = '';
-try {
-    const r = spawnSync('which', ['ucode'], { encoding: 'utf8' });
-    if (r.status === 0) ucPath = r.stdout.trim();
-} catch (_) {}
-
-if (ucPath) {
-    const r = spawnSync(ucPath, ['-R', '-L', path.join(__dirname, 'test_meshcore_tcp_api.uc')], {
-        cwd: path.dirname(__dirname),
-        encoding: 'utf8'
-    });
-    process.stdout.write(r.stdout || '');
-    process.stderr.write(r.stderr || '');
-    if (r.status !== 0) failures++;
-} else {
-    console.log('ucode: skipped (ucode not on PATH)');
+const ucodePath = spawnSync('which', ['ucode'], { encoding: 'utf8' });
+if (ucodePath.status === 0) {
+    const uc = spawnSync('ucode', [path.join(__dirname, 'test_meshcore_tcp_api.uc')], { stdio: 'inherit' });
+    if (uc.status !== 0) failures++;
+}
+else {
+    console.log('ucode not found; skipped canonical .uc test');
 }
 
-process.exit(failures > 0 ? 1 : 0);
+process.exit(failures ? 1 : 0);

@@ -3,6 +3,7 @@ import * as api from "meshtastic_API";
 
 let active = null;
 let activeName = null;
+let lastConfig = null;
 export let enabled = false;
 
 export function registerProto(name, portnum, decode)
@@ -43,15 +44,60 @@ function wantsUdp(config)
     return config.meshtastic.enabled !== false;
 }
 
+function hasTcpConfig(config)
+{
+    const mode = config.meshtastic?.backend ?? config.meshtastic?.transport;
+    return mode === "api" || mode === "tcp-api" || mode === "port-api" ||
+        config.meshtastic_api?.enabled === true ||
+        config.meshtastic_API?.enabled === true;
+}
+
+function hasUdpConfig(config)
+{
+    return !!config.meshtastic && config.meshtastic.enabled !== false;
+}
+
+function tcpConfig(config)
+{
+    return config.meshtastic_api ?? config.meshtastic_API ?? {};
+}
+
+function candidateStatus(key, label, transport, configured, isActive, host, port)
+{
+    const socketHandle = isActive ? active?.handle() : null;
+    let state = "not-configured";
+    if (configured && !isActive) {
+        state = "configured-inactive";
+    }
+    else if (configured && isActive) {
+        state = socketHandle ? (transport === "udp" ? "listening" : "connected") : "enabled-no-socket";
+    }
+
+    return {
+        family: "meshtastic",
+        key: key,
+        label: label,
+        transport: transport,
+        configured: configured,
+        active: isActive,
+        state: state,
+        host: host,
+        port: port,
+        socket: socketHandle !== null,
+        pending_rx: 0
+    };
+}
+
 export function setup(config)
 {
+    lastConfig = config;
     active = null;
     activeName = null;
     enabled = false;
 
     if (wantsApi(config)) {
         active = api;
-        activeName = "tcp-port-api";
+        activeName = "tcp";
     }
     else if (wantsUdp(config)) {
         active = udp;
@@ -104,4 +150,33 @@ export function process(msg)
 export function backendName()
 {
     return activeName;
+};
+
+export function backendStatus()
+{
+    const cfg = lastConfig ?? {};
+    const tc = tcpConfig(cfg);
+    const out = [];
+
+    push(out, candidateStatus(
+        "meshtastic.udp",
+        "Meshtastic UDP multicast",
+        "udp",
+        hasUdpConfig(cfg),
+        activeName === "udp" && enabled,
+        "224.0.0.69",
+        4403
+    ));
+
+    push(out, candidateStatus(
+        "meshtastic.tcp",
+        "Meshtastic TCP Port API",
+        "tcp",
+        hasTcpConfig(cfg),
+        activeName === "tcp" && enabled,
+        tc.host ?? null,
+        tc.port ?? 4403
+    ));
+
+    return out;
 };
