@@ -711,8 +711,63 @@ export function send(msg)
 
 export function tick()
 {
-    // Periodic maintenance stub.
+    // Lazy channel creation: after SELF_INFO (0x05) is received,
+    // deviceName becomes available. Create the channel on first tick.
+    if (enabled && deviceName && !channelCreated && channel) {
+        createAutoChannel();
+    }
 };
+
+// -----
+// createAutoChannel() — Register MeshCore device as a channel
+// =====================================================================
+//
+// Called lazily from tick() after SELF_INFO response is received
+// and deviceName is captured. Follows the same pattern as APRS backend.
+//
+// Channel name format: "MeshCore {device_name} og=="
+// Example: "MeshCore KJ6DZB-MLK og=="
+//
+// =====================================================================
+
+function createAutoChannel()
+{
+    if (!deviceName) {
+        log1("createAutoChannel: deviceName not set\n");
+        return;
+    }
+
+    channelNamekey = `MeshCore ${deviceName} og==`;
+
+    try {
+        // Get all existing local channels
+        const localChannels = channel.getAllLocalChannels();
+        
+        // Check if our channel already exists
+        let hasChannel = false;
+        for (let i = 0; i < length(localChannels); i++) {
+            if (localChannels[i].namekey === channelNamekey) {
+                hasChannel = true;
+                break;
+            }
+        }
+        
+        // Add if not present
+        if (!hasChannel) {
+            push(localChannels, { namekey: channelNamekey });
+            channel.updateLocalChannels(localChannels);
+            log0("auto-created channel: %s\n", channelNamekey);
+        } else {
+            log1("channel already exists: %s\n", channelNamekey);
+        }
+        
+        channelCreated = true;
+    }
+    catch (err) {
+        log0("createAutoChannel error: %s\n", err);
+        stats.early_drop_unknown_cmd++;  // Count as error
+    }
+}
 
 export function process(msg)
 {
