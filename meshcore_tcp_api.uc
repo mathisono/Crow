@@ -151,6 +151,64 @@ function log1(fmt, ...args)
     DEBUG1("meshcore_tcp_api: " + fmt, ...args);
 }
 
+function localHostname()
+{
+    try {
+        const h = fs.readfile("/proc/sys/kernel/hostname");
+        if (h) return replace(h, "\n", "");
+    } catch (e) {}
+    return "";
+}
+
+function publicChannelLabel()
+{
+    const hostname = localHostname();
+    const dev = deviceName ?? cfg?.device_name ?? "MeshCore";
+    const chanName = cfg?.channel_name ?? "Public";
+    return hostname
+        ? `${hostname} \u00b7 ${dev} \u00b7 ${chanName}`
+        : `${dev} \u00b7 ${chanName}`;
+}
+
+function ensureConfiguredPublicChannel(config)
+{
+    channelNamekey = channel.meshcorePublicChannelNamekey();
+    if (!config.channels) config.channels = [];
+
+    const label = publicChannelLabel();
+    for (let i = 0; i < length(config.channels); i++) {
+        if (config.channels[i].namekey === channelNamekey) {
+            config.channels[i].label = label;
+            log1("channel check: %s already configured\n", channelNamekey);
+            return false;
+        }
+    }
+
+    push(config.channels, { namekey: channelNamekey, label: label });
+    log0("channel registered: %s (label: %s)\n", channelNamekey, label);
+    return true;
+}
+
+function ensureRuntimePublicChannel()
+{
+    channelNamekey = channel.meshcorePublicChannelNamekey();
+
+    const localChannels = channel.getAllLocalChannels();
+    for (let i = 0; i < length(localChannels); i++) {
+        if (localChannels[i].namekey === channelNamekey) {
+            channelCreated = true;
+            return false;
+        }
+    }
+
+    push(localChannels, { namekey: channelNamekey });
+    channel.updateLocalChannels(localChannels);
+    rootConfig.update?.("channels");
+    channelCreated = true;
+    log0("auto-created channel: %s\n", channelNamekey);
+    return true;
+}
+
 // ---------------------------------------------------------------------
 // Tiny binary helpers
 // ---------------------------------------------------------------------
@@ -617,39 +675,10 @@ export function setup(config)
     tcpHost  = cfg.host ?? DEFAULT_HOST;
     tcpPort  = cfg.port ?? DEFAULT_PORT;
 
-    // --- Device name & channel creation ---
-    // Inject our channel into config.channels so that channel.setup()
-    // (which runs after us in config.uc) picks it up automatically.
-    // This avoids timing issues with lazy tick-based creation.
+    // Inject the public MeshCore channel before channel.setup() runs.
+    // tick() repeats the check later in case setup order changes.
     deviceName = cfg.device_name ?? null;
-    if (deviceName) {
-        channelNamekey = channel.meshcorePublicChannelNamekey();
-        // Build a friendly label combining local hostname, MeshCore device, and channel name.
-        // Channel name defaults to "Public" until Phase-2 slot discovery lands.
-        let hostname = "";
-        try {
-            const h = fs.readfile("/proc/sys/kernel/hostname");
-            if (h) hostname = replace(h, "\n", "");
-        } catch (e) {}
-        const chanName = cfg.channel_name ?? "Public";
-        const label = hostname
-            ? `${hostname} \u00b7 ${deviceName} \u00b7 ${chanName}`
-            : `${deviceName} \u00b7 ${chanName}`;
-        if (!config.channels) config.channels = [];
-        let found = false;
-        for (let i = 0; i < length(config.channels); i++) {
-            if (config.channels[i].namekey === channelNamekey) {
-                config.channels[i].label = label;
-                found = true;
-                break;
-            }
-        }
-        if (!found) {
-            push(config.channels, { namekey: channelNamekey, label: label });
-        }
-        log0("channel registered: %s (label: %s)\n", channelNamekey, label);
-    }
-    channelCreated = true;
+    channelCreated = ensureConfiguredPublicChannel(config);
 
     // Cache a Strict-mode probe. We only need to know whether
     // strict-mode is on; the router runs the full gatekeeper pass
@@ -726,9 +755,9 @@ export function send(msg)
 
 export function tick()
 {
-    // Lazy channel creation: after SELF_INFO (0x05) is received,
-    // deviceName becomes available. Create the channel on first tick.
-    if (enabled && deviceName && !channelCreated && channel) {
+    // Idempotent safety check: the MeshCore public channel must exist even
+    // when the radio has not sent SELF_INFO yet.
+    if (enabled && !channelCreated && channel) {
         createAutoChannel();
     }
 };
@@ -737,8 +766,7 @@ export function tick()
 // createAutoChannel() — Register MeshCore device as a channel
 // =====================================================================
 //
-// Called lazily from tick() after SELF_INFO response is received
-// and deviceName is captured. Follows the same pattern as APRS backend.
+// Called lazily from tick() as a safety net after channel.setup().
 //
 // Channel name format: the shared MeshCore public channel preset.
 //
@@ -746,37 +774,8 @@ export function tick()
 
 function createAutoChannel()
 {
-    if (!deviceName) {
-        log1("createAutoChannel: deviceName not set\n");
-        return;
-    }
-
-    channelNamekey = channel.meshcorePublicChannelNamekey();
-
     try {
-        // Get all existing local channels
-        const localChannels = channel.getAllLocalChannels();
-        
-        // Check if our channel already exists
-        let hasChannel = false;
-        for (let i = 0; i < length(localChannels); i++) {
-            if (localChannels[i].namekey === channelNamekey) {
-                hasChannel = true;
-                break;
-            }
-        }
-        
-        // Add if not present
-        if (!hasChannel) {
-            push(localChannels, { namekey: channelNamekey });
-            channel.updateLocalChannels(localChannels);
-            rootConfig.update?.("channels");
-            log0("auto-created channel: %s\n", channelNamekey);
-        } else {
-            log1("channel already exists: %s\n", channelNamekey);
-        }
-        
-        channelCreated = true;
+        ensureRuntimePublicChannel();
     }
     catch (err) {
         log0("createAutoChannel error: %s\n", err);
