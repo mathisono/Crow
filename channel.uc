@@ -75,6 +75,11 @@ export function isMeshcorePreset(namekey)
     return namekey === meshcorePublicNamekey;
 };
 
+export function meshcorePublicChannelNamekey()
+{
+    return meshcorePublicNamekey;
+};
+
 export function isDirect(namekey)
 {
     return index(namekey, "DirectMessages ") === 0;

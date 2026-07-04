@@ -623,7 +623,7 @@ export function setup(config)
     // This avoids timing issues with lazy tick-based creation.
     deviceName = cfg.device_name ?? null;
     if (deviceName) {
-        channelNamekey = `${deviceName} og==`;
+        channelNamekey = channel.meshcorePublicChannelNamekey();
         // Build a friendly label combining local hostname, MeshCore device, and channel name.
         // Channel name defaults to "Public" until Phase-2 slot discovery lands.
         let hostname = "";
@@ -740,8 +740,7 @@ export function tick()
 // Called lazily from tick() after SELF_INFO response is received
 // and deviceName is captured. Follows the same pattern as APRS backend.
 //
-// Channel name format: "{device_name} og=="
-// Example: "KJ6DZB-MLK og=="
+// Channel name format: the shared MeshCore public channel preset.
 //
 // =====================================================================
 
@@ -752,7 +751,7 @@ function createAutoChannel()
         return;
     }
 
-    channelNamekey = `${deviceName} og==`;
+    channelNamekey = channel.meshcorePublicChannelNamekey();
 
     try {
         // Get all existing local channels
