@@ -2,5 +2,7 @@
 ._*
 
 # Build artifacts
+build/
+dist/
 *.ipk
 *.apk
