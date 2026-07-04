@@ -758,30 +758,15 @@ export function tick()
     // Idempotent safety check: the MeshCore public channel must exist even
     // when the radio has not sent SELF_INFO yet.
     if (enabled && !channelCreated && channel) {
-        createAutoChannel();
+        try {
+            ensureRuntimePublicChannel();
+        }
+        catch (err) {
+            log0("auto channel check error: %s\n", err);
+            stats.early_drop_unknown_cmd++;
+        }
     }
 };
-
-// -----
-// createAutoChannel() — Register MeshCore device as a channel
-// =====================================================================
-//
-// Called lazily from tick() as a safety net after channel.setup().
-//
-// Channel name format: the shared MeshCore public channel preset.
-//
-// =====================================================================
-
-function createAutoChannel()
-{
-    try {
-        ensureRuntimePublicChannel();
-    }
-    catch (err) {
-        log0("createAutoChannel error: %s\n", err);
-        stats.early_drop_unknown_cmd++;  // Count as error
-    }
-}
 
 export function process(msg)
 {
