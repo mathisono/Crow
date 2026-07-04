@@ -1,7 +1,4 @@
-import * as meshtastic from "meshtastic_backend";
-import * as meshcore from "meshcore_backend";
 import * as meship from "meship";
-import * as aprs from "aprs";
 import * as node from "node";
 import * as nodedb from "nodedb";
 import * as socket from "socket";
@@ -14,6 +11,16 @@ const recent = [];
 const apps = [];
 const q = [];
 let gatekeeper = null;
+let meshtastic = null;
+let meshcore = null;
+let aprs = null;
+
+export function setBackends(backends)
+{
+    meshtastic = backends.meshtastic;
+    meshcore = backends.meshcore;
+    aprs = backends.aprs;
+};
 
 export function setGatekeeper(gk)
 {
@@ -99,13 +106,13 @@ export function process()
                 }
                 if (!channel.isAREDNOnly(msg.namekey)) {
                     // Forward traffic to meshtastic if it's not a preset channel for another mesh
-                    if (meshtastic.enabled && !channel.isMeshcorePreset(msg.namekey)) {
+                    if (meshtastic?.enabled && !channel.isMeshcorePreset(msg.namekey)) {
                         if (!tonodeinfo || tonodeinfo.platform === "meshtastic") {
                             tomeshtastic = true;
                         }
                     }
                     // Forward traffic to meshcore if it's not a preset channel for another mesh
-                    if (meshcore.enabled && !channel.isMeshtasticPreset(msg.namekey)) {
+                    if (meshcore?.enabled && !channel.isMeshtasticPreset(msg.namekey)) {
                         if (!tonodeinfo || tonodeinfo.platform === "meshcore") {
                             tomeshcore = true;
                         }
@@ -259,15 +266,15 @@ export function tick()
     if (us) {
         push(sockets, [ us, socket.POLLIN, "meship" ]);
     }
-    const ms = meshtastic.handle();
+    const ms = meshtastic ? meshtastic.handle() : null;
     if (ms) {
         push(sockets, [ ms, socket.POLLIN, "meshtastic" ]);
     }
-    const mc = meshcore.handle();
+    const mc = meshcore ? meshcore.handle() : null;
     if (mc) {
         push(sockets, [ mc, socket.POLLIN, "meshcore" ]);
     }
-    const as = aprs.handle();
+    const as = aprs ? aprs.handle() : null;
     if (as) {
         if (type(as) === "array") {
             for (let i = 0; i < length(as); i++) {
@@ -362,9 +369,9 @@ export function tick()
     }
 
     meship.tick();
-    meshtastic.tick();
-    meshcore.tick();
-    aprs.tick();
+    if (meshtastic) meshtastic.tick();
+    if (meshcore) meshcore.tick();
+    if (aprs) aprs.tick();
     if (timers && timers.process) {
         timers.process();
     }

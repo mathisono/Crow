@@ -36,7 +36,7 @@ function expandSymmetricKey(key)
         }
         return crypto;
     }
-}
+};
 
 function getMeshtasticHash(name, crypto)
 {
@@ -48,12 +48,12 @@ function getMeshtasticHash(name, crypto)
         hash ^= crypto[i];
     }
     return hash;
-}
+};
 
 function getMeshcoreHash(key)
 {
     return crypto.sha256hash(struct.pack(`${length(key)}B`, ...key))[0];
-}
+};
 
 export function isAREDNPreset(namekey)
 {
@@ -73,6 +73,11 @@ export function isMeshtasticPreset(namekey)
 export function isMeshcorePreset(namekey)
 {
     return namekey === meshcorePublicNamekey;
+};
+
+export function isDirect(namekey)
+{
+    return index(namekey, "DirectMessages ") === 0;
 };
 
 export function addMessageNameKey(namekey)
@@ -97,7 +102,7 @@ export function addMessageNameKey(namekey)
         }
     }
     return chan;
-}
+};
 
 function removeMessageNameKey(namekey)
 {
@@ -113,7 +118,7 @@ function removeMessageNameKey(namekey)
         }
         delete channelByNameKey[namekey];
     }
-}
+};
 
 function setLocalChannel(config)
 {
@@ -152,6 +157,9 @@ function setLocalChannel(config)
     }
     if (config.backend != null) {
         chan.backend = config.backend;
+    }
+    if (config.label != null) {
+        chan.label = config.label;
     }
     localChannelByNameKey[namekey] = chan;
     return true;
@@ -234,4 +242,75 @@ export function setLocalChannels(configs)
         }
     }
     return true;
+};
+
+export function updateLocalChannels(configs)
+{
+    const oldLocalChannelByNameKey = localChannelByNameKey;
+    localChannelByNameKey = {};
+    for (let i = 0; i < length(configs); i++) {
+        setLocalChannel(configs[i]);
+    }
+    const newchannels = [];
+    for (let namekey in localChannelByNameKey) {
+        if (!oldLocalChannelByNameKey[namekey]) {
+            push(newchannels, namekey);
+        }
+        else {
+            delete oldLocalChannelByNameKey[namekey];
+        }
+    }
+    return { newchannels: newchannels, oldchannels: keys(oldLocalChannelByNameKey) };
+};
+
+export function getTelemetryChannels()
+{
+    let telemetry = [];
+    for (let namekey in global.channelByNameKey) {
+        const chan = global.channelByNameKey[namekey];
+        if (chan && chan.telemetry) {
+            push(telemetry, chan);
+        }
+    }
+    return telemetry;
+};
+
+export function updateRemoteNameKeys(namekeys)
+{
+    const remotekeys = {};
+    for (let nk in channelByNameKey) {
+        if (!localChannelByNameKey[nk]) {
+            remotekeys[nk] = true;
+        }
+    }
+    for (let i = 0; i < length(namekeys); i++) {
+        const namekey = namekeys[i];
+        if (!remotekeys[namekey]) {
+            addMessageNameKey(namekey);
+        }
+        else {
+            delete remotekeys[namekey];
+        }
+    }
+    for (let nk in remotekeys) {
+        removeMessageNameKey(nk);
+    }
+};
+
+export function setup(config)
+{
+    const channels = config.channels;
+    if (channels) {
+        for (let i = 0; i < length(channels); i++) {
+            setLocalChannel(channels[i]);
+        }
+    }
+};
+
+export function tick()
+{
+};
+
+export function process(msg)
+{
 };

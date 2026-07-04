@@ -124,10 +124,10 @@ function pushBackendStatus(reply, b)
         push(reply, `Transport: ${b.transport}`);
     }
     push(reply, `State: ${state}`);
-    if (b.host !== undefined && b.host !== null && b.port !== undefined && b.port !== null) {
+    if (exists(b, "host") && b.host !== null && exists(b, "port") && b.port !== null) {
         push(reply, `Target: ${b.host}:${b.port}`);
     }
-    if (b.pending_rx !== undefined) {
+    if (exists(b, "pending_rx")) {
         push(reply, `Pending RX: ${b.pending_rx}`);
     }
     if (b.reconnect_in_seconds > 0) {
@@ -358,7 +358,8 @@ export function post(cmd, id)
                         const groups_discovered = meshcore_discovery.getCachedGroups();
                         if (groups_discovered && length(groups_discovered) > 0) {
                             push(reply, "<b>═══ MeshCore Groups ═══</b>");
-                            for (let g of groups_discovered) {
+                            for (let i = 0; i < length(groups_discovered); i++) {
+                                const g = groups_discovered[i];
                                 push(reply, `<b>Slot ${g.slot}: ${g.name}</b> (${g.key_size ?? "?"}-byte key)`);
                                 push(reply, `<div class="cj" onclick='cmd("/join ${g.name}")'>/join ${g.name}</div>`);
                             }
@@ -369,7 +370,8 @@ export function post(cmd, id)
                     if (backend === "all" || backend === "meshtastic") {
                         const all_channels = channel.getAllChannelNamekeys();
                         let meshtastic_count = 0;
-                        for (let nk of all_channels) {
+                        for (let i = 0; i < length(all_channels); i++) {
+                            const nk = all_channels[i];
                             if (channel.isMeshtasticPreset(nk)) continue;
                             const parts = split(nk, " ");
                             if (ord(parts[0]) !== 35) continue;
@@ -414,7 +416,7 @@ export function post(cmd, id)
                         `<b>Backend:</b> ${chan.backend ?? "unknown"}`,
                         `<b>Telemetry:</b> ${chan.telemetry ? "yes" : "no"}`
                     ];
-                    if (chan.slot_index !== undefined && chan.slot_index !== null) {
+                    if (exists(chan, "slot_index") && chan.slot_index !== null) {
                         push(reply, `<b>MeshCore Slot:</b> ${chan.slot_index}`);
                     }
                     event.queue({ cmd: "/reply", reply: reply, socket: id });

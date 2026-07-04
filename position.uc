@@ -1,9 +1,9 @@
 import * as timers from "timers";
 import * as message from "message";
-import * as router from "router";
 import * as nodedb from "nodedb";
 import * as node from "node";
 import * as channel from "channel";
+import * as router from "router";
 
 const DEFAULT_INTERVAL = 60 * 60;
 

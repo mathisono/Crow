@@ -226,7 +226,7 @@ export function tick()
                 case "channels":
                 {
                     const channels = map(channel.getAllLocalChannels(), c => {
-                        return { namekey: c.namekey, meshtastic: channel.isMeshtasticPreset(c.namekey), meshcore: channel.isMeshcorePreset(c.namekey), aredn: channel.isAREDNPreset(c.namekey), winlink: c.winlink, telemetry: c.telemetry, backend: c.backend ?? "", state: textmessage.state(c.namekey) };
+                        return { namekey: c.namekey, label: c.label ?? "", meshtastic: channel.isMeshtasticPreset(c.namekey), meshcore: channel.isMeshcorePreset(c.namekey), aredn: channel.isAREDNPreset(c.namekey), winlink: c.winlink, telemetry: c.telemetry, backend: c.backend ?? "", state: textmessage.state(c.namekey) };
                     });
                     send({ event: msg.cmd, channels: channels, aprs_backends: aprs.enabled ? aprs.getBackendNames() : [] });
                     break;

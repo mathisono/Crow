@@ -905,6 +905,51 @@ export function getBackendNames()
     return out;
 };
 
+export function getBackendStatus()
+{
+    const out = [];
+    const t = now() * 1000;
+    for (let name in backends) {
+        const inst = backends[name];
+        if (inst.connecting) {
+            checkPendingConnect(name, inst);
+        }
+
+        const b = inst.config ?? {};
+        const btype = b.type ?? "aprsis";
+        const host = b.host ?? (btype === "aprsis" ? "rotate.aprs2.net" : "127.0.0.1");
+        const port = b.port ?? (btype === "kiss_tcp" ? 8001 : 14580);
+
+        let state = "disconnected";
+        if (inst.socket && inst.connecting) {
+            state = "connecting";
+        }
+        else if (inst.socket) {
+            state = "connected";
+        }
+        else if (inst.reconnect_after > 0 && t < inst.reconnect_after) {
+            state = "disconnected";
+        }
+
+        push(out, {
+            key: name,
+            label: inst.displayName,
+            family: "aprs",
+            transport: backendTypeLabel(btype),
+            configured: true,
+            active: inst.socket !== null,
+            state: state,
+            host: host,
+            port: port,
+            socket: inst.socket !== null,
+            pending_rx: length(inst.pending_rx),
+            reconnect_in_seconds: max(0, int((inst.reconnect_after - t) / 1000)),
+            reconnect_delay_seconds: int(inst.reconnect_delay / 1000)
+        });
+    }
+    return out;
+};
+
 // Update channel→backend binding at runtime
 //   backendName = "name"  → bind to specific backend
 //   backendName = ""      → explicitly clear binding (UI cleared it)

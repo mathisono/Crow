@@ -45,6 +45,7 @@
 import * as socket from "socket";
 import * as timers from "timers";
 import * as channel from "channel";
+import * as fs from "fs";
 
 // ---------------------------------------------------------------------
 // Wire protocol constants
@@ -107,8 +108,9 @@ const TEXT_ENVELOPE_BYTES      = 9;
 // ---------------------------------------------------------------------
 
 let cfg              = null;
+let rootConfig       = null;
 export let enabled   = false;
-export let channelNamekey = null; // "MeshCore <device> og==" — created on first tick
+export let channelNamekey = null; // "<device> og==" — created on first tick
 let deviceName       = null;     // device name from config
 let channelCreated   = false;    // one-shot flag for lazy channel init
 let callsign         = null;
@@ -604,6 +606,7 @@ function decodeTextFrame(cmd, payload)
 export function setup(config)
 {
     cfg = config.meshcore_tcp_api;
+    rootConfig = config;
     if (!cfg || cfg.enabled === false) {
         return;
     }
@@ -620,19 +623,31 @@ export function setup(config)
     // This avoids timing issues with lazy tick-based creation.
     deviceName = cfg.device_name ?? null;
     if (deviceName) {
-        channelNamekey = `MeshCore ${deviceName} og==`;
+        channelNamekey = `${deviceName} og==`;
+        // Build a friendly label combining local hostname, MeshCore device, and channel name.
+        // Channel name defaults to "Public" until Phase-2 slot discovery lands.
+        let hostname = "";
+        try {
+            const h = fs.readfile("/proc/sys/kernel/hostname");
+            if (h) hostname = replace(h, "\n", "");
+        } catch (e) {}
+        const chanName = cfg.channel_name ?? "Public";
+        const label = hostname
+            ? `${hostname} \u00b7 ${deviceName} \u00b7 ${chanName}`
+            : `${deviceName} \u00b7 ${chanName}`;
         if (!config.channels) config.channels = [];
         let found = false;
         for (let i = 0; i < length(config.channels); i++) {
             if (config.channels[i].namekey === channelNamekey) {
+                config.channels[i].label = label;
                 found = true;
                 break;
             }
         }
         if (!found) {
-            push(config.channels, { namekey: channelNamekey });
+            push(config.channels, { namekey: channelNamekey, label: label });
         }
-        log0("channel registered: %s\n", channelNamekey);
+        log0("channel registered: %s (label: %s)\n", channelNamekey, label);
     }
     channelCreated = true;
 
@@ -725,8 +740,8 @@ export function tick()
 // Called lazily from tick() after SELF_INFO response is received
 // and deviceName is captured. Follows the same pattern as APRS backend.
 //
-// Channel name format: "MeshCore {device_name} og=="
-// Example: "MeshCore KJ6DZB-MLK og=="
+// Channel name format: "{device_name} og=="
+// Example: "KJ6DZB-MLK og=="
 //
 // =====================================================================
 
@@ -737,7 +752,7 @@ function createAutoChannel()
         return;
     }
 
-    channelNamekey = `MeshCore ${deviceName} og==`;
+    channelNamekey = `${deviceName} og==`;
 
     try {
         // Get all existing local channels
@@ -756,6 +771,7 @@ function createAutoChannel()
         if (!hasChannel) {
             push(localChannels, { namekey: channelNamekey });
             channel.updateLocalChannels(localChannels);
+            rootConfig.update?.("channels");
             log0("auto-created channel: %s\n", channelNamekey);
         } else {
             log1("channel already exists: %s\n", channelNamekey);

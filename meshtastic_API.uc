@@ -7,6 +7,7 @@ import * as channel from "channel";
 import * as node from "node";
 import * as nodedb from "nodedb";
 import * as timers from "timers";
+import * as fs from "fs";
 
 const DEFAULT_PORT = 4403;
 const PORTAPI_MAGIC0 = 0x94;
@@ -738,6 +739,38 @@ export function setup(config)
     channelDiscovery = !!cfg.channel_discovery;
     channelSync = cfg.channel_sync ?? "off";
     channelRefreshSeconds = cfg.channel_refresh_seconds ?? DEFAULT_CHANNEL_REFRESH;
+
+    // Optional auto-channel injection: mirrors meshcore_tcp_api pattern.
+    // Requires an explicit device_name (label prefix) and channel_name (goes into namekey,
+    // since Meshtastic hashes from the channel-name portion). channel_key defaults to
+    // LongFast public PSK "AQ==".
+    const devName = cfg.device_name;
+    const autoChan = cfg.channel_name;
+    if (devName && autoChan) {
+        const autoKey = cfg.channel_key ?? "AQ==";
+        const autoNamekey = `${autoChan} ${autoKey}`;
+        let hostname = "";
+        try {
+            const h = fs.readfile("/proc/sys/kernel/hostname");
+            if (h) hostname = replace(h, "\n", "");
+        } catch (e) {}
+        const autoLabel = hostname
+            ? `${hostname} \u00b7 ${devName} \u00b7 ${autoChan}`
+            : `${devName} \u00b7 ${autoChan}`;
+        if (!config.channels) config.channels = [];
+        let found = false;
+        for (let i = 0; i < length(config.channels); i++) {
+            if (config.channels[i].namekey === autoNamekey) {
+                config.channels[i].label = autoLabel;
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            push(config.channels, { namekey: autoNamekey, label: autoLabel });
+        }
+        log0("channel registered: %s (label: %s)\n", autoNamekey, autoLabel);
+    }
 
     if (channelSync !== "off" && channelSync !== "read_only") {
         log0("unsupported channel_sync mode %s; forcing off\n", channelSync);

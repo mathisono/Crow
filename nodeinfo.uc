@@ -1,9 +1,9 @@
-import * as router from "router";
 import * as message from "message";
 import * as node from "node";
 import * as nodedb from "nodedb";
 import * as timers from "timers";
 import * as channel from "channel";
+import * as router from "router";
 import * as textmessage from "textmessage";
 import * as version from "version";
 
