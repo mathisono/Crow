@@ -230,18 +230,23 @@ function isDirectForLocalBridgeDevice(msg)
     // Marked local-direct messages, or non-group direct-looking TCP API frames,
     // are treated as direct-to-this-bridge even when the external radio's node id
     // does not equal Crow's native AREDN node id.
-    if (msg.metadata?.local_direct || isTcpApiIngress(msg)) {
+    if (msg.metadata?.local_direct || (isTcpApiIngress(msg) && !msg.channel)) {
         return true;
     }
 
     // UDP Meshtastic/MeshCore can hear traffic not meant for this node, so only
     // accept direct frames that target Crow's native id.
-    return node.toMe(msg) || (channel.isDirect(msg.namekey) && node.toMe(msg));
+    return node.toMe(msg) || (msg.namekey && channel.isDirect(msg.namekey) && node.toMe(msg));
 }
 
 function isJoinedBridgeChannel(msg)
 {
     if (!isLoRaIngress(msg)) {
+        return false;
+    }
+    // A missing namekey maps to the Meshtastic default channel. Only allow that
+    // fallback for broadcast/channel frames, not for direct-looking UDP frames.
+    if (!msg.namekey && !node.isBroadcast(msg)) {
         return false;
     }
     const localChannel = channel.getLocalChannelByNameKey(msg.namekey);
