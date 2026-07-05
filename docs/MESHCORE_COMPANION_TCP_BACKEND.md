@@ -100,6 +100,66 @@ sync_request_in_flight
 sync_paused_backpressure
 ```
 
+## Channel discovery notifications
+
+The backend can request MeshCore Companion channel info using:
+
+```text
+CMD_GET_CHANNEL        = 0x1F
+RESP_CODE_CHANNEL_INFO = 0x12
+```
+
+When `meshcore_tcp_api.channel_discovery=true`, Crow requests channel slots `0` through `7` after self-info is received and again on the refresh timer.
+
+Example config:
+
+```json
+{
+  "meshcore": {
+    "enabled": false
+  },
+  "meshcore_tcp_api": {
+    "enabled": true,
+    "host": "127.0.0.1",
+    "port": 4403,
+    "max_pending_rx": 4,
+    "channel_discovery": true,
+    "channel_refresh_seconds": 600
+  }
+}
+```
+
+Channel discovery is runtime-only in this pass. It does not write Crow config and does not auto-map MeshCore group slots.
+
+When a new or changed channel is discovered, the backend emits an operator notification through Crow's existing websocket command-reply path:
+
+```text
+MeshCore TCP API discovered channel
+Index N: ChannelName
+Runtime only; not saved to Crow config.
+```
+
+Telemetry fields:
+
+```text
+channel_discovery
+channel_discovery_requests
+channel_info_responses
+channels_discovered
+channels_updated
+```
+
+## Direct-message acceptance TODO
+
+Current first-pass behavior accepts direct frames from the connected MeshCore Companion TCP API as local direct messages because they come from that radio's local API queue.
+
+This should be improved before production use:
+
+1. Parse or query the connected MeshCore device/node id from Companion self-info or another Companion command.
+2. Mark `metadata.local_direct=true` only when the direct message destination matches that connected device id.
+3. Update `router.uc` to prefer `metadata.local_direct` over backend-name trust.
+4. Keep the current TCP backend direct acceptance only as a compatibility fallback during hardware validation.
+
 ## Future command/status API
 
 If a diagnostic or status feature cannot be provided through the Companion API, document that gap first.
@@ -141,7 +201,9 @@ Experimental Companion TCP API:
     "enabled": true,
     "host": "127.0.0.1",
     "port": 4403,
-    "max_pending_rx": 4
+    "max_pending_rx": 4,
+    "channel_discovery": true,
+    "channel_refresh_seconds": 600
   }
 }
 ```
@@ -164,3 +226,13 @@ Message reception validation should confirm:
 - Crow stops when `0x0A` no-more-messages is received;
 - `sync_backpressure` remains low during normal use;
 - `pending_rx` does not grow without bound.
+
+Channel discovery validation should confirm:
+
+- `channel_discovery=true` sends `CMD_GET_CHANNEL` for slots `0` through `7`;
+- `RESP_CODE_CHANNEL_INFO` increments `channel_info_responses`;
+- a new channel increments `channels_discovered`;
+- a changed channel increments `channels_updated`;
+- operator notification appears in the UI command-reply area;
+- no raw channel secret is printed in logs or UI;
+- no Crow config file is modified.
