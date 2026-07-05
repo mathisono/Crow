@@ -104,6 +104,11 @@ function candidateStatus(key, label, transport, configured, isActive, host, port
         sync_paused_backpressure: detail.sync_paused_backpressure,
         commands_sent: detail.commands_sent,
         responses_cached: detail.responses_cached,
+        channel_discovery: detail.channel_discovery,
+        channel_discovery_requests: detail.channel_discovery_requests,
+        channel_info_responses: detail.channel_info_responses,
+        channels_discovered: detail.channels_discovered,
+        channels_updated: detail.channels_updated,
         last_rx_time: detail.last_rx_time,
         last_cmd: detail.last_cmd
     };
