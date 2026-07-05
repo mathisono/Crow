@@ -110,7 +110,7 @@ const TEXT_ENVELOPE_BYTES      = 9;
 let cfg              = null;
 let rootConfig       = null;
 export let enabled   = false;
-export let channelNamekey = null; // "<device> og==" — created on first tick
+export let channelNamekey = null; // MeshCore public channel namekey
 let deviceName       = null;     // device name from config
 let channelCreated   = false;    // one-shot flag for lazy channel init
 let callsign         = null;
@@ -166,8 +166,8 @@ function publicChannelLabel()
     const dev = deviceName ?? cfg?.device_name ?? "MeshCore";
     const chanName = cfg?.channel_name ?? "Public";
     return hostname
-        ? `${hostname} \u00b7 ${dev} \u00b7 ${chanName}`
-        : `${dev} \u00b7 ${chanName}`;
+        ? `${hostname} ~${dev}~${chanName}`
+        : `${dev}~${chanName}`;
 }
 
 function ensureConfiguredPublicChannel(config)
@@ -194,18 +194,24 @@ function ensureRuntimePublicChannel()
     channelNamekey = channel.meshcorePublicChannelNamekey();
 
     const localChannels = channel.getAllLocalChannels();
+    const label = publicChannelLabel();
     for (let i = 0; i < length(localChannels); i++) {
         if (localChannels[i].namekey === channelNamekey) {
+            if (localChannels[i].label !== label) {
+                localChannels[i].label = label;
+                rootConfig.update?.("channels");
+                log0("channel label updated: %s (label: %s)\n", channelNamekey, label);
+            }
             channelCreated = true;
             return false;
         }
     }
 
-    push(localChannels, { namekey: channelNamekey });
+    push(localChannels, { namekey: channelNamekey, label: label });
     channel.updateLocalChannels(localChannels);
     rootConfig.update?.("channels");
     channelCreated = true;
-    log0("auto-created channel: %s\n", channelNamekey);
+    log0("auto-created channel: %s (label: %s)\n", channelNamekey, label);
     return true;
 }
 
@@ -496,6 +502,7 @@ function smartAccumulate(data)
             const name = parseSelfInfo(payload);
             if (name) {
                 deviceName = name;  // Capture for channel creation
+                channelCreated = false; // Refresh the UI label with the learned MeshCore node name.
             }
             continue;
         }

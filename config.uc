@@ -82,6 +82,9 @@ function update(option)
                 if (channels[i].backend != null) {
                     nchannel.backend = channels[i].backend;
                 }
+                if (channels[i].label != null) {
+                    nchannel.label = channels[i].label;
+                }
                 push(nchannels, nchannel);
             }
             if (!jsonEq(nchannels, config.channels)) {
