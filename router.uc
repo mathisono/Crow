@@ -7,6 +7,7 @@ import * as channel from "channel";
 import * as websocket from "websocket";
 
 const MAX_RECENT = 128;
+const MAX_PENDING_BACKEND_DRAIN = 4;
 const recent = [];
 const apps = [];
 const q = [];
@@ -254,12 +255,41 @@ export function queue(msg)
     }
 };
 
+function drainPendingBackend(label, backend)
+{
+    if (!backend?.pending) {
+        return;
+    }
+
+    let count = 0;
+    while (backend.pending() > 0 && count < MAX_PENDING_BACKEND_DRAIN) {
+        try {
+            queue(backend.recv());
+        }
+        catch (e) {
+            DEBUG0("%s pending recv: %s\n%s\n", label, e, e.stacktrace);
+            return;
+        }
+        count++;
+    }
+
+    if (count > 0) {
+        DEBUG2("router: drained %d pending %s messages\n", count, label);
+    }
+};
 
 export function tick()
 {
     for (let i = 0; i < length(apps); i++) {
         apps[i].tick();
     }
+
+    // Backends such as MeshCore TCP Companion are pull/queue based. Their
+    // decoded local pending messages must be drained even when the socket is
+    // not newly readable, otherwise router delivery can stall until another
+    // radio frame arrives.
+    drainPendingBackend("meshcore", meshcore);
+
     process();
     const sockets = [];
     const us = meship.handle();
