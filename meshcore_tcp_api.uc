@@ -286,7 +286,12 @@ function resetState()
 function closeSocket(reason)
 {
     if (s) {
-        log0("disconnect %s\n", reason ?? "");
+        log0("disconnect %s (bytes_rx=%d frames_in=%d decoded=%d last_cmd=%s)\n",
+            reason ?? "",
+            stats.bytes_rx,
+            stats.frames_in,
+            stats.frames_decoded,
+            lastCmd != null ? sprintf("0x%02x", lastCmd) : "none");
         stats.disconnects++;
         try { s.close(); } catch (_) {}
     }
@@ -795,6 +800,7 @@ function readSocket()
     try {
         const data = s.recv(SOCKET_READ_CHUNK);
         if (!data || length(data) === 0) {
+            closeSocket("peer closed");
             return null;
         }
         stats.bytes_rx += length(data);
