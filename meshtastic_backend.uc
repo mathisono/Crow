@@ -78,6 +78,7 @@ function ensureDefaultChannel(config, namekey, label)
 function candidateStatus(key, label, transport, configured, isActive, host, port)
 {
     const socketHandle = isActive ? active?.handle() : null;
+    const detail = isActive && active?.status ? active.status() : {};
     let state = "not-configured";
     if (configured && !isActive) {
         state = "configured-inactive";
@@ -97,7 +98,19 @@ function candidateStatus(key, label, transport, configured, isActive, host, port
         host: host,
         port: port,
         socket: socketHandle !== null,
-        pending_rx: 0
+        pending_rx: detail.pending_rx ?? 0,
+        connects: detail.connects,
+        disconnects: detail.disconnects,
+        bytes_rx: detail.bytes_rx,
+        frames_in: detail.frames_in,
+        frames_decoded: detail.frames_decoded,
+        config_requests: detail.config_requests,
+        config_complete: detail.config_complete,
+        channels_discovered: detail.channels_discovered,
+        sends_ok: detail.sends_ok,
+        sends_failed: detail.sends_failed,
+        channel_discovery: detail.channel_discovery,
+        channel_sync: detail.channel_sync
     };
 }
 
@@ -159,6 +172,12 @@ export function tick()
 export function process(msg)
 {
     active?.process(msg);
+};
+
+export function pending()
+{
+    if (active?.pending) return active.pending();
+    return 0;
 };
 
 export function backendName()
