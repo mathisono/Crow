@@ -87,6 +87,7 @@ function candidateStatus(key, label, transport, configured, isActive, host, port
         port: port,
         socket: socketHandle !== null,
         pending_rx: detail.pending_rx ?? 0,
+        max_pending_rx: detail.max_pending_rx,
         connects: detail.connects,
         disconnects: detail.disconnects,
         handshakes_sent: detail.handshakes_sent,
@@ -96,8 +97,11 @@ function candidateStatus(key, label, transport, configured, isActive, host, port
         self_info: detail.self_info,
         message_waiting: detail.message_waiting,
         sync_requests: detail.sync_requests,
+        sync_backpressure: detail.sync_backpressure,
         no_more_messages: detail.no_more_messages,
         syncing_messages: detail.syncing_messages,
+        sync_request_in_flight: detail.sync_request_in_flight,
+        sync_paused_backpressure: detail.sync_paused_backpressure,
         commands_sent: detail.commands_sent,
         responses_cached: detail.responses_cached,
         last_rx_time: detail.last_rx_time,
@@ -163,6 +167,12 @@ export function tick()
 export function process(msg)
 {
     if (active) active.process(msg);
+};
+
+export function pending()
+{
+    if (active?.pending) return active.pending();
+    return 0;
 };
 
 export function backendName()
