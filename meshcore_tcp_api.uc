@@ -27,10 +27,13 @@
 //      from the wire BEFORE allocating a payload buffer.
 //   3. MeshCore Companion boot handshake — CMD_APP_START with the required
 //      seven reserved bytes plus the application name "Crow".
-//   4. Push-notify + poll queue model — 0x83 means message waiting; Crow
-//      sends CMD_SYNC_NEXT_MESSAGE until RESP_CODE_NO_MORE_MESSAGES.
-//   5. Reconnect backoff with stable state-machine reset.
-//   6. Decoded messages are queued raw; router.uc runs the canonical
+//   4. Push-notify + pull queue model — 0x83 means message waiting; Crow
+//      sends CMD_SYNC_NEXT_MESSAGE to pull queued messages deliberately.
+//   5. Backpressure — Crow never treats MeshCore as a firehose. It keeps a
+//      bounded local pending queue and asks for the next radio message only
+//      when local pending work is below the configured cap.
+//   6. Reconnect backoff with stable state-machine reset.
+//   7. Decoded messages are queued raw; router.uc runs the canonical
 //      gatekeeper.filterInboundBridge() pass (no double-filtering).
 //
 // This backend is EXPERIMENTAL. It is not wired into router.uc by default.
@@ -39,7 +42,8 @@
 //     "meshcore_tcp_api": {
 //         "enabled": true,
 //         "host": "127.0.0.1",
-//         "port": 4403
+//         "port": 4403,
+//         "max_pending_rx": 4
 //     }
 //
 // =====================================================================
@@ -55,7 +59,7 @@ import * as fs from "fs";
 
 const FRAME_FROM_RADIO         = 0x3E;   // '>'
 const FRAME_TO_RADIO           = 0x3C;   // '<'
-const HEADER_BYTES             = 3;       // marker(1) + length LE(2)
+const HEADER_BYTES             = 3;      // marker(1) + length LE(2)
 
 // Hard ceiling on per-frame payload bytes we will buffer. MeshCore text
 // MTU is ~150 bytes; with the 9-byte text envelope (from/to/len) the
@@ -69,7 +73,7 @@ const SMART_MAX_PAYLOAD        = 256;
 const RESYNC_BUFFER_CAP        = 4096;
 
 // Async event command IDs we actually emit Crow messages for.
-// CORRECTED (per Mathison): Frame 0x07 is direct, 0x08 is group
+// CORRECTED (per Mathison): Frame 0x07 is direct, 0x08 is group.
 const CMD_DIRECT_MSG_RECV      = 0x07;   // direct/private cleartext text msg
 const CMD_CHANNEL_MSG_RECV     = 0x08;   // group/channel cleartext text msg
 const CMD_DIRECT_MSG_RECV_V3   = 0x10;
@@ -79,7 +83,7 @@ const CMD_CHANNEL_MSG_RECV_V3  = 0x11;
 const CMD_APP_START            = 0x01;
 const CMD_SYNC_NEXT_MESSAGE    = 0x0A;
 
-// Self-info response from radio (triggered by CMD_APP_START)
+// Self-info response from radio (triggered by CMD_APP_START).
 const RESP_SELF_INFO           = 0x05;   // Device info: public key + name
 const SELF_INFO_PUBKEY_SIZE    = 32;     // Ed25519 public key
 const SELF_INFO_PUBKEY_OFFSET  = 1;      // Right after response code
@@ -114,8 +118,10 @@ function isGroupFrame(cmd)
 
 const DEFAULT_HOST             = "127.0.0.1";
 const DEFAULT_PORT             = 4403;
-const RECONNECT_INTERVAL       = 5;       // seconds
+const RECONNECT_INTERVAL       = 5;      // seconds
 const SOCKET_READ_CHUNK        = 2048;
+const DEFAULT_MAX_PENDING_RX   = 4;      // local backpressure cap
+const HARD_MAX_PENDING_RX      = 32;
 
 // Text frame envelope: 4-byte from + 4-byte to + 1-byte length.
 const TEXT_ENVELOPE_BYTES      = 9;
@@ -135,7 +141,7 @@ let router           = null;
 let tcpHost          = null;
 let tcpPort          = DEFAULT_PORT;
 let nextReconnectTime = 0;
-let strictHook       = null;     // function(): boolean   — cached strict-mode probe
+let strictHook       = null;     // function(): boolean — cached strict-mode probe
 
 let s                = null;     // active socket handle (null = disconnected)
 let tcpbuf           = "";       // TCP accumulator
@@ -144,6 +150,8 @@ let pendingRx        = [];       // decoded Crow message queue
 let responses        = [];       // cached non-message responses for discovery
 let msgSeq           = 0;        // monotonic local message id
 let syncingMessages  = false;    // true while draining radio's queued messages
+let syncRequestInFlight = false; // true after CMD_SYNC_NEXT_MESSAGE until a response arrives
+let syncPausedBackpressure = false;
 
 let stats            = {
     connects: 0,
@@ -156,6 +164,7 @@ let stats            = {
     message_waiting: 0,
     no_more_messages: 0,
     sync_requests: 0,
+    sync_backpressure: 0,
     responses_cached: 0,
     commands_sent: 0,
     early_drop_oversize: 0,
@@ -276,6 +285,19 @@ function cstr(s)
     return substr(s, 0, n);
 }
 
+function maxPendingRx()
+{
+    let n = cfg?.max_pending_rx ?? DEFAULT_MAX_PENDING_RX;
+    if (n < 1) n = 1;
+    if (n > HARD_MAX_PENDING_RX) n = HARD_MAX_PENDING_RX;
+    return n;
+}
+
+function pendingFull()
+{
+    return length(pendingRx) >= maxPendingRx();
+}
+
 // ---------------------------------------------------------------------
 // Socket lifecycle
 // ---------------------------------------------------------------------
@@ -285,6 +307,8 @@ function resetState()
     tcpbuf = "";
     pendingSkip = 0;
     syncingMessages = false;
+    syncRequestInFlight = false;
+    syncPausedBackpressure = false;
 }
 
 function disableNagle(sock)
@@ -382,13 +406,43 @@ export function sendCommand(cmd, payload)
     }
 };
 
+function pauseSyncForBackpressure(reason)
+{
+    if (!syncPausedBackpressure) {
+        log1("sync backpressure: pending_rx=%d max=%d reason=%s\n",
+            length(pendingRx), maxPendingRx(), reason ?? "unknown");
+    }
+    syncPausedBackpressure = true;
+    stats.sync_backpressure++;
+}
+
 function sendSyncNextMessage(reason)
 {
     if (!s) return false;
+    if (syncRequestInFlight) return false;
+    if (pendingFull()) {
+        pauseSyncForBackpressure(reason);
+        syncingMessages = true;
+        return false;
+    }
+
     syncingMessages = true;
+    syncRequestInFlight = true;
+    syncPausedBackpressure = false;
     stats.sync_requests++;
     log1("sync next message reason=%s\n", reason ?? "unknown");
-    return sendCommand(CMD_SYNC_NEXT_MESSAGE, "");
+
+    const ok = sendCommand(CMD_SYNC_NEXT_MESSAGE, "");
+    if (!ok) {
+        syncRequestInFlight = false;
+    }
+    return ok;
+}
+
+function maybeRequestNext(reason)
+{
+    if (!syncingMessages || syncRequestInFlight || !s) return false;
+    return sendSyncNextMessage(reason);
 }
 
 export function takeResponse(cmd)
@@ -420,7 +474,7 @@ function sendBootHandshake()
         const sent = s.send(frame);
         stats.handshakes_sent++;
         log0("handshake sent (CMD_APP_START) frame_bytes=%d sent=%s\n", length(frame), sent);
-        log1("  expecting RESP_SELF_INFO(0x05), PUSH_MSG_WAITING(0x83), then SYNC_NEXT_MESSAGE drain\n");
+        log1("  expecting RESP_SELF_INFO(0x05), PUSH_MSG_WAITING(0x83), then bounded SYNC_NEXT_MESSAGE drain\n");
     }
     catch (_) {
         closeSocket("handshake send failed: " + socket.error());
@@ -431,8 +485,6 @@ function sendBootHandshake()
 // advance() — skip past rejected frames in the TCP buffer
 // ---------------------------------------------------------------------
 
-// Advance past a rejected frame. If the payload hasn't fully arrived
-// yet, arrange to discard the remainder from future socket reads.
 function advance(hdrBytes, payloadBytes)
 {
     const total = hdrBytes + payloadBytes;
@@ -444,68 +496,40 @@ function advance(hdrBytes, payloadBytes)
     tcpbuf = "";
 }
 
-
 // -----
 // parseSelfInfo() — Extract device name from RESP_SELF_INFO (0x05)
-// =====================================================================
-//
-// MeshCore sends this after CMD_APP_START. Payload structure:
-//
-//   Byte 0:      0x05 (response code)
-//   Bytes 1-32:  Ed25519 public key (32 bytes)
-//   Bytes 33-34: MAC/Hardware hash (2 bytes in v1, reserved for 4 in v2)
-//   Byte 35:     Node Role/Type
-//   Bytes 36+:   Node Name (UTF-8, null-padded, up to 32 bytes)
-//
-// Returns device name (string) or null on error.
-// Uses safe scanning: skip known fixed fields, scan for first printable
-// character, then read until null terminator or end of payload.
 // =====================================================================
 
 function parseSelfInfo(payload)
 {
     if (!payload || length(payload) < 36) {
-        log1("parseSelfInfo: insufficient data (%d bytes)\n", 
-             length(payload) ?? 0);
+        log1("parseSelfInfo: insufficient data (%d bytes)\n", length(payload) ?? 0);
         return null;
     }
-    
-    // Verify response code
     if (ord(payload, 0) !== RESP_SELF_INFO) {
-        log1("parseSelfInfo: wrong response code (0x%02x)\n", 
-             ord(payload, 0));
+        log1("parseSelfInfo: wrong response code (0x%02x)\n", ord(payload, 0));
         return null;
     }
-    
-    // Safe name extraction:
-    // Skip the first 33 bytes (response code + 32-byte public key)
-    // Then scan for first printable ASCII character
-    let nameStart = SELF_INFO_PUBKEY_OFFSET + SELF_INFO_PUBKEY_SIZE; // = 33
+
+    let nameStart = SELF_INFO_PUBKEY_OFFSET + SELF_INFO_PUBKEY_SIZE;
     const payloadLen = length(payload);
-    
-    // Skip non-printable bytes (MAC size, role/type, padding)
     while (nameStart < payloadLen) {
         const byte = ord(payload, nameStart);
-        // Accept printable ASCII (0x20-0x7E) and UTF-8 high bytes (0x80+)
-        if ((byte >= 0x20 && byte <= 0x7E) || byte >= 0x80) {
-            break;
-        }
+        if ((byte >= 0x20 && byte <= 0x7E) || byte >= 0x80) break;
         nameStart++;
     }
-    
     if (nameStart >= payloadLen) {
         log1("parseSelfInfo: no printable name found\n");
         return null;
     }
-    
-    // Extract name until null terminator or end of payload
+
     let name = "";
     for (let i = nameStart; i < payloadLen; i++) {
         const byte = ord(payload, i);
-        if (byte === 0) break;  // Stop at null terminator
+        if (byte === 0) break;
         name += chr(byte);
     }
-    
+
     log0("parseSelfInfo: device name = %s\n", name);
     return name;
 }
@@ -513,26 +537,11 @@ function parseSelfInfo(payload)
 // ---------------------------------------------------------------------
 // The "Smart Accumulator"
 // ---------------------------------------------------------------------
-//
-// Pulls fully-formed Companion frames out of tcpbuf, but only for
-// commands we actually decode (TXT_MSG / GRP_TXT). Everything else is
-// dropped from the wire without payload allocation:
-//
-//   * Oversize early-drop  — frame length > SMART_MAX_PAYLOAD.
-//   * Encrypted early-drop — cmd in PART97_BLOCKED_COMMANDS when strict.
-//   * Unknown-cmd drop     — cmd not in { TXT_MSG, GRP_TXT }.
-//   * Malformed-text drop  — text-length byte is inconsistent with plen.
-//
-// When an early-drop fires mid-stream (payload not yet fully arrived),
-// `pendingSkip` records how many bytes to discard from future reads.
-//
-// Returns an array of { cmd, payload } records ready for decoding.
 
 function smartAccumulate(data)
 {
     const frames = [];
 
-    // 1. Discard any in-flight skip bytes first.
     if (pendingSkip > 0 && length(data) > 0) {
         const drop = pendingSkip < length(data) ? pendingSkip : length(data);
         data = substr(data, drop);
@@ -544,15 +553,12 @@ function smartAccumulate(data)
         tcpbuf += data;
     }
 
-    // Cache the strict-mode probe once per inject — strict-mode flips
-    // rarely, and re-calling it inside the loop is wasted work.
     const strictOn = strictHook ? strictHook() : false;
 
     for (;;) {
         const blen = length(tcpbuf);
         if (blen === 0) return frames;
 
-        // 2. Resync: find next radio frame marker.
         if (ord(tcpbuf, 0) !== FRAME_FROM_RADIO) {
             let start = -1;
             for (let i = 1; i < blen; i++) {
@@ -572,14 +578,9 @@ function smartAccumulate(data)
             continue;
         }
 
-        // 3. Need a full header before any further decisions.
         if (blen < HEADER_BYTES) return frames;
 
         const plen = le16(tcpbuf, 1);
-
-        // ----- Smart Accumulator gates (BEFORE payload allocation) -----
-
-        // 3a. Oversize kill switch.
         if (plen > SMART_MAX_PAYLOAD) {
             stats.early_drop_oversize++;
             log1("early-drop oversize plen=%d > %d\n", plen, SMART_MAX_PAYLOAD);
@@ -587,7 +588,6 @@ function smartAccumulate(data)
             continue;
         }
 
-        // 3b. Wait for full payload before inspecting the command byte.
         if (blen < HEADER_BYTES + plen) return frames;
         if (plen < 1) {
             stats.early_drop_malformed_text++;
@@ -603,126 +603,102 @@ function smartAccumulate(data)
         stats.frames_in++;
         lastCmd = cmd;
 
-        // 3c. Message waiting push: ask the radio for the first queued message.
+        // 0x83 is a push notification only. It is not a message body.
         if (cmd === PUSH_CODE_MSG_WAITING) {
             stats.message_waiting++;
-            sendSyncNextMessage("push 0x83");
+            syncingMessages = true;
+            maybeRequestNext("push 0x83");
             continue;
         }
 
+        // A sync request completed with no more radio-side queued messages.
         if (cmd === RESP_NO_MORE_MESSAGES) {
             stats.no_more_messages++;
             syncingMessages = false;
+            syncRequestInFlight = false;
+            syncPausedBackpressure = false;
             log1("sync queue empty (0x0a)\n");
             continue;
         }
 
         if (strictOn && PART97_BLOCKED_COMMANDS[cmd]) {
             stats.early_drop_encrypted++;
+            syncRequestInFlight = false;
             log1("early-drop encrypted cmd=0x%02x plen=%d (Part 97)\n", cmd, plen);
+            maybeRequestNext("drop encrypted");
             continue;
         }
 
-        // 3f. RESP_SELF_INFO (0x05) is handled specially — we intercept it
-        //     to extract the device name for auto-channel creation, but DON'T queue it
-        //     as a message.
         if (cmd === RESP_SELF_INFO) {
             stats.self_info++;
-            
+            syncRequestInFlight = false;
             const name = parseSelfInfo(framePayload);
             if (name) {
-                deviceName = name;  // Capture for channel creation
-                channelCreated = false; // Refresh the UI label with the learned MeshCore node name.
+                deviceName = name;
+                channelCreated = false;
             }
             continue;
         }
 
         if (cmd === RESP_CHANNEL_INFO) {
             stats.responses_cached++;
+            syncRequestInFlight = false;
             push(responses, { cmd: cmd, payload: framePayload });
             continue;
         }
 
-        // 3g. Anything outside { DIRECT_MSG_RECV, CHANNEL_MSG_RECV } is dropped without
-        //     decode. This catches HELLO_RESP, ADVERT, SEND_CONFIRMED (0x82),
-        //     unencrypted DMs of unknown shape, vendor extensions, and (with strict OFF)
-        //     the encrypted commands too.
         if (!isDirectFrame(cmd) && !isGroupFrame(cmd)) {
             stats.early_drop_unknown_cmd++;
+            syncRequestInFlight = false;
             log1("early-drop unknown cmd=0x%02x plen=%d\n", cmd, plen);
+            maybeRequestNext("drop unknown");
             continue;
         }
 
-        // 4. Inline text-envelope sanity check (frame-type dependent).
-        //    CORRECTED per Mathison: Direct and group frames have different structures.
+        syncRequestInFlight = false;
+
         if (isDirectFrame(cmd)) {
-            // Direct: sender(4) + recipient(4) + text_len(1) + text
             if (dataLen < TEXT_ENVELOPE_BYTES) {
                 stats.early_drop_malformed_text++;
                 log1("early-drop short direct plen=%d < %d\n", dataLen, TEXT_ENVELOPE_BYTES);
-                if (syncingMessages) sendSyncNextMessage("drop short direct");
+                maybeRequestNext("drop short direct");
                 continue;
             }
             const tlen = ord(payload, 8);
             if (TEXT_ENVELOPE_BYTES + tlen > dataLen) {
                 stats.early_drop_malformed_text++;
                 log1("early-drop malformed direct tlen=%d plen=%d\n", tlen, dataLen);
-                if (syncingMessages) sendSyncNextMessage("drop malformed direct");
+                maybeRequestNext("drop malformed direct");
                 continue;
             }
-        } else if (isGroupFrame(cmd)) {
-            // Group: sender(4) + slot(1) + text (no explicit length)
-            // Minimum: 5 bytes (sender + slot)
+        }
+        else if (isGroupFrame(cmd)) {
             if (dataLen < 5) {
                 stats.early_drop_malformed_text++;
                 log1("early-drop short group plen=%d < 5\n", dataLen);
-                if (syncingMessages) sendSyncNextMessage("drop short group");
+                maybeRequestNext("drop short group");
                 continue;
             }
         }
 
-        // 5. Emit the validated frame, then pull the next queued message.
+        // Valid response to a sync request. Queue it locally but do not ask for
+        // more here; recv()/router backpressure decides when to pull again.
         push(frames, { cmd: cmd, payload: payload });
-        if (syncingMessages) {
-            sendSyncNextMessage(isDirectFrame(cmd) ? "after direct" : "after group");
-        }
     }
 }
 
 // ---------------------------------------------------------------------
 // Decoder — DIRECT_MSG_RECV (0x07) and CHANNEL_MSG_RECV (0x08) only.
-// =====================================================================
-//
-// CORRECTED per Mathison (2026-06-19):
-//
-// Direct Message (0x07) payload structure:
-//   Off  Size  Field
-//   0    4     sender node id      (uint32 LE)
-//   4    4     recipient node id   (uint32 LE)
-//   8    1     text length (n)
-//   9    n     UTF-8 text bytes
-//
-// Group Message (0x08) payload structure:
-//   Off  Size  Field
-//   0    4     sender node id      (uint32 LE)
-//   4    1     group slot index    (0-7, identifies which memory slot)
-//   5    ?     text (no explicit length, rest of payload)
-//
-// Note: Group messages DON'T have an explicit text length byte like
-// direct messages. Text is from byte 5 to end of payload.
-//
-// All length validation already happened in the accumulator, so this
-// is straight unpack.
+// ---------------------------------------------------------------------
 
 function decodeTextFrame(cmd, payload)
 {
     if (isDirectFrame(cmd)) {
-        // Direct message: sender(4) + recipient(4) + text_len(1) + text
         const fromId = u32le(payload, 0);
         const toId   = u32le(payload, 4);
         const tlen   = ord(payload, 8);
         const text   = cstr(substr(payload, 9, tlen));
-        
+
         if (!length(text)) {
             log1("decode: empty direct text from=%08x\n", fromId);
             return null;
@@ -751,13 +727,13 @@ function decodeTextFrame(cmd, payload)
         log1("decoded DIRECT_MSG(0x07) from=%08x to=%08x text=%d bytes\n",
             fromId, toId, length(text));
         return msg;
-        
-    } else if (isGroupFrame(cmd)) {
-        // Group message: sender(4) + group_slot(1) + text
+    }
+
+    if (isGroupFrame(cmd)) {
         const fromId = u32le(payload, 0);
-        const groupSlot = ord(payload, 4);  // 0-7, identifies memory slot
+        const groupSlot = ord(payload, 4);
         const text = cstr(substr(payload, 5));
-        
+
         if (!length(text)) {
             log1("decode: empty group text from=%08x slot=%d\n", fromId, groupSlot);
             return null;
@@ -767,7 +743,7 @@ function decodeTextFrame(cmd, payload)
         const msg = {
             id:                   msgSeq,
             from:                 fromId,
-            group_slot:           groupSlot,  // 0-7, for slot-based routing
+            group_slot:           groupSlot,
             rx_time:              time(),
             hop_limit:            1,
             transport:            "meshcore",
@@ -790,10 +766,17 @@ function decodeTextFrame(cmd, payload)
             fromId, groupSlot, length(text));
         return msg;
     }
-    
-    // Unknown frame type (shouldn't happen, smartAccumulate filters)
+
     log1("decode: unknown frame cmd=0x%02x\n", cmd);
     return null;
+}
+
+function popPending(reason)
+{
+    if (length(pendingRx) === 0) return null;
+    const msg = shift(pendingRx);
+    maybeRequestNext(reason ?? "pending delivered");
+    return msg;
 }
 
 // ---------------------------------------------------------------------
@@ -814,15 +797,9 @@ export function setup(config)
     tcpHost  = cfg.host ?? DEFAULT_HOST;
     tcpPort  = cfg.port ?? DEFAULT_PORT;
 
-    // Inject the public MeshCore channel before channel.setup() runs.
-    // tick() repeats the check later in case setup order changes.
     deviceName = cfg.device_name ?? null;
     channelCreated = ensureConfiguredPublicChannel(config);
 
-    // Cache a Strict-mode probe. We only need to know whether
-    // strict-mode is on; the router runs the full gatekeeper pass
-    // (filterInboundBridge) on every queued meshcore message, so we
-    // don't double-filter here.
     const gk = config._gatekeeper;
     strictHook = gk && type(gk.isEnabled) === "function"
         ? function () { return gk.isEnabled() === true; }
@@ -864,10 +841,9 @@ function readSocket()
 
 export function recv()
 {
-    // Drain any already-decoded messages first.
-    if (length(pendingRx) > 0) return shift(pendingRx);
+    const queued = popPending("pending delivered");
+    if (queued) return queued;
 
-    // Reconnect is driven from tick(), so recv() only drains an open socket.
     if (!s) return null;
 
     const data = readSocket();
@@ -883,7 +859,10 @@ export function recv()
         }
     }
 
-    if (length(pendingRx) > 0) return shift(pendingRx);
+    const msg = popPending("message delivered");
+    if (msg) return msg;
+
+    maybeRequestNext("resume drain");
     return null;
 };
 
@@ -897,8 +876,6 @@ export function send(msg)
 
 export function tick()
 {
-    // Idempotent safety check: the MeshCore public channel must exist even
-    // when the radio has not sent SELF_INFO yet.
     if (enabled && !channelCreated && channel) {
         try {
             ensureRuntimePublicChannel();
@@ -913,14 +890,19 @@ export function tick()
         s = openTcp();
         if (s) sendBootHandshake();
     }
+    if (enabled && s && syncingMessages && !syncRequestInFlight && !pendingFull()) {
+        maybeRequestNext(syncPausedBackpressure ? "resume after backpressure" : "tick resume");
+    }
 };
 
 export function process(msg)
 {
     // Message processing for TCP API backend.
-    // Currently a stub; future enhancements could include:
-    // - Outbound message routing
-    // - Priority queue management
+};
+
+export function pending()
+{
+    return length(pendingRx);
 };
 
 export function status()
@@ -937,19 +919,21 @@ export function status()
         commands_sent: stats.commands_sent,
         responses_cached: stats.responses_cached,
         sync_requests: stats.sync_requests,
+        sync_backpressure: stats.sync_backpressure,
         no_more_messages: stats.no_more_messages,
         pending_rx: length(pendingRx),
+        max_pending_rx: maxPendingRx(),
         last_rx_time: lastRxTime,
         last_cmd: lastCmd,
-        syncing_messages: syncingMessages
+        syncing_messages: syncingMessages,
+        sync_request_in_flight: syncRequestInFlight,
+        sync_paused_backpressure: syncPausedBackpressure
     };
     return out;
 };
 
 // ---------------------------------------------------------------------
 // Test/introspection hooks (used by tests/test_meshcore_tcp_api.uc).
-// These are side-door entry points so the buffer state machine can be
-// exercised without a real socket.
 // ---------------------------------------------------------------------
 
 export function _test_inject(data, gatekeeperShim)
