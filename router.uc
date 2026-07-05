@@ -120,8 +120,9 @@ export function process()
                     }
                 }
             }
-            // Incoming meshtasticore bridged traffic can only route via IP
-            // Note that we dont sent traffic from one bridge to another (no meshtastic <-> meshcore bridging) at the moment.
+            // Incoming LoRa bridged traffic can only route via IP after it has
+            // passed queue()-time ingress scope filtering and, when enabled,
+            // Strict Gatekeeper. We do not bridge Meshtastic <-> MeshCore here.
             else {
                 toip = true;
                 msg.hop_limit = 0;
@@ -206,6 +207,62 @@ function resolveGroupChannel(msg)
     return msg;
 };
 
+function isLoRaIngress(msg)
+{
+    return msg && (msg.transport === "meshtastic" || msg.transport === "meshcore");
+}
+
+function isDirectForLocalBridgeDevice(msg)
+{
+    if (!isLoRaIngress(msg) || node.isBroadcast(msg) || msg.metadata?.is_group_message) {
+        return false;
+    }
+
+    // MeshCore Companion TCP direct-message responses come from the connected
+    // radio's local queue. If the backend has surfaced a non-group direct frame,
+    // treat it as direct-to-this-bridge even when the MeshCore radio id does not
+    // equal Crow's native node id.
+    if (msg.transport === "meshcore" && msg.backend === "tcp_api") {
+        return true;
+    }
+
+    // UDP Meshtastic/MeshCore can hear traffic not meant for this node, so only
+    // accept direct frames that target Crow's native id.
+    return node.toMe(msg) || (channel.isDirect(msg.namekey) && node.toMe(msg));
+}
+
+function isJoinedBridgeChannel(msg)
+{
+    if (!isLoRaIngress(msg)) {
+        return false;
+    }
+    const localChannel = channel.getLocalChannelByNameKey(msg.namekey);
+    return localChannel !== null && localChannel !== undefined;
+}
+
+function filterLoRaIngressScope(msg)
+{
+    if (!isLoRaIngress(msg)) {
+        return msg;
+    }
+
+    if (isDirectForLocalBridgeDevice(msg)) {
+        return msg;
+    }
+
+    if (isJoinedBridgeChannel(msg)) {
+        return msg;
+    }
+
+    DEBUG1("router: drop %s ingress not direct/local-channel from=%s to=%s namekey=%s group_slot=%s\n",
+        msg.transport,
+        msg.from,
+        msg.to,
+        msg.namekey ?? "",
+        msg.group_slot ?? "");
+    return null;
+}
+
 // NEW (Phase 4): Enforce channel-level access control
 // Verify sender has valid callsign and meets per-channel ACLs
 function enforceChannelAccess(msg)
@@ -229,7 +286,8 @@ export function queue(msg)
         return;
     }
 
-    // NEW (Phase 1): Resolve group message channel
+    // Resolve MeshCore group slots before applying the bridge-scope filter so
+    // only known/joined group channels are allowed beyond this point.
     if (msg.metadata?.is_group_message) {
         msg = resolveGroupChannel(msg);
         if (!msg) {
@@ -237,13 +295,23 @@ export function queue(msg)
         }
     }
 
-    // NEW (Phase 4): Enforce channel-level access control
+    // Base bridge-scope filter: LoRa ingress must be either direct to the
+    // connected bridge device or on a local joined channel (public default or
+    // user-added). Everything else is dropped before any forwarding decision.
+    msg = filterLoRaIngressScope(msg);
+    if (!msg) {
+        return;
+    }
+
+    // Strict Gatekeeper sits on top of the scope filter. It adds amateur-radio
+    // callsign identity policy and optional channel ACLs, but it does not decide
+    // whether a foreign LoRa frame is in scope for this node.
     msg = enforceChannelAccess(msg);
     if (!msg) {
         return;  // Access denied by per-channel ACL
     }
 
-    if (gatekeeper?.isEnabled() && (msg.transport === "meshtastic" || msg.transport === "meshcore")) {
+    if (gatekeeper?.isEnabled() && isLoRaIngress(msg)) {
         msg = gatekeeper.filterInboundBridge(msg);
         if (!msg) {
             return;
