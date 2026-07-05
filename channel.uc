@@ -70,6 +70,11 @@ export function isMeshtasticPreset(namekey)
     return !namekey || index(meshtasticChannelPresets, namekey) !== -1;
 };
 
+export function meshtasticPublicChannelNamekey()
+{
+    return "LongFast AQ==";
+};
+
 export function isMeshcorePreset(namekey)
 {
     return namekey === meshcorePublicNamekey;

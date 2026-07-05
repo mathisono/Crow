@@ -1,5 +1,6 @@
 import * as udp from "meshcore";
 import * as api from "meshcore_tcp_api";
+import * as channel from "channel";
 
 let active = null;
 let activeName = null;
@@ -50,6 +51,18 @@ function hasUdpConfig(config)
     return !!config.meshcore && config.meshcore.enabled !== false;
 }
 
+function ensureDefaultChannel(config, namekey, label)
+{
+    if (!config.channels) config.channels = [];
+    for (let i = 0; i < length(config.channels); i++) {
+        if (config.channels[i].namekey === namekey) {
+            config.channels[i].label = label;
+            return;
+        }
+    }
+    push(config.channels, { namekey: namekey, label: label });
+}
+
 function candidateStatus(key, label, transport, configured, isActive, host, port)
 {
     const socketHandle = isActive ? active?.handle() : null;
@@ -88,6 +101,7 @@ export function setup(config)
         activeName = "tcp";
     }
     else if (wantsUdp(config)) {
+        ensureDefaultChannel(config, channel.meshcorePublicChannelNamekey(), "MeshCore~Public");
         active = udp;
         activeName = "udp";
     }

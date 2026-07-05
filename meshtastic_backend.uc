@@ -1,5 +1,6 @@
 import * as udp from "meshtastic";
 import * as api from "meshtastic_API";
+import * as channel from "channel";
 
 let active = null;
 let activeName = null;
@@ -62,6 +63,18 @@ function tcpConfig(config)
     return config.meshtastic_api ?? config.meshtastic_API ?? {};
 }
 
+function ensureDefaultChannel(config, namekey, label)
+{
+    if (!config.channels) config.channels = [];
+    for (let i = 0; i < length(config.channels); i++) {
+        if (config.channels[i].namekey === namekey) {
+            config.channels[i].label = label;
+            return;
+        }
+    }
+    push(config.channels, { namekey: namekey, label: label });
+}
+
 function candidateStatus(key, label, transport, configured, isActive, host, port)
 {
     const socketHandle = isActive ? active?.handle() : null;
@@ -100,6 +113,7 @@ export function setup(config)
         activeName = "tcp";
     }
     else if (wantsUdp(config)) {
+        ensureDefaultChannel(config, channel.meshtasticPublicChannelNamekey(), "Meshtastic~Public");
         active = udp;
         activeName = "udp";
     }
