@@ -134,6 +134,7 @@ let callsign         = null;
 let router           = null;
 let tcpHost          = null;
 let tcpPort          = DEFAULT_PORT;
+let nextReconnectTime = 0;
 let strictHook       = null;     // function(): boolean   — cached strict-mode probe
 
 let s                = null;     // active socket handle (null = disconnected)
@@ -290,6 +291,7 @@ function closeSocket(reason)
         try { s.close(); } catch (_) {}
     }
     s = null;
+    nextReconnectTime = time() + RECONNECT_INTERVAL;
     resetState();
 }
 
@@ -308,6 +310,7 @@ function openTcp()
     }
     catch (_) {
         log0("tcp connect failed %s:%d: %s\n", tcpHost, tcpPort, socket.error());
+        nextReconnectTime = time() + RECONNECT_INTERVAL;
         return null;
     }
 }
@@ -771,9 +774,9 @@ export function setup(config)
         ? function () { return gk.isEnabled() === true; }
         : null;
 
+    nextReconnectTime = 0;
     s = openTcp();
     if (s) sendBootHandshake();
-    timers.setInterval("meshcore_tcp_api.reconnect", RECONNECT_INTERVAL);
 };
 
 export function shutdown()
@@ -810,11 +813,7 @@ export function recv()
     // Drain any already-decoded messages first.
     if (length(pendingRx) > 0) return shift(pendingRx);
 
-    // Reconnect path.
-    if (!s && timers.tick("meshcore_tcp_api.reconnect")) {
-        s = openTcp();
-        if (s) sendBootHandshake();
-    }
+    // Reconnect is driven from tick(), so recv() only drains an open socket.
     if (!s) return null;
 
     const data = readSocket();
@@ -854,6 +853,11 @@ export function tick()
             log0("auto channel check error: %s\n", err);
             stats.early_drop_unknown_cmd++;
         }
+    }
+    if (enabled && !s && time() >= nextReconnectTime) {
+        nextReconnectTime = time() + RECONNECT_INTERVAL;
+        s = openTcp();
+        if (s) sendBootHandshake();
     }
 };
 
