@@ -283,6 +283,29 @@ function resetState()
     pendingSkip = 0;
 }
 
+function disableNagle(sock)
+{
+    if (!sock) return false;
+    try {
+        const nodelay = socket.TCP_NODELAY ?? 1;
+        const ipproto = socket.IPPROTO_TCP ?? 6;
+        if (type(sock.setsockopt) === "function") {
+            sock.setsockopt(ipproto, nodelay, 1);
+            log1("tcp nodelay enabled\n");
+            return true;
+        }
+        if (type(sock.setoption) === "function") {
+            sock.setoption(ipproto, nodelay, 1);
+            log1("tcp nodelay enabled\n");
+            return true;
+        }
+    }
+    catch (e) {
+        log1("tcp nodelay unavailable: %s\n", e);
+    }
+    return false;
+}
+
 function closeSocket(reason)
 {
     if (s) {
@@ -308,6 +331,7 @@ function openTcp()
     }
     try {
         const ns = socket.create(socket.AF_INET, socket.SOCK_STREAM, 0);
+        disableNagle(ns);
         ns.connect({ address: tcpHost, port: tcpPort });
         log0("connected tcp companion %s:%d\n", tcpHost, tcpPort);
         stats.connects++;
@@ -353,8 +377,10 @@ export function sendCommand(cmd, payload)
 {
     if (!s) return false;
     try {
-        s.send(buildCommand(cmd, payload ?? ""));
+        const frame = buildCommand(cmd, payload ?? "");
+        const sent = s.send(frame);
         stats.commands_sent++;
+        log1("send command=0x%02x frame_bytes=%d sent=%s\n", cmd, length(frame), sent);
         return true;
     }
     catch (_) {
@@ -379,10 +405,11 @@ function sendBootHandshake()
 {
     if (!s) return;
     try {
-        s.send(buildCommand(CMD_HELLO, ""));
+        const frame = buildCommand(CMD_HELLO, "");
+        const sent = s.send(frame);
         stats.handshakes_sent++;
         // CORRECTED: No SUBSCRIBE_EVENTS needed (auto-push model)
-        log0("handshake sent (HELLO)\n");
+        log0("handshake sent (HELLO) frame_bytes=%d sent=%s\n", length(frame), sent);
         log1("  Radio will auto-push: 0x07=Direct msg, 0x08=Group msg\n");
     }
     catch (_) {
