@@ -139,6 +139,9 @@ function pushBackendStatus(reply, b)
     if (exists(b, "message_waiting")) {
         push(reply, `MeshCore API: waiting=${b.message_waiting ?? 0} commands=${b.commands_sent ?? 0} cached=${b.responses_cached ?? 0}`);
     }
+    if (exists(b, "sync_requests") || exists(b, "no_more_messages") || exists(b, "syncing_messages")) {
+        push(reply, `MeshCore API: syncing=${b.syncing_messages ? "yes" : "no"} sync_requests=${b.sync_requests ?? 0} no_more_messages=${b.no_more_messages ?? 0}`);
+    }
     if (b.last_rx_time != null || b.last_cmd != null) {
         push(reply, `Last RX: time=${b.last_rx_time ?? "none"} cmd=${b.last_cmd ?? "none"}`);
     }

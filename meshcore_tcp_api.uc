@@ -610,7 +610,6 @@ function smartAccumulate(data)
             continue;
         }
 
-        // 3d. Queue drain complete. Return to passive listening until next 0x83.
         if (cmd === RESP_NO_MORE_MESSAGES) {
             stats.no_more_messages++;
             syncingMessages = false;
@@ -618,7 +617,6 @@ function smartAccumulate(data)
             continue;
         }
 
-        // 3e. Encrypted / blocked command early drop under Strict mode.
         if (strictOn && PART97_BLOCKED_COMMANDS[cmd]) {
             stats.early_drop_encrypted++;
             log1("early-drop encrypted cmd=0x%02x plen=%d (Part 97)\n", cmd, plen);
@@ -936,10 +934,10 @@ export function status()
         frames_decoded: stats.frames_decoded,
         self_info: stats.self_info,
         message_waiting: stats.message_waiting,
-        no_more_messages: stats.no_more_messages,
-        sync_requests: stats.sync_requests,
         commands_sent: stats.commands_sent,
         responses_cached: stats.responses_cached,
+        sync_requests: stats.sync_requests,
+        no_more_messages: stats.no_more_messages,
         pending_rx: length(pendingRx),
         last_rx_time: lastRxTime,
         last_cmd: lastCmd,
