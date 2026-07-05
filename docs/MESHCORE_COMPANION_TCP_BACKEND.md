@@ -218,6 +218,24 @@ meshcore_backend: selected tcp backend
 
 Validate this backend with Companion-framed packets. Do not use a line-oriented command probe as the pass/fail test for Crow's message bridge.
 
+The repo includes a validation helper:
+
+```sh
+python3 tools/test_meshcore_companion.py DEVICE_IP --port 4403
+```
+
+It sends the full framed startup command:
+
+```text
+3c0c00010000000000000043726f77
+```
+
+To also exercise the queue-drain request after a `0x83` message-waiting push:
+
+```sh
+python3 tools/test_meshcore_companion.py DEVICE_IP --port 4403 --drain-on-83 --max-frames 20
+```
+
 Message reception validation should confirm:
 
 - `0x83` is treated as a notification, not a message payload;
