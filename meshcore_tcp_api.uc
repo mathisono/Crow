@@ -43,7 +43,8 @@
 //         "enabled": true,
 //         "host": "127.0.0.1",
 //         "port": 4403,
-//         "max_pending_rx": 4
+//         "max_pending_rx": 4,
+//         "channel_discovery": true
 //     }
 //
 // =====================================================================
@@ -61,43 +62,27 @@ const FRAME_FROM_RADIO         = 0x3E;   // '>'
 const FRAME_TO_RADIO           = 0x3C;   // '<'
 const HEADER_BYTES             = 3;      // marker(1) + length LE(2)
 
-// Hard ceiling on per-frame payload bytes we will buffer. MeshCore text
-// MTU is ~150 bytes; with the 9-byte text envelope (from/to/len) the
-// observed maximum is ~159. 256 gives headroom for future variants while
-// still being a small RAM target. Anything bigger is dropped from the
-// wire (Smart Accumulator rule 1).
 const SMART_MAX_PAYLOAD        = 256;
-
-// Cap the rolling resync window. Without this, a steady stream of
-// garbage without a magic byte could grow tcpbuf without bound.
 const RESYNC_BUFFER_CAP        = 4096;
 
-// Async event command IDs we actually emit Crow messages for.
-// CORRECTED (per Mathison): Frame 0x07 is direct, 0x08 is group.
-const CMD_DIRECT_MSG_RECV      = 0x07;   // direct/private cleartext text msg
-const CMD_CHANNEL_MSG_RECV     = 0x08;   // group/channel cleartext text msg
+const CMD_DIRECT_MSG_RECV      = 0x07;
+const CMD_CHANNEL_MSG_RECV     = 0x08;
 const CMD_DIRECT_MSG_RECV_V3   = 0x10;
 const CMD_CHANNEL_MSG_RECV_V3  = 0x11;
 
-// Outgoing command IDs (host -> radio).
 const CMD_APP_START            = 0x01;
 const CMD_SYNC_NEXT_MESSAGE    = 0x0A;
+const CMD_GET_CHANNEL          = 0x1F;
 
-// Self-info response from radio (triggered by CMD_APP_START).
-const RESP_SELF_INFO           = 0x05;   // Device info: public key + name
-const SELF_INFO_PUBKEY_SIZE    = 32;     // Ed25519 public key
-const SELF_INFO_PUBKEY_OFFSET  = 1;      // Right after response code
+const RESP_SELF_INFO           = 0x05;
+const SELF_INFO_PUBKEY_SIZE    = 32;
+const SELF_INFO_PUBKEY_OFFSET  = 1;
 
-// Push/response codes that are not directly routed messages.
-const PUSH_CODE_SEND_CONFIRMED = 0x82;   // Ack/confirmation (NOT group messages!)
+const PUSH_CODE_SEND_CONFIRMED = 0x82;
 const PUSH_CODE_MSG_WAITING    = 0x83;
 const RESP_CHANNEL_INFO        = 0x12;
 const RESP_NO_MORE_MESSAGES    = 0x0A;
 
-// Encrypted / non-compliant command IDs that are always early-dropped
-// when Strict Gatekeeper is enabled, regardless of payload contents.
-// (Without strict mode, the unknown-cmd gate catches them too — strict
-// mode just gives them their own stat bucket.)
 const CMD_ENCRYPTED_DM         = 0x90;
 const CMD_ENCRYPTED_BIN        = 0x91;
 
@@ -118,12 +103,13 @@ function isGroupFrame(cmd)
 
 const DEFAULT_HOST             = "127.0.0.1";
 const DEFAULT_PORT             = 4403;
-const RECONNECT_INTERVAL       = 5;      // seconds
+const RECONNECT_INTERVAL       = 5;
 const SOCKET_READ_CHUNK        = 2048;
-const DEFAULT_MAX_PENDING_RX   = 4;      // local backpressure cap
+const DEFAULT_MAX_PENDING_RX   = 4;
 const HARD_MAX_PENDING_RX      = 32;
+const DEFAULT_CHANNEL_REFRESH  = 600;
+const MAX_CHANNEL_INDEX        = 7;
 
-// Text frame envelope: 4-byte from + 4-byte to + 1-byte length.
 const TEXT_ENVELOPE_BYTES      = 9;
 
 // ---------------------------------------------------------------------
@@ -133,25 +119,28 @@ const TEXT_ENVELOPE_BYTES      = 9;
 let cfg              = null;
 let rootConfig       = null;
 export let enabled   = false;
-export let channelNamekey = null; // MeshCore public channel namekey
-let deviceName       = null;     // device name from config
-let channelCreated   = false;    // one-shot flag for lazy channel init
+export let channelNamekey = null;
+let deviceName       = null;
+let channelCreated   = false;
 let callsign         = null;
 let router           = null;
 let tcpHost          = null;
 let tcpPort          = DEFAULT_PORT;
 let nextReconnectTime = 0;
-let strictHook       = null;     // function(): boolean — cached strict-mode probe
+let strictHook       = null;
+let channelDiscovery = false;
+let channelRefreshSeconds = DEFAULT_CHANNEL_REFRESH;
 
-let s                = null;     // active socket handle (null = disconnected)
-let tcpbuf           = "";       // TCP accumulator
-let pendingSkip      = 0;        // bytes still to discard from incoming stream
-let pendingRx        = [];       // decoded Crow message queue
-let responses        = [];       // cached non-message responses for discovery
-let msgSeq           = 0;        // monotonic local message id
-let syncingMessages  = false;    // true while draining radio's queued messages
-let syncRequestInFlight = false; // true after CMD_SYNC_NEXT_MESSAGE until a response arrives
+let s                = null;
+let tcpbuf           = "";
+let pendingSkip      = 0;
+let pendingRx        = [];
+let responses        = [];
+let msgSeq           = 0;
+let syncingMessages  = false;
+let syncRequestInFlight = false;
 let syncPausedBackpressure = false;
+let discoveredChannels = {};
 
 let stats            = {
     connects: 0,
@@ -167,6 +156,10 @@ let stats            = {
     sync_backpressure: 0,
     responses_cached: 0,
     commands_sent: 0,
+    channel_discovery_requests: 0,
+    channel_info_responses: 0,
+    channels_discovered: 0,
+    channels_updated: 0,
     early_drop_oversize: 0,
     early_drop_encrypted: 0,
     early_drop_unknown_cmd: 0,
@@ -188,6 +181,30 @@ function log0(fmt, ...args)
 function log1(fmt, ...args)
 {
     DEBUG1("meshcore_tcp_api: " + fmt, ...args);
+}
+
+function notifyOperator(lines, mergekey)
+{
+    try {
+        if (global.event?.queue) {
+            global.event.queue({ cmd: "/reply", reply: lines });
+        }
+        if (global.event?.notify) {
+            global.event.notify({ cmd: "channels" }, mergekey ?? "channels");
+        }
+    }
+    catch (_) {
+    }
+}
+
+function notifyChannelDiscovered(ch, action)
+{
+    const verb = action === "updated" ? "updated" : "discovered";
+    notifyOperator([
+        `<b>MeshCore TCP API</b> ${verb} channel`,
+        `Index ${ch.index}: ${ch.name}`,
+        `Runtime only; not saved to Crow config.`
+    ], `meshcore-tcp-channel-${ch.index}`);
 }
 
 function localHostname()
@@ -276,7 +293,6 @@ function u32le(buf, off)
         | (ord(buf, off + 3) << 24)) & 0xFFFFFFFF;
 }
 
-// Strip trailing NULs from a C-style string payload field.
 function cstr(s)
 {
     if (!s) return "";
@@ -373,7 +389,7 @@ function openTcp()
 }
 
 // ---------------------------------------------------------------------
-// MeshCore boot handshake and queue polling.
+// MeshCore boot handshake, queue polling, and channel discovery.
 // ---------------------------------------------------------------------
 
 function buildRadioFrame(cmd, payload)
@@ -445,6 +461,26 @@ function maybeRequestNext(reason)
     return sendSyncNextMessage(reason);
 }
 
+function requestChannelInfo(index, reason)
+{
+    if (!channelDiscovery || !s) {
+        return false;
+    }
+    stats.channel_discovery_requests++;
+    log1("channel discovery request index=%d reason=%s\n", index, reason ?? "unknown");
+    return sendCommand(CMD_GET_CHANNEL, chr(index & 0xff));
+}
+
+function requestAllChannels(reason)
+{
+    if (!channelDiscovery || !s) {
+        return;
+    }
+    for (let i = 0; i <= MAX_CHANNEL_INDEX; i++) {
+        requestChannelInfo(i, reason);
+    }
+}
+
 export function takeResponse(cmd)
 {
     for (let i = 0; i < length(responses); i++) {
@@ -459,9 +495,6 @@ export function takeResponse(cmd)
 
 function appStartPayload()
 {
-    // CMD_APP_START is not a one-byte command. The Companion Protocol expects
-    // byte 0 = 0x01, bytes 1-7 reserved zeroes, and an optional UTF-8 app name.
-    // buildCommand() supplies byte 0, so the payload is seven zeroes + "Crow".
     return chr(0) + chr(0) + chr(0) + chr(0) + chr(0) + chr(0) + chr(0) + "Crow";
 }
 
@@ -481,10 +514,6 @@ function sendBootHandshake()
     }
 }
 
-// ---------------------------------------------------------------------
-// advance() — skip past rejected frames in the TCP buffer
-// ---------------------------------------------------------------------
-
 function advance(hdrBytes, payloadBytes)
 {
     const total = hdrBytes + payloadBytes;
@@ -495,10 +524,6 @@ function advance(hdrBytes, payloadBytes)
     pendingSkip = total - length(tcpbuf);
     tcpbuf = "";
 }
-
-// -----
-// parseSelfInfo() — Extract device name from RESP_SELF_INFO (0x05)
-// =====================================================================
 
 function parseSelfInfo(payload)
 {
@@ -534,9 +559,50 @@ function parseSelfInfo(payload)
     return name;
 }
 
-// ---------------------------------------------------------------------
-// The "Smart Accumulator"
-// ---------------------------------------------------------------------
+function decodeChannelInfo(framePayload)
+{
+    if (!framePayload || length(framePayload) < 50 || ord(framePayload, 0) !== RESP_CHANNEL_INFO) {
+        return null;
+    }
+    const index = ord(framePayload, 1);
+    const name = cstr(substr(framePayload, 2, 32));
+    const secret = substr(framePayload, 34, 16);
+    if (!name || length(name) === 0 || !secret || length(secret) === 0) {
+        return null;
+    }
+    const secret_b64 = b64enc(secret);
+    return {
+        index: index,
+        name: name,
+        secret: secret,
+        secret_b64: secret_b64,
+        namekey: `${name} ${secret_b64}`
+    };
+}
+
+function processChannelInfo(framePayload)
+{
+    stats.channel_info_responses++;
+    const ch = decodeChannelInfo(framePayload);
+    if (!ch) {
+        return;
+    }
+
+    const key = `${ch.index}`;
+    const old = discoveredChannels[key];
+    if (!old) {
+        discoveredChannels[key] = ch;
+        stats.channels_discovered++;
+        log1("channel discovered index=%d name=%s\n", ch.index, ch.name);
+        notifyChannelDiscovered(ch, "discovered");
+    }
+    else if (old.name !== ch.name || old.secret_b64 !== ch.secret_b64) {
+        discoveredChannels[key] = ch;
+        stats.channels_updated++;
+        log1("channel updated index=%d name=%s\n", ch.index, ch.name);
+        notifyChannelDiscovered(ch, "updated");
+    }
+}
 
 function smartAccumulate(data)
 {
@@ -603,7 +669,6 @@ function smartAccumulate(data)
         stats.frames_in++;
         lastCmd = cmd;
 
-        // 0x83 is a push notification only. It is not a message body.
         if (cmd === PUSH_CODE_MSG_WAITING) {
             stats.message_waiting++;
             syncingMessages = true;
@@ -611,7 +676,6 @@ function smartAccumulate(data)
             continue;
         }
 
-        // A sync request completed with no more radio-side queued messages.
         if (cmd === RESP_NO_MORE_MESSAGES) {
             stats.no_more_messages++;
             syncingMessages = false;
@@ -637,6 +701,9 @@ function smartAccumulate(data)
                 deviceName = name;
                 channelCreated = false;
             }
+            if (channelDiscovery) {
+                requestAllChannels("self-info");
+            }
             continue;
         }
 
@@ -644,6 +711,7 @@ function smartAccumulate(data)
             stats.responses_cached++;
             syncRequestInFlight = false;
             push(responses, { cmd: cmd, payload: framePayload });
+            processChannelInfo(framePayload);
             continue;
         }
 
@@ -681,15 +749,9 @@ function smartAccumulate(data)
             }
         }
 
-        // Valid response to a sync request. Queue it locally but do not ask for
-        // more here; recv()/router backpressure decides when to pull again.
         push(frames, { cmd: cmd, payload: payload });
     }
 }
-
-// ---------------------------------------------------------------------
-// Decoder — DIRECT_MSG_RECV (0x07) and CHANNEL_MSG_RECV (0x08) only.
-// ---------------------------------------------------------------------
 
 function decodeTextFrame(cmd, payload)
 {
@@ -779,10 +841,6 @@ function popPending(reason)
     return msg;
 }
 
-// ---------------------------------------------------------------------
-// Public lifecycle API (mirrors meshtastic_API.uc)
-// ---------------------------------------------------------------------
-
 export function setup(config)
 {
     cfg = config.meshcore_tcp_api;
@@ -796,6 +854,8 @@ export function setup(config)
     router   = config.router;
     tcpHost  = cfg.host ?? DEFAULT_HOST;
     tcpPort  = cfg.port ?? DEFAULT_PORT;
+    channelDiscovery = !!cfg.channel_discovery;
+    channelRefreshSeconds = cfg.channel_refresh_seconds ?? DEFAULT_CHANNEL_REFRESH;
 
     deviceName = cfg.device_name ?? null;
     channelCreated = ensureConfiguredPublicChannel(config);
@@ -808,6 +868,9 @@ export function setup(config)
     nextReconnectTime = 0;
     s = openTcp();
     if (s) sendBootHandshake();
+    if (channelDiscovery) {
+        timers.setInterval("meshcore_tcp_api.channel_refresh", channelRefreshSeconds);
+    }
 };
 
 export function shutdown()
@@ -868,8 +931,6 @@ export function recv()
 
 export function send(msg)
 {
-    // Outbound send is not yet implemented for the TCP Companion backend.
-    // Production outbound continues via the existing meshcore.uc UDP path.
     log1("send: not implemented (msg.id=%s)\n", msg?.id);
     return false;
 };
@@ -893,11 +954,13 @@ export function tick()
     if (enabled && s && syncingMessages && !syncRequestInFlight && !pendingFull()) {
         maybeRequestNext(syncPausedBackpressure ? "resume after backpressure" : "tick resume");
     }
+    if (enabled && s && channelDiscovery && timers.tick("meshcore_tcp_api.channel_refresh")) {
+        requestAllChannels("refresh");
+    }
 };
 
 export function process(msg)
 {
-    // Message processing for TCP API backend.
 };
 
 export function pending()
@@ -927,14 +990,15 @@ export function status()
         last_cmd: lastCmd,
         syncing_messages: syncingMessages,
         sync_request_in_flight: syncRequestInFlight,
-        sync_paused_backpressure: syncPausedBackpressure
+        sync_paused_backpressure: syncPausedBackpressure,
+        channel_discovery: channelDiscovery,
+        channel_discovery_requests: stats.channel_discovery_requests,
+        channel_info_responses: stats.channel_info_responses,
+        channels_discovered: stats.channels_discovered,
+        channels_updated: stats.channels_updated
     };
     return out;
 };
-
-// ---------------------------------------------------------------------
-// Test/introspection hooks (used by tests/test_meshcore_tcp_api.uc).
-// ---------------------------------------------------------------------
 
 export function _test_inject(data, gatekeeperShim)
 {
@@ -957,6 +1021,7 @@ export function _test_reset()
     pendingRx = [];
     responses = [];
     msgSeq = 0;
+    discoveredChannels = {};
     for (let k in stats) stats[k] = 0;
 };
 
