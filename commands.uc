@@ -136,6 +136,9 @@ function pushBackendStatus(reply, b)
     if (exists(b, "bytes_rx")) {
         push(reply, `RX: bytes=${b.bytes_rx ?? 0} frames=${b.frames_in ?? 0} decoded=${b.frames_decoded ?? 0} self_info=${b.self_info ?? 0}`);
     }
+    if (exists(b, "message_waiting")) {
+        push(reply, `MeshCore API: waiting=${b.message_waiting ?? 0} commands=${b.commands_sent ?? 0} cached=${b.responses_cached ?? 0}`);
+    }
     if (b.last_rx_time != null || b.last_cmd != null) {
         push(reply, `Last RX: time=${b.last_rx_time ?? "none"} cmd=${b.last_cmd ?? "none"}`);
     }

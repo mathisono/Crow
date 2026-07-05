@@ -94,6 +94,9 @@ function candidateStatus(key, label, transport, configured, isActive, host, port
         frames_in: detail.frames_in,
         frames_decoded: detail.frames_decoded,
         self_info: detail.self_info,
+        message_waiting: detail.message_waiting,
+        commands_sent: detail.commands_sent,
+        responses_cached: detail.responses_cached,
         last_rx_time: detail.last_rx_time,
         last_cmd: detail.last_cmd
     };
