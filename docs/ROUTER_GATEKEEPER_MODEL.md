@@ -4,7 +4,7 @@ Status: **current branch routing model**.
 
 Crow's router should not treat LoRa ingress as a general-purpose firehose.
 
-For Meshtastic and MeshCore ingress, `router.uc` should first decide whether the frame is in scope for this Crow node. Strict Gatekeeper then adds amateur-radio identity policy on top of that scope decision.
+For Meshtastic and MeshCore ingress, `router.uc` first decides whether the frame is in scope for this Crow node. Strict Gatekeeper then adds amateur-radio identity policy on top of that scope decision.
 
 ## Router responsibility
 
@@ -23,6 +23,27 @@ MeshCore izOH6cXN6mrJ5e26oRXNcg==     MeshCore public/default channel
 
 User-added channels may be added through the UI or slash commands. Once present in Crow's local channel table, those channels are valid ingress paths.
 
+## Direct-message distinction: UDP vs TCP API
+
+UDP backends can hear traffic that is not addressed to the local Crow bridge device. Therefore UDP direct frames must be addressed to Crow's local node/device identity before the router accepts them.
+
+TCP/API backends are different. A TCP API backend is connected to a specific external radio/device API. Direct messages surfaced by that connected API are treated as local direct messages for this bridge path.
+
+Current TCP API local-direct behavior:
+
+```text
+MeshCore TCP Companion API direct frame  -> local direct
+Meshtastic TCP Port-API direct frame     -> local direct
+```
+
+Meshtastic TCP direct frames are marked with:
+
+```text
+metadata.local_direct = true
+```
+
+and the router also recognizes the TCP API backend names as local direct paths.
+
 ## What router drops
 
 Router should drop LoRa ingress if it is not:
@@ -36,8 +57,19 @@ Examples that should be dropped before forwarding:
 ```text
 Meshtastic UDP frame for an unknown channel
 MeshCore group message for an unmapped group slot
-LoRa direct frame not addressed to this node/device
+UDP LoRa direct frame not addressed to this node/device
 Any LoRa frame with no matching local channel/default channel
+```
+
+Examples that should be accepted by scope before Strict Gatekeeper policy:
+
+```text
+Meshtastic TCP Port-API local direct frame
+MeshCore TCP Companion local direct frame
+Meshtastic public/default channel frame
+MeshCore public/default channel frame
+User-added local channel frame
+Mapped MeshCore group-slot frame
 ```
 
 ## Where Strict Gatekeeper fits
@@ -80,6 +112,8 @@ When `strict_gatekeeper.enabled=false`:
 - Callsign validation is skipped.
 - Gateway annotation is skipped.
 
+This means a packet can look valid at the LoRa protocol layer but still be dropped by router scope because it is not direct to the bridge device and is not on a joined channel.
+
 ## Strict Gatekeeper on
 
 When `strict_gatekeeper.enabled=true`:
@@ -88,6 +122,25 @@ When `strict_gatekeeper.enabled=true`:
 - Channel ACLs apply after the scope filter.
 - Meshtastic/MeshCore bridge filtering applies before the message enters the router queue.
 - Accepted bridge messages are rewritten/annotated for gateway attribution.
+
+## Backend pending drain
+
+TCP/API backends can decode multiple messages from one socket read. The router now drains local backend pending queues before socket polling so decoded messages do not stall waiting for another socket event.
+
+Current bounded drain behavior:
+
+```text
+MAX_PENDING_BACKEND_DRAIN = 4
+```
+
+The router calls pending-drain for:
+
+```text
+Meshtastic TCP Port-API
+MeshCore TCP Companion API
+```
+
+The MeshCore backend also applies radio-side pull backpressure with `max_pending_rx`. Meshtastic Port-API is passive-stream based, so its pending drain is only a local decoded-message drain, not a radio-side queue pull.
 
 ## Per-channel ACL config shape
 
@@ -127,9 +180,13 @@ Test with Strict Gatekeeper disabled first:
 4. User-added MeshCore channel/group slot is accepted.
 5. Unknown Meshtastic channel frame is dropped.
 6. Unknown MeshCore group slot is dropped.
-7. Direct Meshtastic frame not addressed to this node is dropped.
-8. Direct Meshtastic frame addressed to this node is accepted.
-9. MeshCore TCP direct frame from the connected Companion queue is accepted.
+7. UDP direct Meshtastic/MeshCore frame not addressed to this node is dropped.
+8. UDP direct Meshtastic/MeshCore frame addressed to this node is accepted.
+9. Meshtastic TCP Port-API local direct frame is accepted.
+10. MeshCore TCP Companion local direct frame is accepted.
+11. Router drains local Meshtastic pending messages before socket polling.
+12. Router drains local MeshCore pending messages before socket polling.
+13. MeshCore TCP backpressure keeps `pending_rx <= max_pending_rx` during queue drain.
 
 ### Strict Gatekeeper tests
 
@@ -146,16 +203,33 @@ Enable Strict Gatekeeper and repeat accepted-path tests:
 9. Non-text LoRa bridge payload is dropped.
 10. Encrypted bridge packet is dropped.
 
+### Meshtastic TCP API validation additions
+
+When test firmware/hardware is available for Meshtastic TCP Port-API:
+
+1. Confirm `meshtastic_backend: selected tcp backend`.
+2. Confirm Port-API connect to the configured host/port.
+3. Send or replay multiple `FromRadio.packet` frames in one TCP read.
+4. Confirm `meshtastic_API.pending()` becomes non-zero.
+5. Confirm router drains pending Meshtastic messages without waiting for another socket event.
+6. Confirm direct TCP Port-API messages are accepted as local direct messages.
+7. Confirm unknown channel messages are still dropped by router scope.
+8. Confirm Strict Gatekeeper still annotates accepted Meshtastic TCP ingress when enabled.
+
 ### Useful grep checks
 
 ```sh
-grep -n 'filterLoRaIngressScope\|isDirectForLocalBridgeDevice\|isJoinedBridgeChannel' router.uc
+grep -n 'filterLoRaIngressScope\|isDirectForLocalBridgeDevice\|isTcpApiIngress\|isJoinedBridgeChannel' router.uc
 grep -n 'findChannelConfig\|allowList\|denyList' gatekeeper.uc
 grep -n 'drainPendingBackend\|MAX_PENDING_BACKEND_DRAIN' router.uc
+grep -n 'local_direct\|export function pending\|export function status' meshtastic_API.uc meshcore_tcp_api.uc
+grep -n 'pending_rx\|sync_backpressure\|channels_discovered' meshtastic_backend.uc meshcore_backend.uc
 ```
 
 Expected:
 
 - router scope filtering exists before gatekeeper filtering;
+- TCP API direct messages are recognized as local direct paths;
 - gatekeeper can find channel ACLs in array-based config;
-- backend pending drain remains bounded.
+- backend pending drain remains bounded;
+- Meshtastic and MeshCore TCP selectors expose pending/status telemetry.
