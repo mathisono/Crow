@@ -66,6 +66,7 @@ function ensureDefaultChannel(config, namekey, label)
 function candidateStatus(key, label, transport, configured, isActive, host, port)
 {
     const socketHandle = isActive ? active?.handle() : null;
+    const detail = isActive && active?.status ? active.status() : {};
     let state = "not-configured";
     if (configured && !isActive) {
         state = "configured-inactive";
@@ -85,7 +86,16 @@ function candidateStatus(key, label, transport, configured, isActive, host, port
         host: host,
         port: port,
         socket: socketHandle !== null,
-        pending_rx: 0
+        pending_rx: detail.pending_rx ?? 0,
+        connects: detail.connects,
+        disconnects: detail.disconnects,
+        handshakes_sent: detail.handshakes_sent,
+        bytes_rx: detail.bytes_rx,
+        frames_in: detail.frames_in,
+        frames_decoded: detail.frames_decoded,
+        self_info: detail.self_info,
+        last_rx_time: detail.last_rx_time,
+        last_cmd: detail.last_cmd
     };
 }
 

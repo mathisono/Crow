@@ -130,6 +130,15 @@ function pushBackendStatus(reply, b)
     if (exists(b, "pending_rx")) {
         push(reply, `Pending RX: ${b.pending_rx}`);
     }
+    if (exists(b, "connects")) {
+        push(reply, `TCP: connects=${b.connects ?? 0} disconnects=${b.disconnects ?? 0} hellos=${b.handshakes_sent ?? 0}`);
+    }
+    if (exists(b, "bytes_rx")) {
+        push(reply, `RX: bytes=${b.bytes_rx ?? 0} frames=${b.frames_in ?? 0} decoded=${b.frames_decoded ?? 0} self_info=${b.self_info ?? 0}`);
+    }
+    if (b.last_rx_time != null || b.last_cmd != null) {
+        push(reply, `Last RX: time=${b.last_rx_time ?? "none"} cmd=${b.last_cmd ?? "none"}`);
+    }
     if (b.reconnect_in_seconds > 0) {
         push(reply, `Reconnect in: ${b.reconnect_in_seconds}s`);
     }

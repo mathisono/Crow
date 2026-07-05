@@ -128,14 +128,19 @@ let msgSeq           = 0;        // monotonic local message id
 let stats            = {
     connects: 0,
     disconnects: 0,
+    handshakes_sent: 0,
+    bytes_rx: 0,
     frames_in: 0,
     frames_decoded: 0,
+    self_info: 0,
     early_drop_oversize: 0,
     early_drop_encrypted: 0,
     early_drop_unknown_cmd: 0,
     early_drop_malformed_text: 0,
     resync_skips: 0
 };
+let lastRxTime       = null;
+let lastCmd          = null;
 
 // ---------------------------------------------------------------------
 // Logging
@@ -312,8 +317,9 @@ function sendBootHandshake()
     if (!s) return;
     try {
         s.send(buildFrame(CMD_HELLO, ""));
+        stats.handshakes_sent++;
         // CORRECTED: No SUBSCRIBE_EVENTS needed (auto-push model)
-        log1("handshake sent (HELLO)\n");
+        log0("handshake sent (HELLO)\n");
         log1("  Radio will auto-push: 0x07=Direct msg, 0x08=Group msg\n");
     }
     catch (_) {
@@ -498,6 +504,8 @@ function smartAccumulate(data)
             if (blen < HEADER_BYTES + plen) return frames;  // Wait for full payload
             const payload = substr(tcpbuf, HEADER_BYTES, plen);
             tcpbuf = substr(tcpbuf, HEADER_BYTES + plen);
+            stats.self_info++;
+            lastCmd = cmd;
             
             const name = parseSelfInfo(payload);
             if (name) {
@@ -553,6 +561,7 @@ function smartAccumulate(data)
         const payload = substr(tcpbuf, HEADER_BYTES, plen);
         tcpbuf = substr(tcpbuf, HEADER_BYTES + plen);
         stats.frames_in++;
+        lastCmd = cmd;
         push(frames, { cmd: cmd, payload: payload });
     }
 }
@@ -715,7 +724,14 @@ function readSocket()
 {
     if (!s) return null;
     try {
-        return s.recv(SOCKET_READ_CHUNK);
+        const data = s.recv(SOCKET_READ_CHUNK);
+        if (!data || length(data) === 0) {
+            closeSocket("peer closed");
+            return null;
+        }
+        stats.bytes_rx += length(data);
+        lastRxTime = time();
+        return data;
     }
     catch (_) {
         closeSocket(socket.error());
@@ -781,6 +797,23 @@ export function process(msg)
     // Currently a stub; future enhancements could include:
     // - Outbound message routing
     // - Priority queue management
+};
+
+export function status()
+{
+    const out = {
+        connects: stats.connects,
+        disconnects: stats.disconnects,
+        handshakes_sent: stats.handshakes_sent,
+        bytes_rx: stats.bytes_rx,
+        frames_in: stats.frames_in,
+        frames_decoded: stats.frames_decoded,
+        self_info: stats.self_info,
+        pending_rx: length(pendingRx),
+        last_rx_time: lastRxTime,
+        last_cmd: lastCmd
+    };
+    return out;
 };
 
 // ---------------------------------------------------------------------
