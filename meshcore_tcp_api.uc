@@ -353,7 +353,7 @@ export function sendCommand(cmd, payload)
         closeSocket("command send failed: " + socket.error());
         return false;
     }
-}
+};
 
 export function takeResponse(cmd)
 {
@@ -365,7 +365,7 @@ export function takeResponse(cmd)
         }
     }
     return null;
-}
+};
 
 function sendBootHandshake()
 {
