@@ -39,7 +39,9 @@ Crow startup frame currently used for app start:
 
 ## Receive queue flow
 
-Expected inbound message flow:
+Messages do **not** simply flow as an unbounded stream.
+
+The Companion API uses a push-notify plus pull/drain model:
 
 ```text
 0x83  message waiting push
@@ -51,7 +53,52 @@ Expected inbound message flow:
 0x0A  no more queued messages
 ```
 
-Crow should keep requesting the next queued message until the no-more-messages response is received.
+Crow should keep requesting queued messages until the no-more-messages response is received, but it must do so with backpressure.
+
+## Backpressure
+
+Crow should not pull the entire radio queue into the AREDN node as fast as the socket can deliver it.
+
+Current Crow behavior:
+
+- `0x83` starts a controlled drain;
+- Crow sends one `CMD_SYNC_NEXT_MESSAGE` request at a time;
+- Crow tracks whether a sync request is already in flight;
+- Crow stores decoded messages in a bounded local `pendingRx` queue;
+- Crow only asks for another message when the local pending queue is below `max_pending_rx`;
+- router drains a small number of pending backend messages each tick so delivery does not stall if no new socket frame arrives.
+
+Config example:
+
+```json
+{
+  "meshcore": {
+    "enabled": false
+  },
+  "meshcore_tcp_api": {
+    "enabled": true,
+    "host": "127.0.0.1",
+    "port": 4403,
+    "max_pending_rx": 4
+  }
+}
+```
+
+`max_pending_rx` defaults to `4` and is capped internally. Raise it only after testing memory and routing behavior on the target AREDN node.
+
+Useful telemetry fields:
+
+```text
+pending_rx
+max_pending_rx
+message_waiting
+sync_requests
+sync_backpressure
+no_more_messages
+syncing_messages
+sync_request_in_flight
+sync_paused_backpressure
+```
 
 ## Future command/status API
 
@@ -93,7 +140,8 @@ Experimental Companion TCP API:
   "meshcore_tcp_api": {
     "enabled": true,
     "host": "127.0.0.1",
-    "port": 4403
+    "port": 4403,
+    "max_pending_rx": 4
   }
 }
 ```
@@ -107,3 +155,12 @@ meshcore_backend: selected tcp backend
 ## Validation note
 
 Validate this backend with Companion-framed packets. Do not use a line-oriented command probe as the pass/fail test for Crow's message bridge.
+
+Message reception validation should confirm:
+
+- `0x83` is treated as a notification, not a message payload;
+- Crow sends `0x0A` to request the next queued message;
+- direct/group messages are decoded and queued;
+- Crow stops when `0x0A` no-more-messages is received;
+- `sync_backpressure` remains low during normal use;
+- `pending_rx` does not grow without bound.
