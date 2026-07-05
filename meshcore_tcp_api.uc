@@ -408,7 +408,7 @@ function appStartPayload()
     // CMD_APP_START is not a one-byte command. The Companion Protocol expects
     // byte 0 = 0x01, bytes 1-7 reserved zeroes, and an optional UTF-8 app name.
     // buildCommand() supplies byte 0, so the payload is seven zeroes + "Crow".
-    return "\x00\x00\x00\x00\x00\x00\x00Crow";
+    return chr(0) + chr(0) + chr(0) + chr(0) + chr(0) + chr(0) + chr(0) + "Crow";
 }
 
 function sendBootHandshake()
