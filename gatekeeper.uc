@@ -190,29 +190,20 @@ export function annotateGroupViaGateway(msg, sender_callsign)
 
 function simpleWildcardMatch(text, pattern)
 {
-    // Simple glob-style matching: * matches any characters
-    // "K*" matches K0ABC, K6DZB, etc.
-    // "*DZB" matches K6DZB, W2DZB, etc.
-    // "K6DZB" matches exactly K6DZB
-    
     if (!text || !pattern) return false;
-    
-    // Exact match
+
     if (text === pattern) return true;
-    
-    // Handle simple wildcards (not full regex)
+
     let text_idx = 0;
     let pattern_idx = 0;
-    
+
     while (pattern_idx < length(pattern)) {
         if (ord(pattern, pattern_idx) === 42) {  // * character
-            // Wildcard: skip to next pattern char or end
             pattern_idx++;
             if (pattern_idx >= length(pattern)) {
-                return true;  // * at end matches rest of text
+                return true;
             }
-            
-            // Find next char that matches pattern[pattern_idx]
+
             const nextPatternChar = substr(pattern, pattern_idx, 1);
             while (text_idx < length(text)) {
                 if (substr(text, text_idx, 1) === nextPatternChar) {
@@ -221,12 +212,11 @@ function simpleWildcardMatch(text, pattern)
                 text_idx++;
             }
             if (text_idx >= length(text)) {
-                return false;  // Pattern char not found
+                return false;
             }
             text_idx++;
             pattern_idx++;
         } else {
-            // Regular character: must match exactly
             if (text_idx >= length(text)) {
                 return false;
             }
@@ -237,18 +227,37 @@ function simpleWildcardMatch(text, pattern)
             pattern_idx++;
         }
     }
-    
-    // All pattern consumed; text must also be consumed
+
     return text_idx === length(text);
 };
 
+function normalizePatternList(patterns)
+{
+    const out = [];
+    if (type(patterns) !== "array") {
+        return out;
+    }
+    for (let i = 0; i < length(patterns); i++) {
+        const p = uc(trim(`${patterns[i]}`));
+        if (p) {
+            push(out, p);
+        }
+    }
+    return out;
+}
+
 function matchCallsignPattern(callsign, patterns)
 {
-    // Check if callsign matches any pattern in the list
-    if (!patterns || length(patterns) === 0) {
-        return true;  // No restrictions
+    callsign = norm(callsign);
+    patterns = normalizePatternList(patterns);
+
+    if (!callsign) {
+        return false;
     }
-    
+    if (!patterns || length(patterns) === 0) {
+        return true;
+    }
+
     for (let i = 0; i < length(patterns); i++) {
         const pattern = patterns[i];
         if (simpleWildcardMatch(callsign, pattern)) {
@@ -258,52 +267,60 @@ function matchCallsignPattern(callsign, patterns)
     return false;
 };
 
+function findChannelConfig(config, namekey)
+{
+    const channels = config && config.channels ? config.channels : null;
+    if (!channels || !namekey) {
+        return null;
+    }
+
+    if (type(channels) === "array") {
+        for (let i = 0; i < length(channels); i++) {
+            if (channels[i]?.namekey === namekey) {
+                return channels[i];
+            }
+        }
+        return null;
+    }
+
+    return channels[namekey] ?? null;
+}
+
 export function enforceChannelAccess(msg, namekey, config)
 {
-    // Enforce channel-level callsign ACLs
-    // If channel has access_control config, verify sender callsign
-    
     if (!strict_enabled || !msg || !namekey || !config) {
-        return msg;  // Gatekeeper disabled or missing config
+        return msg;
     }
-    
-    // Get channel-specific ACL config
-    const channels = config && config.channels ? config.channels : null;
-    const chan_config = channels ? channels[namekey] : null;
+
+    const chan_config = findChannelConfig(config, namekey);
     const acl = chan_config ? chan_config.access_control : null;
-    
+
     if (!acl || !acl.require_callsign) {
-        return msg;  // No ACL configured for this channel
+        return msg;
     }
-    
-    // Extract sender callsign
-    const sender_callsign = (msg.data && msg.data.text_from) ? msg.data.text_from : senderCallsignFromNodeId(msg.from);
-    
+
+    const sender_callsign = allowSenderCallsign((msg.data && msg.data.text_from) ? msg.data.text_from : senderCallsignFromNodeId(msg.from));
+
     if (!sender_callsign) {
         DEBUG0("gatekeeper: channel access DENIED (no callsign) channel=%s from=%08x\n",
                namekey, msg.from);
-        return null;  // Drop message
+        return null;
     }
-    
-    // Check explicit deny list
-    if (acl.deny_callsigns && length(acl.deny_callsigns) > 0) {
-        if (matchCallsignPattern(sender_callsign, acl.deny_callsigns)) {
-            DEBUG0("gatekeeper: channel access DENIED (deny list) channel=%s callsign=%s\n",
-                   namekey, sender_callsign);
-            return null;  // Drop message
-        }
+
+    const denyList = acl.deny_callsigns ?? acl.deny ?? [];
+    if (length(denyList) > 0 && matchCallsignPattern(sender_callsign, denyList)) {
+        DEBUG0("gatekeeper: channel access DENIED (deny list) channel=%s callsign=%s\n",
+               namekey, sender_callsign);
+        return null;
     }
-    
-    // Check allow list
-    if (acl.allowed_callsigns && length(acl.allowed_callsigns) > 0) {
-        if (!matchCallsignPattern(sender_callsign, acl.allowed_callsigns)) {
-            DEBUG0("gatekeeper: channel access DENIED (not in allow list) channel=%s callsign=%s\n",
-                   namekey, sender_callsign);
-            return null;  // Drop message
-        }
+
+    const allowList = acl.allowed_callsigns ?? acl.allow ?? [];
+    if (length(allowList) > 0 && !matchCallsignPattern(sender_callsign, allowList)) {
+        DEBUG0("gatekeeper: channel access DENIED (not in allow list) channel=%s callsign=%s\n",
+               namekey, sender_callsign);
+        return null;
     }
-    
-    // Access granted
+
     DEBUG1("gatekeeper: channel access ALLOWED channel=%s callsign=%s\n",
            namekey, sender_callsign);
     return msg;
