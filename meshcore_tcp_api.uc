@@ -795,7 +795,6 @@ function readSocket()
     try {
         const data = s.recv(SOCKET_READ_CHUNK);
         if (!data || length(data) === 0) {
-            closeSocket("peer closed");
             return null;
         }
         stats.bytes_rx += length(data);
