@@ -25,11 +25,12 @@
 //      enforced AT the buffer level. Oversized frames, encrypted payload
 //      types, and any command outside { TXT_MSG, GRP_TXT } are skipped
 //      from the wire BEFORE allocating a payload buffer.
-//   3. MeshMonitor-style boot handshake — HELLO + SUBSCRIBE_EVENTS,
-//      fire-and-forget. The response is consumed by the unknown-cmd
-//      gate (we don't need to inspect it).
-//   4. Reconnect backoff with stable state-machine reset.
-//   5. Decoded messages are queued raw; router.uc runs the canonical
+//   3. MeshCore Companion boot handshake — CMD_APP_START with the required
+//      seven reserved bytes plus the application name "Crow".
+//   4. Push-notify + poll queue model — 0x83 means message waiting; Crow
+//      sends CMD_SYNC_NEXT_MESSAGE until RESP_CODE_NO_MORE_MESSAGES.
+//   5. Reconnect backoff with stable state-machine reset.
+//   6. Decoded messages are queued raw; router.uc runs the canonical
 //      gatekeeper.filterInboundBridge() pass (no double-filtering).
 //
 // This backend is EXPERIMENTAL. It is not wired into router.uc by default.
@@ -74,21 +75,20 @@ const CMD_CHANNEL_MSG_RECV     = 0x08;   // group/channel cleartext text msg
 const CMD_DIRECT_MSG_RECV_V3   = 0x10;
 const CMD_CHANNEL_MSG_RECV_V3  = 0x11;
 
-// Outgoing command IDs (host -> radio). Sent once at connect, never
-// inspected on return.
-const CMD_HELLO                = 0x01;
-const CMD_SUBSCRIBE_EVENTS     = 0x02;
+// Outgoing command IDs (host -> radio).
+const CMD_APP_START            = 0x01;
 const CMD_SYNC_NEXT_MESSAGE    = 0x0A;
 
-// Self-info response from radio (triggered by HELLO)
+// Self-info response from radio (triggered by CMD_APP_START)
 const RESP_SELF_INFO           = 0x05;   // Device info: public key + name
 const SELF_INFO_PUBKEY_SIZE    = 32;     // Ed25519 public key
 const SELF_INFO_PUBKEY_OFFSET  = 1;      // Right after response code
 
-// Event codes that are NOT message frames (to be explicitly skipped)
+// Push/response codes that are not directly routed messages.
 const PUSH_CODE_SEND_CONFIRMED = 0x82;   // Ack/confirmation (NOT group messages!)
 const PUSH_CODE_MSG_WAITING    = 0x83;
 const RESP_CHANNEL_INFO        = 0x12;
+const RESP_NO_MORE_MESSAGES    = 0x0A;
 
 // Encrypted / non-compliant command IDs that are always early-dropped
 // when Strict Gatekeeper is enabled, regardless of payload contents.
@@ -143,6 +143,7 @@ let pendingSkip      = 0;        // bytes still to discard from incoming stream
 let pendingRx        = [];       // decoded Crow message queue
 let responses        = [];       // cached non-message responses for discovery
 let msgSeq           = 0;        // monotonic local message id
+let syncingMessages  = false;    // true while draining radio's queued messages
 
 let stats            = {
     connects: 0,
@@ -153,6 +154,8 @@ let stats            = {
     frames_decoded: 0,
     self_info: 0,
     message_waiting: 0,
+    no_more_messages: 0,
+    sync_requests: 0,
     responses_cached: 0,
     commands_sent: 0,
     early_drop_oversize: 0,
@@ -281,6 +284,7 @@ function resetState()
 {
     tcpbuf = "";
     pendingSkip = 0;
+    syncingMessages = false;
 }
 
 function disableNagle(sock)
@@ -345,18 +349,7 @@ function openTcp()
 }
 
 // ---------------------------------------------------------------------
-// MeshCore boot handshake — fire-and-forget.
-//
-// CORRECTED (per Mathison): Auto-push model — no subscription mask needed.
-// The radio autonomously pushes direct (0x07) and group (0x08) frames
-// for all programmed groups. No SUBSCRIBE_EVENTS needed.
-//
-// Send only:
-//   [ MAGIC ][ CMD_HELLO ][ len=0 ]
-//
-// The HELLO response (if any) is consumed by the unknown-cmd gate —
-// we don't need to validate it for routing. Groups must be programmed
-// into the radio's memory slots (0-7) via CMD_SET_CHANNEL.
+// MeshCore boot handshake and queue polling.
 // ---------------------------------------------------------------------
 
 function buildRadioFrame(cmd, payload)
@@ -389,6 +382,15 @@ export function sendCommand(cmd, payload)
     }
 };
 
+function sendSyncNextMessage(reason)
+{
+    if (!s) return false;
+    syncingMessages = true;
+    stats.sync_requests++;
+    log1("sync next message reason=%s\n", reason ?? "unknown");
+    return sendCommand(CMD_SYNC_NEXT_MESSAGE, "");
+}
+
 export function takeResponse(cmd)
 {
     for (let i = 0; i < length(responses); i++) {
@@ -401,16 +403,24 @@ export function takeResponse(cmd)
     return null;
 };
 
+function appStartPayload()
+{
+    // CMD_APP_START is not a one-byte command. The Companion Protocol expects
+    // byte 0 = 0x01, bytes 1-7 reserved zeroes, and an optional UTF-8 app name.
+    // buildCommand() supplies byte 0, so the payload is seven zeroes + "Crow".
+    return "\x00\x00\x00\x00\x00\x00\x00Crow";
+}
+
 function sendBootHandshake()
 {
     if (!s) return;
     try {
-        const frame = buildCommand(CMD_HELLO, "");
+        const payload = appStartPayload();
+        const frame = buildCommand(CMD_APP_START, payload);
         const sent = s.send(frame);
         stats.handshakes_sent++;
-        // CORRECTED: No SUBSCRIBE_EVENTS needed (auto-push model)
-        log0("handshake sent (HELLO) frame_bytes=%d sent=%s\n", length(frame), sent);
-        log1("  Radio will auto-push: 0x07=Direct msg, 0x08=Group msg\n");
+        log0("handshake sent (CMD_APP_START) frame_bytes=%d sent=%s\n", length(frame), sent);
+        log1("  expecting RESP_SELF_INFO(0x05), PUSH_MSG_WAITING(0x83), then SYNC_NEXT_MESSAGE drain\n");
     }
     catch (_) {
         closeSocket("handshake send failed: " + socket.error());
@@ -439,7 +449,7 @@ function advance(hdrBytes, payloadBytes)
 // parseSelfInfo() — Extract device name from RESP_SELF_INFO (0x05)
 // =====================================================================
 //
-// MeshCore sends this immediately after HELLO. Payload structure:
+// MeshCore sends this after CMD_APP_START. Payload structure:
 //
 //   Byte 0:      0x05 (response code)
 //   Bytes 1-32:  Ed25519 public key (32 bytes)
@@ -593,21 +603,29 @@ function smartAccumulate(data)
         stats.frames_in++;
         lastCmd = cmd;
 
-        // 3c. Message waiting push: ask the radio for the next queued message.
+        // 3c. Message waiting push: ask the radio for the first queued message.
         if (cmd === PUSH_CODE_MSG_WAITING) {
             stats.message_waiting++;
-            sendCommand(CMD_SYNC_NEXT_MESSAGE, "");
+            sendSyncNextMessage("push 0x83");
             continue;
         }
 
-        // 3d. Encrypted / blocked command early drop under Strict mode.
+        // 3d. Queue drain complete. Return to passive listening until next 0x83.
+        if (cmd === RESP_NO_MORE_MESSAGES) {
+            stats.no_more_messages++;
+            syncingMessages = false;
+            log1("sync queue empty (0x0a)\n");
+            continue;
+        }
+
+        // 3e. Encrypted / blocked command early drop under Strict mode.
         if (strictOn && PART97_BLOCKED_COMMANDS[cmd]) {
             stats.early_drop_encrypted++;
             log1("early-drop encrypted cmd=0x%02x plen=%d (Part 97)\n", cmd, plen);
             continue;
         }
 
-        // 3e. EXCEPTION: RESP_SELF_INFO (0x05) is handled specially — we intercept it
+        // 3f. RESP_SELF_INFO (0x05) is handled specially — we intercept it
         //     to extract the device name for auto-channel creation, but DON'T queue it
         //     as a message.
         if (cmd === RESP_SELF_INFO) {
@@ -627,7 +645,7 @@ function smartAccumulate(data)
             continue;
         }
 
-        // 3f. Anything outside { DIRECT_MSG_RECV, CHANNEL_MSG_RECV } is dropped without
+        // 3g. Anything outside { DIRECT_MSG_RECV, CHANNEL_MSG_RECV } is dropped without
         //     decode. This catches HELLO_RESP, ADVERT, SEND_CONFIRMED (0x82),
         //     unencrypted DMs of unknown shape, vendor extensions, and (with strict OFF)
         //     the encrypted commands too.
@@ -644,12 +662,14 @@ function smartAccumulate(data)
             if (dataLen < TEXT_ENVELOPE_BYTES) {
                 stats.early_drop_malformed_text++;
                 log1("early-drop short direct plen=%d < %d\n", dataLen, TEXT_ENVELOPE_BYTES);
+                if (syncingMessages) sendSyncNextMessage("drop short direct");
                 continue;
             }
             const tlen = ord(payload, 8);
             if (TEXT_ENVELOPE_BYTES + tlen > dataLen) {
                 stats.early_drop_malformed_text++;
                 log1("early-drop malformed direct tlen=%d plen=%d\n", tlen, dataLen);
+                if (syncingMessages) sendSyncNextMessage("drop malformed direct");
                 continue;
             }
         } else if (isGroupFrame(cmd)) {
@@ -658,12 +678,16 @@ function smartAccumulate(data)
             if (dataLen < 5) {
                 stats.early_drop_malformed_text++;
                 log1("early-drop short group plen=%d < 5\n", dataLen);
+                if (syncingMessages) sendSyncNextMessage("drop short group");
                 continue;
             }
         }
 
-        // 5. Emit the validated frame.
+        // 5. Emit the validated frame, then pull the next queued message.
         push(frames, { cmd: cmd, payload: payload });
+        if (syncingMessages) {
+            sendSyncNextMessage(isDirectFrame(cmd) ? "after direct" : "after group");
+        }
     }
 }
 
@@ -912,11 +936,14 @@ export function status()
         frames_decoded: stats.frames_decoded,
         self_info: stats.self_info,
         message_waiting: stats.message_waiting,
+        no_more_messages: stats.no_more_messages,
+        sync_requests: stats.sync_requests,
         commands_sent: stats.commands_sent,
         responses_cached: stats.responses_cached,
         pending_rx: length(pendingRx),
         last_rx_time: lastRxTime,
-        last_cmd: lastCmd
+        last_cmd: lastCmd,
+        syncing_messages: syncingMessages
     };
     return out;
 };
@@ -969,4 +996,9 @@ export function _test_build_frame(cmd, payload)
 export function _test_build_command(cmd, payload)
 {
     return buildCommand(cmd, payload);
+};
+
+export function _test_app_start_payload()
+{
+    return appStartPayload();
 };
