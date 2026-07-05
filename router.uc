@@ -212,17 +212,25 @@ function isLoRaIngress(msg)
     return msg && (msg.transport === "meshtastic" || msg.transport === "meshcore");
 }
 
+function isTcpApiIngress(msg)
+{
+    return msg && (
+        (msg.transport === "meshcore" && msg.backend === "tcp_api") ||
+        (msg.transport === "meshtastic" && msg.backend === "tcp-port-api")
+    );
+}
+
 function isDirectForLocalBridgeDevice(msg)
 {
     if (!isLoRaIngress(msg) || node.isBroadcast(msg) || msg.metadata?.is_group_message) {
         return false;
     }
 
-    // MeshCore Companion TCP direct-message responses come from the connected
-    // radio's local queue. If the backend has surfaced a non-group direct frame,
-    // treat it as direct-to-this-bridge even when the MeshCore radio id does not
-    // equal Crow's native node id.
-    if (msg.transport === "meshcore" && msg.backend === "tcp_api") {
+    // TCP API backends surface packets from the connected radio/device queue.
+    // Marked local-direct messages, or non-group direct-looking TCP API frames,
+    // are treated as direct-to-this-bridge even when the external radio's node id
+    // does not equal Crow's native AREDN node id.
+    if (msg.metadata?.local_direct || isTcpApiIngress(msg)) {
         return true;
     }
 
@@ -352,10 +360,10 @@ export function tick()
         apps[i].tick();
     }
 
-    // Backends such as MeshCore TCP Companion are pull/queue based. Their
-    // decoded local pending messages must be drained even when the socket is
-    // not newly readable, otherwise router delivery can stall until another
-    // radio frame arrives.
+    // TCP/API backends can decode multiple messages from one socket read.
+    // Drain their local pending queues even when the socket is not newly
+    // readable, otherwise router delivery can stall until another frame arrives.
+    drainPendingBackend("meshtastic", meshtastic);
     drainPendingBackend("meshcore", meshcore);
 
     process();
