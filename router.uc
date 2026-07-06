@@ -7,6 +7,7 @@ import * as channel from "channel";
 import * as websocket from "websocket";
 
 const MAX_RECENT = 128;
+const MAX_PENDING_BACKEND_DRAIN = 4;
 const recent = [];
 const apps = [];
 const q = [];
@@ -119,8 +120,9 @@ export function process()
                     }
                 }
             }
-            // Incoming meshtasticore bridged traffic can only route via IP
-            // Note that we dont sent traffic from one bridge to another (no meshtastic <-> meshcore bridging) at the moment.
+            // Incoming LoRa bridged traffic can only route via IP after it has
+            // passed queue()-time ingress scope filtering and, when enabled,
+            // Strict Gatekeeper. We do not bridge Meshtastic <-> MeshCore here.
             else {
                 toip = true;
                 msg.hop_limit = 0;
@@ -205,6 +207,75 @@ function resolveGroupChannel(msg)
     return msg;
 };
 
+function isLoRaIngress(msg)
+{
+    return msg && (msg.transport === "meshtastic" || msg.transport === "meshcore");
+}
+
+function isTcpApiIngress(msg)
+{
+    return msg && (
+        (msg.transport === "meshcore" && msg.backend === "tcp_api") ||
+        (msg.transport === "meshtastic" && msg.backend === "tcp-port-api")
+    );
+}
+
+function isDirectForLocalBridgeDevice(msg)
+{
+    if (!isLoRaIngress(msg) || node.isBroadcast(msg) || msg.metadata?.is_group_message) {
+        return false;
+    }
+
+    // TCP API backends surface packets from the connected radio/device queue.
+    // Marked local-direct messages, or non-group direct-looking TCP API frames,
+    // are treated as direct-to-this-bridge even when the external radio's node id
+    // does not equal Crow's native AREDN node id.
+    if (msg.metadata?.local_direct || (isTcpApiIngress(msg) && !msg.channel)) {
+        return true;
+    }
+
+    // UDP Meshtastic/MeshCore can hear traffic not meant for this node, so only
+    // accept direct frames that target Crow's native id.
+    return node.toMe(msg) || (msg.namekey && channel.isDirect(msg.namekey) && node.toMe(msg));
+}
+
+function isJoinedBridgeChannel(msg)
+{
+    if (!isLoRaIngress(msg)) {
+        return false;
+    }
+    // A missing namekey maps to the Meshtastic default channel. Only allow that
+    // fallback for broadcast/channel frames, not for direct-looking UDP frames.
+    if (!msg.namekey && !node.isBroadcast(msg)) {
+        return false;
+    }
+    const localChannel = channel.getLocalChannelByNameKey(msg.namekey);
+    return localChannel !== null && localChannel !== undefined;
+}
+
+function filterLoRaIngressScope(msg)
+{
+    if (!isLoRaIngress(msg)) {
+        return msg;
+    }
+
+    if (isDirectForLocalBridgeDevice(msg)) {
+        return msg;
+    }
+
+    if (isJoinedBridgeChannel(msg)) {
+        return msg;
+    }
+
+    DEBUG1("router: drop %s ingress not direct/local-channel from=%s to=%s namekey=%s group_slot=%s\n",
+        msg.transport,
+        msg.from,
+        msg.to,
+        msg.namekey ?? "",
+        msg.group_slot ?? "");
+    return null;
+}
+
 // NEW (Phase 4): Enforce channel-level access control
 // Verify sender has valid callsign and meets per-channel ACLs
 function enforceChannelAccess(msg)
@@ -228,7 +299,8 @@ export function queue(msg)
         return;
     }
 
-    // NEW (Phase 1): Resolve group message channel
+    // Resolve MeshCore group slots before applying the bridge-scope filter so
+    // only known/joined group channels are allowed beyond this point.
     if (msg.metadata?.is_group_message) {
         msg = resolveGroupChannel(msg);
         if (!msg) {
@@ -236,13 +308,23 @@ export function queue(msg)
         }
     }
 
-    // NEW (Phase 4): Enforce channel-level access control
+    // Base bridge-scope filter: LoRa ingress must be either direct to the
+    // connected bridge device or on a local joined channel (public default or
+    // user-added). Everything else is dropped before any forwarding decision.
+    msg = filterLoRaIngressScope(msg);
+    if (!msg) {
+        return;
+    }
+
+    // Strict Gatekeeper sits on top of the scope filter. It adds amateur-radio
+    // callsign identity policy and optional channel ACLs, but it does not decide
+    // whether a foreign LoRa frame is in scope for this node.
     msg = enforceChannelAccess(msg);
     if (!msg) {
         return;  // Access denied by per-channel ACL
     }
 
-    if (gatekeeper?.isEnabled() && (msg.transport === "meshtastic" || msg.transport === "meshcore")) {
+    if (gatekeeper?.isEnabled() && isLoRaIngress(msg)) {
         msg = gatekeeper.filterInboundBridge(msg);
         if (!msg) {
             return;
@@ -254,12 +336,41 @@ export function queue(msg)
     }
 };
 
+function drainPendingBackend(label, backend)
+{
+    if (!backend?.pending) {
+        return;
+    }
+
+    let count = 0;
+    while (backend.pending() > 0 && count < MAX_PENDING_BACKEND_DRAIN) {
+        try {
+            queue(backend.recv());
+        }
+        catch (e) {
+            DEBUG0("%s pending recv: %s\n%s\n", label, e, e.stacktrace);
+            return;
+        }
+        count++;
+    }
+
+    if (count > 0) {
+        DEBUG2("router: drained %d pending %s messages\n", count, label);
+    }
+};
 
 export function tick()
 {
     for (let i = 0; i < length(apps); i++) {
         apps[i].tick();
     }
+
+    // TCP/API backends can decode multiple messages from one socket read.
+    // Drain their local pending queues even when the socket is not newly
+    // readable, otherwise router delivery can stall until another frame arrives.
+    drainPendingBackend("meshtastic", meshtastic);
+    drainPendingBackend("meshcore", meshcore);
+
     process();
     const sockets = [];
     const us = meship.handle();

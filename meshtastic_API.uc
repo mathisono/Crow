@@ -7,6 +7,7 @@ import * as channel from "channel";
 import * as node from "node";
 import * as nodedb from "nodedb";
 import * as timers from "timers";
+import * as fs from "fs";
 
 const DEFAULT_PORT = 4403;
 const PORTAPI_MAGIC0 = 0x94;
@@ -50,6 +51,18 @@ let channelRefreshSeconds = DEFAULT_CHANNEL_REFRESH;
 let lastConfigRequestId = 0;
 let configRequestSeq = 0;
 let discoveredChannels = {};
+let stats = {
+    connects: 0,
+    disconnects: 0,
+    bytes_rx: 0,
+    frames_in: 0,
+    frames_decoded: 0,
+    config_requests: 0,
+    config_complete: 0,
+    channels_discovered: 0,
+    sends_ok: 0,
+    sends_failed: 0
+};
 export let enabled = false;
 
 export function registerProto(name, portnum, decode)
@@ -178,6 +191,11 @@ function recvDirect(msg)
     return node.forMe(msg) && !msg.channel;
 }
 
+function looksDirect(msg)
+{
+    return msg && !node.isBroadcast(msg) && !msg.channel;
+}
+
 function merge(to, from)
 {
     for (let k in from) {
@@ -192,6 +210,7 @@ function closeSocket(reason)
 {
     if (s) {
         log0("disconnect %s\n", reason ?? "");
+        stats.disconnects++;
         try {
             s.close();
         }
@@ -212,6 +231,7 @@ function openTcp()
         const ns = socket.create(socket.AF_INET, socket.SOCK_STREAM, 0);
         ns.connect({ address: tcpHost, port: tcpPort });
         log0("connected tcp-port-api %s:%d\n", tcpHost, tcpPort);
+        stats.connects++;
         return ns;
     }
     catch (_) {
@@ -519,6 +539,7 @@ function updateDiscoveredChannel(ch)
     const fp = channelFingerprint(ch.psk);
     if (!old) {
         discoveredChannels[key] = ch;
+        stats.channels_discovered++;
         log1("channel discovered index=%d name=%s pskfp=%s\n", ch.index, ch.name, fp);
         // TODO: If Crow grows a safe incremental runtime remote-channel helper,
         // register ch.namekey there. Do not mutate config.channels or write files here.
@@ -537,6 +558,7 @@ function processDiscoveredChannels(buf)
     }
     const complete = extractConfigCompleteId(buf);
     if (complete !== null) {
+        stats.config_complete++;
         log1("config complete id=%d last_request=%d\n", complete, lastConfigRequestId);
     }
     return length(chans) > 0 || complete !== null;
@@ -559,6 +581,7 @@ function requestConfig(reason)
     lastConfigRequestId = configRequestSeq;
     const r = writeSocket(buildWantConfigId(lastConfigRequestId));
     if (r) {
+        stats.config_requests++;
         log1("config request sent id=%d reason=%s\n", lastConfigRequestId, reason ?? "unknown");
     }
     else {
@@ -593,6 +616,14 @@ function decodePacketData(msg)
     return null;
 }
 
+function markLocalDirect(msg)
+{
+    if (looksDirect(msg)) {
+        msg.metadata = merge({ local_direct: true }, msg.metadata ?? {});
+    }
+    return msg;
+}
+
 function decodePacketObject(msg)
 {
     if (!msg) {
@@ -602,6 +633,7 @@ function decodePacketObject(msg)
     msg.transport = "meshtastic";
     msg.backend = "tcp-port-api";
     msg.originating_callsign = callsign;
+    markLocalDirect(msg);
 
     if (gatekeeper?.isEnabled() && msg.encrypted) {
         DEBUG0("gatekeeper: drop encrypted Meshtastic API packet from %s\n", msg.from);
@@ -739,6 +771,38 @@ export function setup(config)
     channelSync = cfg.channel_sync ?? "off";
     channelRefreshSeconds = cfg.channel_refresh_seconds ?? DEFAULT_CHANNEL_REFRESH;
 
+    // Optional auto-channel injection: mirrors meshcore_tcp_api pattern.
+    // Requires an explicit device_name (label prefix) and channel_name (goes into namekey,
+    // since Meshtastic hashes from the channel-name portion). channel_key defaults to
+    // LongFast public PSK "AQ==".
+    const devName = cfg.device_name;
+    const autoChan = cfg.channel_name;
+    if (devName && autoChan) {
+        const autoKey = cfg.channel_key ?? "AQ==";
+        const autoNamekey = `${autoChan} ${autoKey}`;
+        let hostname = "";
+        try {
+            const h = fs.readfile("/proc/sys/kernel/hostname");
+            if (h) hostname = replace(h, "\n", "");
+        } catch (e) {}
+        const autoLabel = hostname
+            ? `${hostname} · ${devName} · ${autoChan}`
+            : `${devName} · ${autoChan}`;
+        if (!config.channels) config.channels = [];
+        let found = false;
+        for (let i = 0; i < length(config.channels); i++) {
+            if (config.channels[i].namekey === autoNamekey) {
+                config.channels[i].label = autoLabel;
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            push(config.channels, { namekey: autoNamekey, label: autoLabel });
+        }
+        log0("channel registered: %s (label: %s)\n", autoNamekey, autoLabel);
+    }
+
     if (channelSync !== "off" && channelSync !== "read_only") {
         log0("unsupported channel_sync mode %s; forcing off\n", channelSync);
         channelSync = "off";
@@ -770,9 +834,11 @@ export function handle()
 function makeNativeMsg(data)
 {
     const frames = extractPortApiFrames(data);
+    stats.frames_in += length(frames);
     for (let i = 0; i < length(frames); i++) {
         const msg = decodeFromRadio(frames[i]);
         if (msg) {
+            stats.frames_decoded++;
             push(pendingRx, msg);
         }
     }
@@ -855,7 +921,11 @@ function readSocket()
         return null;
     }
     try {
-        return s.recv(2048);
+        const data = s.recv(2048);
+        if (data) {
+            stats.bytes_rx += length(data);
+        }
+        return data;
     }
     catch (_) {
         closeSocket(socket.error());
@@ -898,15 +968,18 @@ export function send(msg)
                 const data = encodeToRadio(pkts[i]);
                 const r = writeSocket(data);
                 if (!r) {
+                    stats.sends_failed++;
                     log0("send error: %s\n", socket.error());
                 }
                 else {
+                    stats.sends_ok++;
                     log0("send ok id=%s\n", msg.id);
                 }
             }
         }
     }
     else {
+        stats.sends_failed++;
         log0("send drop: tcp disconnected\n");
     }
 };
@@ -929,6 +1002,30 @@ export function tick()
 
 export function process(msg)
 {
+};
+
+export function pending()
+{
+    return length(pendingRx);
+};
+
+export function status()
+{
+    return {
+        connects: stats.connects,
+        disconnects: stats.disconnects,
+        bytes_rx: stats.bytes_rx,
+        frames_in: stats.frames_in,
+        frames_decoded: stats.frames_decoded,
+        pending_rx: length(pendingRx),
+        config_requests: stats.config_requests,
+        config_complete: stats.config_complete,
+        channels_discovered: stats.channels_discovered,
+        sends_ok: stats.sends_ok,
+        sends_failed: stats.sends_failed,
+        channel_discovery: channelDiscovery,
+        channel_sync: channelSync
+    };
 };
 
 // TODO future write support, deliberately not implemented in this read-only pass:
