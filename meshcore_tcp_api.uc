@@ -1008,7 +1008,7 @@ export function status()
 
 export function _test_inject(data, gatekeeperShim)
 {
-    if (gatekeeperShim !== null && gatekeeperShim !== undefined) {
+    if (gatekeeperShim !== null) {
         strictHook = function () {
             return gatekeeperShim.isEnabled() === true;
         };
