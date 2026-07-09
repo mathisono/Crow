@@ -63,6 +63,11 @@ function ensureDefaultChannel(config, namekey, label)
     push(config.channels, { namekey: namekey, label: label });
 }
 
+function ensureDefaultPublicChannel(config)
+{
+    ensureDefaultChannel(config, channel.meshcorePublicChannelNamekey(), "MeshCore~Public");
+}
+
 function candidateStatus(key, label, transport, configured, isActive, host, port)
 {
     const socketHandle = isActive ? active?.handle() : null;
@@ -139,11 +144,12 @@ export function setup(config)
     enabled = false;
 
     if (wantsApi(config)) {
+        ensureDefaultPublicChannel(config);
         active = api;
         activeName = "tcp";
     }
     else if (wantsUdp(config)) {
-        ensureDefaultChannel(config, channel.meshcorePublicChannelNamekey(), "MeshCore~Public");
+        ensureDefaultPublicChannel(config);
         active = udp;
         activeName = "udp";
     }
@@ -228,4 +234,9 @@ export function backendStatus()
     ));
 
     return out;
+};
+
+export function _test_ensure_default_public_channel(config)
+{
+    ensureDefaultPublicChannel(config);
 };
