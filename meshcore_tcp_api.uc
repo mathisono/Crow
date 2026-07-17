@@ -4,54 +4,27 @@
 //
 // Crow MeshCore TCP Companion API backend — text-message bridge only.
 //
-// Speaks the MeshCore Companion Protocol over TCP (default 127.0.0.1:4403),
-// the same binary protocol used by MeshMonitor. This is NOT Meshtastic's
-// port 4403 (which streams raw protobufs). MeshCore Companion frames:
+// Speaks the MeshCore Companion Protocol over TCP (default 127.0.0.1:4403):
 //
 //     Radio -> client: [ '>' ][ length LSB ][ length MSB ][ code + payload ]
 //     Client -> radio: [ '<' ][ length LSB ][ length MSB ][ code + payload ]
 //
-// Scope: this backend ONLY surfaces cleartext text messages (TXT_MSG +
-// GRP_TXT) into the Crow router. Every other frame — handshake responses,
-// adverts, encrypted blobs, unknown commands — is dropped at the buffer
-// layer without payload allocation. This minimises RAM exposure on
-// OpenWrt nodes and keeps the regulatory surface tight (FCC Part 97).
+// This backend is intentionally scoped to Crow's app goals:
 //
-// Design pillars:
-//
-//   1. Non-blocking ucode socket integrated with Crow's timer-driven
-//      recv/send loop (same shape as meshtastic_API.uc).
-//   2. "Smart Accumulator" — Strict Gatekeeper / Part 97 rules are
-//      enforced AT the buffer level. Oversized frames, encrypted payload
-//      types, and any command outside { TXT_MSG, GRP_TXT } are skipped
-//      from the wire BEFORE allocating a payload buffer.
-//   3. MeshCore Companion boot handshake — CMD_APP_START with the required
-//      seven reserved bytes plus the application name "Crow".
-//   4. Push-notify + pull queue model — 0x83 means message waiting; Crow
-//      sends CMD_SYNC_NEXT_MESSAGE to pull queued messages deliberately.
-//   5. Backpressure — Crow never treats MeshCore as a firehose. It keeps a
-//      bounded local pending queue and asks for the next radio message only
-//      when local pending work is below the configured cap.
-//   6. Reconnect backoff with stable state-machine reset.
-//   7. Decoded messages are queued raw; router.uc runs the canonical
-//      gatekeeper.filterInboundBridge() pass (no double-filtering).
-//
-// This backend is EXPERIMENTAL. It is not wired into router.uc by default.
-// Enable via config:
-//
-//     "meshcore_tcp_api": {
-//         "enabled": true,
-//         "host": "127.0.0.1",
-//         "port": 4403,
-//         "max_pending_rx": 4,
-//         "channel_discovery": true
-//     }
+//   * monitor messages from the connected MeshCore node for the public channel
+//     and user-added/mapped channels;
+//   * send text messages out through mapped MeshCore channel slots;
+//   * receive direct messages delivered to the connected MeshCore node and create
+//     a direct-message thread for the sender;
+//   * protect AREDN nodes by using bounded frame parsing, one-at-a-time queued
+//     message draining, paced channel discovery, and rate-limited non-message logs.
 //
 // =====================================================================
 
 import * as socket from "socket";
 import * as timers from "timers";
 import * as channel from "channel";
+import * as nodedb from "nodedb";
 import * as fs from "fs";
 
 // ---------------------------------------------------------------------
@@ -62,27 +35,44 @@ const FRAME_FROM_RADIO         = 0x3E;   // '>'
 const FRAME_TO_RADIO           = 0x3C;   // '<'
 const HEADER_BYTES             = 3;      // marker(1) + length LE(2)
 
-const SMART_MAX_PAYLOAD        = 256;
+const SMART_MAX_PAYLOAD        = 512;
 const RESYNC_BUFFER_CAP        = 4096;
+const MAX_TEXT_MESSAGE_LENGTH  = 200;
 
-const CMD_DIRECT_MSG_RECV      = 0x07;
-const CMD_CHANNEL_MSG_RECV     = 0x08;
-const CMD_DIRECT_MSG_RECV_V3   = 0x10;
-const CMD_CHANNEL_MSG_RECV_V3  = 0x11;
-
+// Commands host -> radio.
 const CMD_APP_START            = 0x01;
+const CMD_SEND_CHANNEL_MESSAGE = 0x03;
 const CMD_SYNC_NEXT_MESSAGE    = 0x0A;
 const CMD_GET_CHANNEL          = 0x1F;
 
-const RESP_SELF_INFO           = 0x05;
-const SELF_INFO_PUBKEY_SIZE    = 32;
-const SELF_INFO_PUBKEY_OFFSET  = 1;
+// Message responses radio -> host.
+const RESP_MESSAGE_SENT        = 0x06;
+const RESP_DIRECT_MSG_RECV     = 0x07;
+const RESP_CHANNEL_MSG_RECV    = 0x08;
+const RESP_NO_MORE_MESSAGES    = 0x0A;
+const RESP_DIRECT_MSG_RECV_V3  = 0x10;
+const RESP_CHANNEL_MSG_RECV_V3 = 0x11;
+const RESP_CHANNEL_INFO        = 0x12;
+const RESP_CHANNEL_DATA_RECV   = 0x1B;
 
+// Device/config responses.
+const RESP_SELF_INFO           = 0x05;
+const RESP_LOG_DATA            = 0x88;
+const RESP_TRACE_DATA          = 0x89;
+const RESP_TELEMETRY_RESPONSE  = 0x8B;
+const RESP_BINARY_RESPONSE     = 0x8C;
+const RESP_CONTROL_DATA        = 0x8E;
+
+// Push notifications.
 const PUSH_CODE_SEND_CONFIRMED = 0x82;
 const PUSH_CODE_MSG_WAITING    = 0x83;
-const RESP_CHANNEL_INFO        = 0x12;
-const RESP_NO_MORE_MESSAGES    = 0x0A;
+const PUSH_CODE_RAW_DATA       = 0x84;
+const PUSH_CODE_NEW_ADVERT     = 0x8A;
+const PUSH_CODE_CONTACTS_FULL  = 0x90;
 
+// Encrypted / non-compliant command IDs that are always early-dropped when
+// Strict Gatekeeper is enabled. With strict mode off, they are still ignored by
+// the non-message path rather than routed to Crow.
 const CMD_ENCRYPTED_DM         = 0x90;
 const CMD_ENCRYPTED_BIN        = 0x91;
 
@@ -91,16 +81,6 @@ const PART97_BLOCKED_COMMANDS = {
     [CMD_ENCRYPTED_BIN]: true
 };
 
-function isDirectFrame(cmd)
-{
-    return cmd === CMD_DIRECT_MSG_RECV || cmd === CMD_DIRECT_MSG_RECV_V3;
-}
-
-function isGroupFrame(cmd)
-{
-    return cmd === CMD_CHANNEL_MSG_RECV || cmd === CMD_CHANNEL_MSG_RECV_V3;
-}
-
 const DEFAULT_HOST             = "127.0.0.1";
 const DEFAULT_PORT             = 4403;
 const RECONNECT_INTERVAL       = 5;
@@ -108,9 +88,24 @@ const SOCKET_READ_CHUNK        = 2048;
 const DEFAULT_MAX_PENDING_RX   = 4;
 const HARD_MAX_PENDING_RX      = 32;
 const DEFAULT_CHANNEL_REFRESH  = 600;
-const MAX_CHANNEL_INDEX        = 7;
+const MAX_CHANNEL_INDEX        = 15;
+const DEFAULT_DISCOVERY_WINDOW = 1;
+const CHANNEL_REQUEST_TIMEOUT  = 5;
+const UNKNOWN_LOG_INTERVAL     = 64;
 
-const TEXT_ENVELOPE_BYTES      = 9;
+const TEXT_TYPE_PLAIN          = 0x00;
+const TEXT_TYPE_CLI_DATA       = 0x01;
+const TEXT_TYPE_SIGNED         = 0x02;
+
+function isDirectFrame(cmd)
+{
+    return cmd === RESP_DIRECT_MSG_RECV || cmd === RESP_DIRECT_MSG_RECV_V3;
+}
+
+function isGroupFrame(cmd)
+{
+    return cmd === RESP_CHANNEL_MSG_RECV || cmd === RESP_CHANNEL_MSG_RECV_V3;
+}
 
 // ---------------------------------------------------------------------
 // Module state
@@ -130,6 +125,7 @@ let nextReconnectTime = 0;
 let strictHook       = null;
 let channelDiscovery = false;
 let channelRefreshSeconds = DEFAULT_CHANNEL_REFRESH;
+let channelDiscoveryWindow = DEFAULT_DISCOVERY_WINDOW;
 
 let s                = null;
 let tcpbuf           = "";
@@ -141,6 +137,15 @@ let syncingMessages  = false;
 let syncRequestInFlight = false;
 let syncPausedBackpressure = false;
 let discoveredChannels = {};
+let unknownFrameCounts = {};
+let meshcoreSelfPublicKey = null;
+let meshcoreSelfPublicKeyPrefix = null;
+
+let channelScanActive = false;
+let channelScanNext = 0;
+let channelScanInFlight = false;
+let channelScanCurrent = null;
+let lastChannelRequestTime = 0;
 
 let stats            = {
     connects: 0,
@@ -156,13 +161,25 @@ let stats            = {
     sync_backpressure: 0,
     responses_cached: 0,
     commands_sent: 0,
+    sends_ok: 0,
+    sends_failed: 0,
+    channel_scans: 0,
     channel_discovery_requests: 0,
     channel_info_responses: 0,
+    channel_discovery_timeouts: 0,
     channels_discovered: 0,
     channels_updated: 0,
+    log_data_frames: 0,
+    trace_data_frames: 0,
+    telemetry_response_frames: 0,
+    binary_response_frames: 0,
+    control_data_frames: 0,
+    message_sent_frames: 0,
+    ack_frames: 0,
+    unknown_frames: 0,
+    unknown_frames_suppressed: 0,
     early_drop_oversize: 0,
     early_drop_encrypted: 0,
-    early_drop_unknown_cmd: 0,
     early_drop_malformed_text: 0,
     resync_skips: 0
 };
@@ -170,7 +187,7 @@ let lastRxTime       = null;
 let lastCmd          = null;
 
 // ---------------------------------------------------------------------
-// Logging
+// Logging and operator notification
 // ---------------------------------------------------------------------
 
 function log0(fmt, ...args)
@@ -181,6 +198,11 @@ function log0(fmt, ...args)
 function log1(fmt, ...args)
 {
     DEBUG1("meshcore_tcp_api: " + fmt, ...args);
+}
+
+function log2(fmt, ...args)
+{
+    DEBUG2("meshcore_tcp_api: " + fmt, ...args);
 }
 
 function notifyOperator(lines, mergekey)
@@ -207,6 +229,57 @@ function notifyChannelDiscovered(ch, action)
     ], `meshcore-tcp-channel-${ch.index}`);
 }
 
+function shouldLogFrame(code)
+{
+    const key = sprintf("0x%02x", code);
+    const n = (unknownFrameCounts[key] ?? 0) + 1;
+    unknownFrameCounts[key] = n;
+    if (n <= 4) {
+        return true;
+    }
+    if ((n % UNKNOWN_LOG_INTERVAL) === 0) {
+        return true;
+    }
+    stats.unknown_frames_suppressed++;
+    return false;
+}
+
+function countNonMessageFrame(cmd)
+{
+    switch (cmd) {
+        case RESP_LOG_DATA:
+            stats.log_data_frames++;
+            return true;
+        case RESP_TRACE_DATA:
+            stats.trace_data_frames++;
+            return true;
+        case RESP_TELEMETRY_RESPONSE:
+            stats.telemetry_response_frames++;
+            return true;
+        case RESP_BINARY_RESPONSE:
+            stats.binary_response_frames++;
+            return true;
+        case RESP_CONTROL_DATA:
+            stats.control_data_frames++;
+            return true;
+        case RESP_MESSAGE_SENT:
+            stats.message_sent_frames++;
+            return true;
+        case PUSH_CODE_SEND_CONFIRMED:
+            stats.ack_frames++;
+            return true;
+        case PUSH_CODE_RAW_DATA:
+        case PUSH_CODE_NEW_ADVERT:
+        case PUSH_CODE_CONTACTS_FULL:
+            return true;
+    }
+    return false;
+}
+
+// ---------------------------------------------------------------------
+// Channel helpers
+// ---------------------------------------------------------------------
+
 function localHostname()
 {
     try {
@@ -224,6 +297,14 @@ function publicChannelLabel()
     return hostname
         ? `${hostname} ~${dev}~${chanName}`
         : `${dev}~${chanName}`;
+}
+
+function mapMeshcoreSlot(slot, chan)
+{
+    if (slot === null || slot === undefined || !chan) {
+        return false;
+    }
+    return channel.setMeshcoreSlotChannel(slot, chan);
 }
 
 function ensureConfiguredPublicChannel(config)
@@ -258,17 +339,61 @@ function ensureRuntimePublicChannel()
                 rootConfig.update?.("channels");
                 log0("channel label updated: %s (label: %s)\n", channelNamekey, label);
             }
+            mapMeshcoreSlot(0, localChannels[i]);
             channelCreated = true;
             return false;
         }
     }
 
-    push(localChannels, { namekey: channelNamekey, label: label });
+    const chan = { namekey: channelNamekey, label: label };
+    push(localChannels, chan);
     channel.updateLocalChannels(localChannels);
     rootConfig.update?.("channels");
+    mapMeshcoreSlot(0, channel.getLocalChannelByNameKey(channelNamekey) ?? channel.addMessageNameKey(channelNamekey));
     channelCreated = true;
     log0("auto-created channel: %s (label: %s)\n", channelNamekey, label);
     return true;
+}
+
+function mapDiscoveredChannelIfLocal(ch)
+{
+    if (!ch || ch.index === null || !ch.namekey) {
+        return false;
+    }
+    let chan = channel.getLocalChannelByNameKey(ch.namekey);
+    if (!chan && ch.index === 0) {
+        chan = channel.getLocalChannelByNameKey(channelNamekey) ?? channel.addMessageNameKey(channelNamekey);
+    }
+    if (chan) {
+        mapMeshcoreSlot(ch.index, chan);
+        return true;
+    }
+    return false;
+}
+
+function meshcoreChannelIndexForNamekey(namekey)
+{
+    if (!namekey || channel.isMeshcorePreset(namekey)) {
+        return 0;
+    }
+
+    for (let idx in discoveredChannels) {
+        if (discoveredChannels[idx]?.namekey === namekey) {
+            return int(idx);
+        }
+    }
+
+    const slots = cfg?.channel_slots ?? cfg?.channel_map;
+    if (slots) {
+        if (slots[namekey] !== null && slots[namekey] !== undefined) {
+            return int(slots[namekey]);
+        }
+        const cname = split(namekey, " ")[0];
+        if (slots[cname] !== null && slots[cname] !== undefined) {
+            return int(slots[cname]);
+        }
+    }
+    return null;
 }
 
 // ---------------------------------------------------------------------
@@ -280,11 +405,6 @@ function le16(buf, off)
     return (ord(buf, off) & 0xFF) | ((ord(buf, off + 1) << 8) & 0xFF00);
 }
 
-function pack_le16(n)
-{
-    return chr(n & 0xFF) + chr((n >> 8) & 0xFF);
-}
-
 function u32le(buf, off)
 {
     return (ord(buf, off)
@@ -293,12 +413,46 @@ function u32le(buf, off)
         | (ord(buf, off + 3) << 24)) & 0xFFFFFFFF;
 }
 
+function pack_le16(n)
+{
+    return chr(n & 0xFF) + chr((n >> 8) & 0xFF);
+}
+
+function pack_le32(n)
+{
+    return chr(n & 0xFF) + chr((n >> 8) & 0xFF) + chr((n >> 16) & 0xFF) + chr((n >> 24) & 0xFF);
+}
+
 function cstr(s)
 {
     if (!s) return "";
     let n = length(s);
     while (n > 0 && ord(s, n - 1) === 0) n--;
     return substr(s, 0, n);
+}
+
+function textClean(s)
+{
+    return cstr(s ?? "");
+}
+
+function isMostlyPrintable(s)
+{
+    if (!s || length(s) === 0) return false;
+    let printable = 0;
+    for (let i = 0; i < length(s); i++) {
+        const b = ord(s, i);
+        if (b === 9 || b === 10 || b === 13 || (b >= 0x20 && b <= 0x7e) || b >= 0x80) {
+            printable++;
+        }
+    }
+    return printable >= length(s) * 0.75;
+}
+
+function idFromPrefix(prefix)
+{
+    if (!prefix || length(prefix) < 4) return 0;
+    return u32le(prefix, 0);
 }
 
 function maxPendingRx()
@@ -325,6 +479,9 @@ function resetState()
     syncingMessages = false;
     syncRequestInFlight = false;
     syncPausedBackpressure = false;
+    channelScanActive = false;
+    channelScanInFlight = false;
+    channelScanCurrent = null;
 }
 
 function disableNagle(sock)
@@ -389,7 +546,7 @@ function openTcp()
 }
 
 // ---------------------------------------------------------------------
-// MeshCore boot handshake, queue polling, and channel discovery.
+// MeshCore boot handshake, queue polling, channel discovery, and sending.
 // ---------------------------------------------------------------------
 
 function buildRadioFrame(cmd, payload)
@@ -421,6 +578,29 @@ export function sendCommand(cmd, payload)
         return false;
     }
 };
+
+function appStartPayload()
+{
+    // The live RAK/Companion target validated this exact payload:
+    // command byte supplied by buildCommand(), then seven zero bytes + "Crow".
+    return chr(0) + chr(0) + chr(0) + chr(0) + chr(0) + chr(0) + chr(0) + "Crow";
+}
+
+function sendBootHandshake()
+{
+    if (!s) return;
+    try {
+        const payload = appStartPayload();
+        const frame = buildCommand(CMD_APP_START, payload);
+        const sent = s.send(frame);
+        stats.handshakes_sent++;
+        log0("handshake sent (CMD_APP_START) frame_bytes=%d sent=%s\n", length(frame), sent);
+        log1("  expecting RESP_SELF_INFO(0x05), PUSH_MSG_WAITING(0x83), then bounded SYNC_NEXT_MESSAGE drain\n");
+    }
+    catch (_) {
+        closeSocket("handshake send failed: " + socket.error());
+    }
+}
 
 function pauseSyncForBackpressure(reason)
 {
@@ -467,96 +647,284 @@ function requestChannelInfo(index, reason)
         return false;
     }
     stats.channel_discovery_requests++;
+    channelScanInFlight = true;
+    channelScanCurrent = index;
+    lastChannelRequestTime = time();
     log1("channel discovery request index=%d reason=%s\n", index, reason ?? "unknown");
     return sendCommand(CMD_GET_CHANNEL, chr(index & 0xff));
 }
 
-function requestAllChannels(reason)
+function startChannelScan(reason)
 {
-    if (!channelDiscovery || !s) {
+    if (!channelDiscovery || !s || channelScanActive) {
         return;
     }
-    for (let i = 0; i <= MAX_CHANNEL_INDEX; i++) {
-        requestChannelInfo(i, reason);
+    channelScanActive = true;
+    channelScanNext = 0;
+    channelScanInFlight = false;
+    channelScanCurrent = null;
+    stats.channel_scans++;
+    log1("channel discovery scan start reason=%s\n", reason ?? "unknown");
+    continueChannelScan(reason);
+}
+
+function continueChannelScan(reason)
+{
+    if (!channelDiscovery || !s || !channelScanActive || channelScanInFlight) {
+        return;
+    }
+    if (channelScanNext > MAX_CHANNEL_INDEX) {
+        channelScanActive = false;
+        channelScanCurrent = null;
+        log1("channel discovery scan complete\n");
+        return;
+    }
+    const idx = channelScanNext++;
+    requestChannelInfo(idx, reason);
+}
+
+function checkChannelScanTimeout()
+{
+    if (!channelScanActive || !channelScanInFlight) {
+        return;
+    }
+    if (time() - lastChannelRequestTime >= CHANNEL_REQUEST_TIMEOUT) {
+        stats.channel_discovery_timeouts++;
+        log1("channel discovery timeout index=%s\n", channelScanCurrent);
+        channelScanInFlight = false;
+        channelScanCurrent = null;
+        continueChannelScan("timeout");
     }
 }
 
-export function takeResponse(cmd)
+function buildSendChannelPayload(index, text)
 {
-    for (let i = 0; i < length(responses); i++) {
-        if (responses[i].cmd === cmd) {
-            const resp = responses[i];
-            splice(responses, i, 1);
-            return resp;
+    text = substr(text ?? "", 0, MAX_TEXT_MESSAGE_LENGTH);
+    return chr(TEXT_TYPE_PLAIN) + chr(index & 0xff) + pack_le32(time()) + text;
+}
+
+// ---------------------------------------------------------------------
+// Response parsers
+// ---------------------------------------------------------------------
+
+function parseSelfInfo(framePayload)
+{
+    if (!framePayload || length(framePayload) < 2 || ord(framePayload, 0) !== RESP_SELF_INFO) {
+        return null;
+    }
+
+    // MeshCoreOne documents the self-info payload after the code byte as:
+    // offset 0..2 adv/tx/max_tx, offset 3..34 public key, offset 57+ name.
+    // Since framePayload includes the response code at byte 0, the public key
+    // starts at 4 and the name starts at 58.
+    if (length(framePayload) >= 36) {
+        meshcoreSelfPublicKey = substr(framePayload, 4, 32);
+        meshcoreSelfPublicKeyPrefix = substr(meshcoreSelfPublicKey, 0, 6);
+    }
+
+    let name = null;
+    if (length(framePayload) > 58) {
+        name = textClean(substr(framePayload, 58));
+        if (!isMostlyPrintable(name)) {
+            name = null;
         }
     }
+
+    // Compatibility fallback for older/variant payloads: scan after the fixed
+    // identity fields, but never scan from inside the public key.
+    if (!name) {
+        let nameStart = 36;
+        const payloadLen = length(framePayload);
+        while (nameStart < payloadLen) {
+            const byte = ord(framePayload, nameStart);
+            if ((byte >= 0x20 && byte <= 0x7E) || byte >= 0x80) break;
+            nameStart++;
+        }
+        if (nameStart < payloadLen) {
+            name = textClean(substr(framePayload, nameStart));
+        }
+    }
+
+    if (name && length(name) > 0) {
+        log0("parseSelfInfo: device name = %s\n", name);
+        return name;
+    }
+
+    log1("parseSelfInfo: no printable name found\n");
     return null;
-};
-
-function appStartPayload()
-{
-    return chr(0) + chr(0) + chr(0) + chr(0) + chr(0) + chr(0) + chr(0) + "Crow";
 }
 
-function sendBootHandshake()
+function directMsg(fromId, prefix, text, textType, timestamp, snr, pathLen, strong)
 {
-    if (!s) return;
-    try {
-        const payload = appStartPayload();
-        const frame = buildCommand(CMD_APP_START, payload);
-        const sent = s.send(frame);
-        stats.handshakes_sent++;
-        log0("handshake sent (CMD_APP_START) frame_bytes=%d sent=%s\n", length(frame), sent);
-        log1("  expecting RESP_SELF_INFO(0x05), PUSH_MSG_WAITING(0x83), then bounded SYNC_NEXT_MESSAGE drain\n");
-    }
-    catch (_) {
-        closeSocket("handshake send failed: " + socket.error());
-    }
-}
-
-function advance(hdrBytes, payloadBytes)
-{
-    const total = hdrBytes + payloadBytes;
-    if (length(tcpbuf) >= total) {
-        tcpbuf = substr(tcpbuf, total);
-        return;
-    }
-    pendingSkip = total - length(tcpbuf);
-    tcpbuf = "";
-}
-
-function parseSelfInfo(payload)
-{
-    if (!payload || length(payload) < 36) {
-        log1("parseSelfInfo: insufficient data (%d bytes)\n", length(payload) ?? 0);
-        return null;
-    }
-    if (ord(payload, 0) !== RESP_SELF_INFO) {
-        log1("parseSelfInfo: wrong response code (0x%02x)\n", ord(payload, 0));
+    if (!text || length(text) === 0) {
         return null;
     }
 
-    let nameStart = SELF_INFO_PUBKEY_OFFSET + SELF_INFO_PUBKEY_SIZE;
-    const payloadLen = length(payload);
-    while (nameStart < payloadLen) {
-        const byte = ord(payload, nameStart);
-        if ((byte >= 0x20 && byte <= 0x7E) || byte >= 0x80) break;
-        nameStart++;
-    }
-    if (nameStart >= payloadLen) {
-        log1("parseSelfInfo: no printable name found\n");
+    nodedb.createNode(fromId);
+
+    msgSeq = (msgSeq + 1) & 0xFFFFFFFF;
+    const namekey = nodedb.namekey(fromId);
+    return {
+        id:                   msgSeq,
+        from:                 fromId,
+        to:                   0,
+        rx_time:              timestamp ?? time(),
+        hop_limit:            1,
+        transport:            "meshcore",
+        backend:              "tcp_api",
+        originating_callsign: callsign,
+        namekey:              namekey,
+        data: {
+            text_message: text
+        },
+        metadata: {
+            is_group_message: false,
+            local_direct: true,
+            meshcore_sender_prefix: prefix ? b64enc(prefix) : null,
+            text_type: textType,
+            path_length: pathLen,
+            rx_snr: snr,
+            identity_strength: strong ? "strong" : "weak"
+        }
+    };
+}
+
+function channelMsg(index, text, textType, timestamp, snr, pathLen)
+{
+    if (!text || length(text) === 0) {
         return null;
     }
 
-    let name = "";
-    for (let i = nameStart; i < payloadLen; i++) {
-        const byte = ord(payload, i);
-        if (byte === 0) break;
-        name += chr(byte);
+    msgSeq = (msgSeq + 1) & 0xFFFFFFFF;
+    const mapped = channel.getChannelByMeshcoreSlot(index);
+    return {
+        id:                   msgSeq,
+        from:                 0,
+        group_slot:           index,
+        channel_index:        index,
+        rx_time:              timestamp ?? time(),
+        hop_limit:            1,
+        transport:            "meshcore",
+        backend:              "tcp_api",
+        originating_callsign: callsign,
+        namekey:              mapped?.namekey ?? (index === 0 ? channelNamekey : null),
+        data: {
+            text_message: text
+        },
+        metadata: {
+            is_group_message: true,
+            group_slot: index,
+            channel_index: index,
+            text_type: textType,
+            path_length: pathLen,
+            rx_snr: snr,
+            identity_strength: "weak",
+            symmetric_key: true,
+            requires_slot_lookup: index !== 0
+        }
+    };
+}
+
+function parseDirectModern(payload, version)
+{
+    let off = 0;
+    let snr = null;
+    if (version === 3) {
+        if (length(payload) < 15) return null;
+        snr = (ord(payload, 0) > 127 ? ord(payload, 0) - 256 : ord(payload, 0)) / 4.0;
+        off = 3;
+    }
+    else {
+        if (length(payload) < 12) return null;
+        off = 0;
     }
 
-    log0("parseSelfInfo: device name = %s\n", name);
-    return name;
+    const prefix = substr(payload, off, 6); off += 6;
+    const pathLen = ord(payload, off); off++;
+    const textType = ord(payload, off); off++;
+    const timestamp = u32le(payload, off); off += 4;
+    if (textType === TEXT_TYPE_SIGNED && length(payload) >= off + 4) {
+        off += 4;
+    }
+    const text = textClean(substr(payload, off));
+    if (!isMostlyPrintable(text)) return null;
+    return directMsg(idFromPrefix(prefix), prefix, text, textType, timestamp, snr, pathLen, true);
+}
+
+function parseDirectLegacy(payload)
+{
+    if (length(payload) < 9) return null;
+    const fromId = u32le(payload, 0);
+    const toId = u32le(payload, 4);
+    const tlen = ord(payload, 8);
+    if (TEXT_ENVELOPE_BYTES + tlen > length(payload)) return null;
+    const text = textClean(substr(payload, 9, tlen));
+    if (!isMostlyPrintable(text)) return null;
+    const msg = directMsg(fromId, null, text, TEXT_TYPE_PLAIN, time(), null, null, true);
+    if (msg) msg.to = toId;
+    return msg;
+}
+
+function parseChannelModern(payload, version)
+{
+    let off = 0;
+    let snr = null;
+    if (version === 3) {
+        if (length(payload) < 10) return null;
+        snr = (ord(payload, 0) > 127 ? ord(payload, 0) - 256 : ord(payload, 0)) / 4.0;
+        off = 3;
+    }
+    else {
+        if (length(payload) < 7) return null;
+        off = 0;
+    }
+
+    const index = ord(payload, off); off++;
+    const pathLen = ord(payload, off); off++;
+    const textType = ord(payload, off); off++;
+    const timestamp = u32le(payload, off); off += 4;
+    const text = textClean(substr(payload, off));
+    if (!isMostlyPrintable(text)) return null;
+    return channelMsg(index, text, textType, timestamp, snr, pathLen);
+}
+
+function parseChannelLegacy(payload)
+{
+    if (length(payload) < 5) return null;
+    const fromId = u32le(payload, 0);
+    const index = ord(payload, 4);
+    const text = textClean(substr(payload, 5));
+    if (!isMostlyPrintable(text)) return null;
+    const msg = channelMsg(index, text, TEXT_TYPE_PLAIN, time(), null, null);
+    if (msg) msg.from = fromId;
+    return msg;
+}
+
+function decodeTextFrame(cmd, payload)
+{
+    let msg = null;
+    if (cmd === RESP_DIRECT_MSG_RECV_V3) {
+        msg = parseDirectModern(payload, 3) ?? parseDirectLegacy(payload);
+    }
+    else if (cmd === RESP_DIRECT_MSG_RECV) {
+        msg = parseDirectModern(payload, 1) ?? parseDirectLegacy(payload);
+    }
+    else if (cmd === RESP_CHANNEL_MSG_RECV_V3) {
+        msg = parseChannelModern(payload, 3) ?? parseChannelLegacy(payload);
+    }
+    else if (cmd === RESP_CHANNEL_MSG_RECV) {
+        msg = parseChannelModern(payload, 1) ?? parseChannelLegacy(payload);
+    }
+
+    if (msg) {
+        log1("decoded MeshCore cmd=0x%02x text=%d bytes namekey=%s\n",
+            cmd, length(msg.data.text_message), msg.namekey ?? "");
+        return msg;
+    }
+
+    stats.early_drop_malformed_text++;
+    log1("decode: malformed text frame cmd=0x%02x len=%d\n", cmd, length(payload));
+    return null;
 }
 
 function decodeChannelInfo(framePayload)
@@ -583,8 +951,12 @@ function decodeChannelInfo(framePayload)
 function processChannelInfo(framePayload)
 {
     stats.channel_info_responses++;
+    channelScanInFlight = false;
+    channelScanCurrent = null;
+
     const ch = decodeChannelInfo(framePayload);
     if (!ch) {
+        continueChannelScan("bad-channel-info");
         return;
     }
 
@@ -602,6 +974,24 @@ function processChannelInfo(framePayload)
         log1("channel updated index=%d name=%s\n", ch.index, ch.name);
         notifyChannelDiscovered(ch, "updated");
     }
+
+    mapDiscoveredChannelIfLocal(ch);
+    continueChannelScan("channel-info");
+}
+
+// ---------------------------------------------------------------------
+// Smart accumulator: frames -> typed actions/messages
+// ---------------------------------------------------------------------
+
+function advance(hdrBytes, payloadBytes)
+{
+    const total = hdrBytes + payloadBytes;
+    if (length(tcpbuf) >= total) {
+        tcpbuf = substr(tcpbuf, total);
+        return;
+    }
+    pendingSkip = total - length(tcpbuf);
+    tcpbuf = "";
 }
 
 function smartAccumulate(data)
@@ -664,7 +1054,6 @@ function smartAccumulate(data)
         const framePayload = substr(tcpbuf, HEADER_BYTES, plen);
         const cmd = ord(framePayload, 0);
         const payload = substr(framePayload, 1);
-        const dataLen = plen - 1;
         tcpbuf = substr(tcpbuf, HEADER_BYTES + plen);
         stats.frames_in++;
         lastCmd = cmd;
@@ -701,9 +1090,7 @@ function smartAccumulate(data)
                 deviceName = name;
                 channelCreated = false;
             }
-            if (channelDiscovery) {
-                requestAllChannels("self-info");
-            }
+            startChannelScan("self-info");
             continue;
         }
 
@@ -715,122 +1102,39 @@ function smartAccumulate(data)
             continue;
         }
 
-        if (!isDirectFrame(cmd) && !isGroupFrame(cmd)) {
-            stats.early_drop_unknown_cmd++;
+        if (isDirectFrame(cmd) || isGroupFrame(cmd)) {
             syncRequestInFlight = false;
-            log1("early-drop unknown cmd=0x%02x plen=%d\n", cmd, plen);
-            maybeRequestNext("drop unknown");
+            push(frames, { cmd: cmd, payload: payload });
             continue;
         }
 
+        if (cmd === RESP_CHANNEL_DATA_RECV) {
+            // Binary datagrams are valid MeshCore traffic, but Crow only bridges
+            // cleartext text messages in this backend pass.
+            syncRequestInFlight = false;
+            log2("drop channel datagram len=%d\n", length(payload));
+            maybeRequestNext("drop channel data");
+            continue;
+        }
+
+        if (countNonMessageFrame(cmd)) {
+            if (cmd === RESP_LOG_DATA) {
+                // 0x88 is normal device log data. Count it, but do not spam logs.
+                if (shouldLogFrame(cmd)) {
+                    log2("log data frame len=%d count=%d\n", length(payload), unknownFrameCounts[sprintf("0x%02x", cmd)]);
+                }
+            }
+            continue;
+        }
+
+        stats.unknown_frames++;
         syncRequestInFlight = false;
-
-        if (isDirectFrame(cmd)) {
-            if (dataLen < TEXT_ENVELOPE_BYTES) {
-                stats.early_drop_malformed_text++;
-                log1("early-drop short direct plen=%d < %d\n", dataLen, TEXT_ENVELOPE_BYTES);
-                maybeRequestNext("drop short direct");
-                continue;
-            }
-            const tlen = ord(payload, 8);
-            if (TEXT_ENVELOPE_BYTES + tlen > dataLen) {
-                stats.early_drop_malformed_text++;
-                log1("early-drop malformed direct tlen=%d plen=%d\n", tlen, dataLen);
-                maybeRequestNext("drop malformed direct");
-                continue;
-            }
+        if (shouldLogFrame(cmd)) {
+            log1("drop non-message cmd=0x%02x plen=%d count=%d\n",
+                cmd, plen, unknownFrameCounts[sprintf("0x%02x", cmd)]);
         }
-        else if (isGroupFrame(cmd)) {
-            if (dataLen < 5) {
-                stats.early_drop_malformed_text++;
-                log1("early-drop short group plen=%d < 5\n", dataLen);
-                maybeRequestNext("drop short group");
-                continue;
-            }
-        }
-
-        push(frames, { cmd: cmd, payload: payload });
+        maybeRequestNext("drop unknown");
     }
-}
-
-function decodeTextFrame(cmd, payload)
-{
-    if (isDirectFrame(cmd)) {
-        const fromId = u32le(payload, 0);
-        const toId   = u32le(payload, 4);
-        const tlen   = ord(payload, 8);
-        const text   = cstr(substr(payload, 9, tlen));
-
-        if (!length(text)) {
-            log1("decode: empty direct text from=%08x\n", fromId);
-            return null;
-        }
-
-        msgSeq = (msgSeq + 1) & 0xFFFFFFFF;
-        const msg = {
-            id:                   msgSeq,
-            from:                 fromId,
-            to:                   toId,
-            rx_time:              time(),
-            hop_limit:            1,
-            transport:            "meshcore",
-            backend:              "tcp_api",
-            originating_callsign: callsign,
-            namekey:              channelNamekey,
-            data: {
-                text_message: text
-            },
-            metadata: {
-                is_group_message: false,
-                identity_strength: "strong"
-            }
-        };
-
-        log1("decoded DIRECT_MSG(0x07) from=%08x to=%08x text=%d bytes\n",
-            fromId, toId, length(text));
-        return msg;
-    }
-
-    if (isGroupFrame(cmd)) {
-        const fromId = u32le(payload, 0);
-        const groupSlot = ord(payload, 4);
-        const text = cstr(substr(payload, 5));
-
-        if (!length(text)) {
-            log1("decode: empty group text from=%08x slot=%d\n", fromId, groupSlot);
-            return null;
-        }
-
-        msgSeq = (msgSeq + 1) & 0xFFFFFFFF;
-        const msg = {
-            id:                   msgSeq,
-            from:                 fromId,
-            group_slot:           groupSlot,
-            rx_time:              time(),
-            hop_limit:            1,
-            transport:            "meshcore",
-            backend:              "tcp_api",
-            originating_callsign: callsign,
-            namekey:              channelNamekey,
-            data: {
-                text_message: text
-            },
-            metadata: {
-                is_group_message: true,
-                group_slot: groupSlot,
-                identity_strength: "weak",
-                symmetric_key: true,
-                requires_slot_lookup: true
-            }
-        };
-
-        log1("decoded CHANNEL_MSG(0x08) from=%08x slot=%d text=%d bytes\n",
-            fromId, groupSlot, length(text));
-        return msg;
-    }
-
-    log1("decode: unknown frame cmd=0x%02x\n", cmd);
-    return null;
 }
 
 function popPending(reason)
@@ -840,6 +1144,10 @@ function popPending(reason)
     maybeRequestNext(reason ?? "pending delivered");
     return msg;
 }
+
+// ---------------------------------------------------------------------
+// Public lifecycle API
+// ---------------------------------------------------------------------
 
 export function setup(config)
 {
@@ -856,6 +1164,9 @@ export function setup(config)
     tcpPort  = cfg.port ?? DEFAULT_PORT;
     channelDiscovery = !!cfg.channel_discovery;
     channelRefreshSeconds = cfg.channel_refresh_seconds ?? DEFAULT_CHANNEL_REFRESH;
+    channelDiscoveryWindow = cfg.channel_discovery_window ?? DEFAULT_DISCOVERY_WINDOW;
+    if (channelDiscoveryWindow < 1) channelDiscoveryWindow = 1;
+    if (channelDiscoveryWindow > 4) channelDiscoveryWindow = 4;
 
     deviceName = cfg.device_name ?? null;
     channelCreated = ensureConfiguredPublicChannel(config);
@@ -931,8 +1242,41 @@ export function recv()
 
 export function send(msg)
 {
-    log1("send: not implemented (msg.id=%s)\n", msg?.id);
-    return false;
+    if (!s) {
+        stats.sends_failed++;
+        log1("send: disconnected (msg.id=%s)\n", msg?.id);
+        return false;
+    }
+    if (!msg?.data?.text_message) {
+        stats.sends_failed++;
+        log1("send: no text payload (msg.id=%s)\n", msg?.id);
+        return false;
+    }
+    if (channel.isDirect(msg.namekey)) {
+        // Direct send needs contact public-key prefix management and ACK matching.
+        stats.sends_failed++;
+        log1("send direct: not implemented yet (msg.id=%s)\n", msg?.id);
+        return false;
+    }
+
+    const idx = msg.group_slot ?? msg.channel_index ?? meshcoreChannelIndexForNamekey(msg.namekey);
+    if (idx === null || idx === undefined || idx < 0 || idx > MAX_CHANNEL_INDEX) {
+        stats.sends_failed++;
+        log1("send channel: no MeshCore slot for namekey=%s msg.id=%s\n", msg.namekey ?? "", msg?.id);
+        return false;
+    }
+
+    const payload = buildSendChannelPayload(idx, msg.data.text_message);
+    const ok = sendCommand(CMD_SEND_CHANNEL_MESSAGE, payload);
+    if (ok) {
+        stats.sends_ok++;
+        log1("send channel ok slot=%d msg.id=%s\n", idx, msg?.id);
+    }
+    else {
+        stats.sends_failed++;
+        log1("send channel failed slot=%d msg.id=%s\n", idx, msg?.id);
+    }
+    return ok;
 };
 
 export function tick()
@@ -943,7 +1287,7 @@ export function tick()
         }
         catch (err) {
             log0("auto channel check error: %s\n", err);
-            stats.early_drop_unknown_cmd++;
+            stats.unknown_frames++;
         }
     }
     if (enabled && !s && time() >= nextReconnectTime) {
@@ -955,8 +1299,9 @@ export function tick()
         maybeRequestNext(syncPausedBackpressure ? "resume after backpressure" : "tick resume");
     }
     if (enabled && s && channelDiscovery && timers.tick("meshcore_tcp_api.channel_refresh")) {
-        requestAllChannels("refresh");
+        startChannelScan("refresh");
     }
+    checkChannelScanTimeout();
 };
 
 export function process(msg)
@@ -970,7 +1315,7 @@ export function pending()
 
 export function status()
 {
-    const out = {
+    return {
         connects: stats.connects,
         disconnects: stats.disconnects,
         handshakes_sent: stats.handshakes_sent,
@@ -986,19 +1331,35 @@ export function status()
         no_more_messages: stats.no_more_messages,
         pending_rx: length(pendingRx),
         max_pending_rx: maxPendingRx(),
+        sends_ok: stats.sends_ok,
+        sends_failed: stats.sends_failed,
         last_rx_time: lastRxTime,
         last_cmd: lastCmd,
         syncing_messages: syncingMessages,
         sync_request_in_flight: syncRequestInFlight,
         sync_paused_backpressure: syncPausedBackpressure,
         channel_discovery: channelDiscovery,
+        channel_scans: stats.channel_scans,
         channel_discovery_requests: stats.channel_discovery_requests,
         channel_info_responses: stats.channel_info_responses,
+        channel_discovery_timeouts: stats.channel_discovery_timeouts,
         channels_discovered: stats.channels_discovered,
-        channels_updated: stats.channels_updated
+        channels_updated: stats.channels_updated,
+        log_data_frames: stats.log_data_frames,
+        trace_data_frames: stats.trace_data_frames,
+        telemetry_response_frames: stats.telemetry_response_frames,
+        binary_response_frames: stats.binary_response_frames,
+        control_data_frames: stats.control_data_frames,
+        message_sent_frames: stats.message_sent_frames,
+        ack_frames: stats.ack_frames,
+        unknown_frames: stats.unknown_frames,
+        unknown_frames_suppressed: stats.unknown_frames_suppressed
     };
-    return out;
 };
+
+// ---------------------------------------------------------------------
+// Test/introspection hooks
+// ---------------------------------------------------------------------
 
 export function _test_inject(data, gatekeeperShim)
 {
@@ -1022,6 +1383,9 @@ export function _test_reset()
     responses = [];
     msgSeq = 0;
     discoveredChannels = {};
+    unknownFrameCounts = {};
+    meshcoreSelfPublicKey = null;
+    meshcoreSelfPublicKeyPrefix = null;
     for (let k in stats) stats[k] = 0;
 };
 
@@ -1033,6 +1397,18 @@ export function _test_stats()
 export function _test_take_response(cmd)
 {
     return takeResponse(cmd);
+};
+
+export function takeResponse(cmd)
+{
+    for (let i = 0; i < length(responses); i++) {
+        if (responses[i].cmd === cmd) {
+            const resp = responses[i];
+            splice(responses, i, 1);
+            return resp;
+        }
+    }
+    return null;
 };
 
 export function _test_build_frame(cmd, payload)
