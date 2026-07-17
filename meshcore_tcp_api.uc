@@ -16,6 +16,8 @@
 //   * send text messages out through mapped MeshCore channel slots;
 //   * receive direct messages delivered to the connected MeshCore node and create
 //     a direct-message thread for the sender;
+//   * send direct replies when Crow has learned the sender's MeshCore public-key
+//     prefix from an inbound direct frame;
 //   * protect AREDN nodes by using bounded frame parsing, one-at-a-time queued
 //     message draining, paced channel discovery, and rate-limited non-message logs.
 //
@@ -41,6 +43,7 @@ const MAX_TEXT_MESSAGE_LENGTH  = 200;
 
 // Commands host -> radio.
 const CMD_APP_START            = 0x01;
+const CMD_SEND_DIRECT_MESSAGE  = 0x02;
 const CMD_SEND_CHANNEL_MESSAGE = 0x03;
 const CMD_SYNC_NEXT_MESSAGE    = 0x0A;
 const CMD_GET_CHANNEL          = 0x1F;
@@ -163,6 +166,10 @@ let stats            = {
     commands_sent: 0,
     sends_ok: 0,
     sends_failed: 0,
+    direct_sends_ok: 0,
+    direct_sends_failed: 0,
+    channel_sends_ok: 0,
+    channel_sends_failed: 0,
     channel_scans: 0,
     channel_discovery_requests: 0,
     channel_info_responses: 0,
@@ -468,6 +475,60 @@ function pendingFull()
     return length(pendingRx) >= maxPendingRx();
 }
 
+function directTargetId(msg)
+{
+    if (msg?.namekey && channel.isDirect(msg.namekey)) {
+        const parts = split(msg.namekey, " ");
+        if (length(parts) >= 2) {
+            return int(parts[1]);
+        }
+    }
+    return msg?.to;
+}
+
+function publicKeyPrefixFromNode(id)
+{
+    if (id === null || id === undefined) {
+        return null;
+    }
+    const info = nodedb.getNode(id, false)?.nodeinfo;
+    if (!info) {
+        return null;
+    }
+
+    let key = info.mc_public_key ?? info.mc_public_key_prefix ?? info.public_key;
+    if (key && length(key) >= 6) {
+        return substr(key, 0, 6);
+    }
+
+    const b64 = info.mc_public_key_prefix_b64 ?? info.mc_public_key_b64 ?? info.public_key_b64;
+    if (b64) {
+        try {
+            key = b64dec(b64);
+            if (key && length(key) >= 6) {
+                return substr(key, 0, 6);
+            }
+        }
+        catch (_) {
+        }
+    }
+    return null;
+}
+
+function rememberDirectPrefix(id, prefix)
+{
+    if (!id || !prefix || length(prefix) < 6) {
+        return;
+    }
+
+    nodedb.createNode(id);
+    nodedb.updateNodeinfo(id, {
+        platform: "meshcore",
+        mc_public_key_prefix: substr(prefix, 0, 6),
+        mc_public_key_prefix_b64: b64enc(substr(prefix, 0, 6))
+    });
+}
+
 // ---------------------------------------------------------------------
 // Socket lifecycle
 // ---------------------------------------------------------------------
@@ -581,8 +642,6 @@ export function sendCommand(cmd, payload)
 
 function appStartPayload()
 {
-    // The live RAK/Companion target validated this exact payload:
-    // command byte supplied by buildCommand(), then seven zero bytes + "Crow".
     return chr(0) + chr(0) + chr(0) + chr(0) + chr(0) + chr(0) + chr(0) + "Crow";
 }
 
@@ -703,6 +762,13 @@ function buildSendChannelPayload(index, text)
     return chr(TEXT_TYPE_PLAIN) + chr(index & 0xff) + pack_le32(time()) + text;
 }
 
+function buildSendDirectPayload(prefix, text, attempt)
+{
+    text = substr(text ?? "", 0, MAX_TEXT_MESSAGE_LENGTH);
+    attempt = attempt ?? 0;
+    return chr(TEXT_TYPE_PLAIN) + chr(attempt & 0xff) + pack_le32(time()) + substr(prefix, 0, 6) + text;
+}
+
 // ---------------------------------------------------------------------
 // Response parsers
 // ---------------------------------------------------------------------
@@ -730,8 +796,6 @@ function parseSelfInfo(framePayload)
         }
     }
 
-    // Compatibility fallback for older/variant payloads: scan after the fixed
-    // identity fields, but never scan from inside the public key.
     if (!name) {
         let nameStart = 36;
         const payloadLen = length(framePayload);
@@ -760,7 +824,12 @@ function directMsg(fromId, prefix, text, textType, timestamp, snr, pathLen, stro
         return null;
     }
 
-    nodedb.createNode(fromId);
+    if (prefix && length(prefix) >= 6) {
+        rememberDirectPrefix(fromId, prefix);
+    }
+    else {
+        nodedb.createNode(fromId);
+    }
 
     msgSeq = (msgSeq + 1) & 0xFFFFFFFF;
     const namekey = nodedb.namekey(fromId);
@@ -857,7 +926,7 @@ function parseDirectLegacy(payload)
     const fromId = u32le(payload, 0);
     const toId = u32le(payload, 4);
     const tlen = ord(payload, 8);
-    if (TEXT_ENVELOPE_BYTES + tlen > length(payload)) return null;
+    if (9 + tlen > length(payload)) return null;
     const text = textClean(substr(payload, 9, tlen));
     if (!isMostlyPrintable(text)) return null;
     const msg = directMsg(fromId, null, text, TEXT_TYPE_PLAIN, time(), null, null, true);
@@ -1109,8 +1178,6 @@ function smartAccumulate(data)
         }
 
         if (cmd === RESP_CHANNEL_DATA_RECV) {
-            // Binary datagrams are valid MeshCore traffic, but Crow only bridges
-            // cleartext text messages in this backend pass.
             syncRequestInFlight = false;
             log2("drop channel datagram len=%d\n", length(payload));
             maybeRequestNext("drop channel data");
@@ -1119,7 +1186,6 @@ function smartAccumulate(data)
 
         if (countNonMessageFrame(cmd)) {
             if (cmd === RESP_LOG_DATA) {
-                // 0x88 is normal device log data. Count it, but do not spam logs.
                 if (shouldLogFrame(cmd)) {
                     log2("log data frame len=%d count=%d\n", length(payload), unknownFrameCounts[sprintf("0x%02x", cmd)]);
                 }
@@ -1252,16 +1318,37 @@ export function send(msg)
         log1("send: no text payload (msg.id=%s)\n", msg?.id);
         return false;
     }
+
     if (channel.isDirect(msg.namekey)) {
-        // Direct send needs contact public-key prefix management and ACK matching.
-        stats.sends_failed++;
-        log1("send direct: not implemented yet (msg.id=%s)\n", msg?.id);
-        return false;
+        const targetId = directTargetId(msg);
+        const prefix = publicKeyPrefixFromNode(targetId);
+        if (!prefix || length(prefix) < 6) {
+            stats.sends_failed++;
+            stats.direct_sends_failed++;
+            log1("send direct: missing MeshCore public-key prefix target=%s msg.id=%s\n", targetId, msg?.id);
+            return false;
+        }
+
+        const attempt = msg.metadata?.retry_attempt ?? msg.retry_attempt ?? 0;
+        const payload = buildSendDirectPayload(prefix, msg.data.text_message, attempt);
+        const ok = sendCommand(CMD_SEND_DIRECT_MESSAGE, payload);
+        if (ok) {
+            stats.sends_ok++;
+            stats.direct_sends_ok++;
+            log1("send direct ok target=%s msg.id=%s\n", targetId, msg?.id);
+        }
+        else {
+            stats.sends_failed++;
+            stats.direct_sends_failed++;
+            log1("send direct failed target=%s msg.id=%s\n", targetId, msg?.id);
+        }
+        return ok;
     }
 
     const idx = msg.group_slot ?? msg.channel_index ?? meshcoreChannelIndexForNamekey(msg.namekey);
     if (idx === null || idx === undefined || idx < 0 || idx > MAX_CHANNEL_INDEX) {
         stats.sends_failed++;
+        stats.channel_sends_failed++;
         log1("send channel: no MeshCore slot for namekey=%s msg.id=%s\n", msg.namekey ?? "", msg?.id);
         return false;
     }
@@ -1270,10 +1357,12 @@ export function send(msg)
     const ok = sendCommand(CMD_SEND_CHANNEL_MESSAGE, payload);
     if (ok) {
         stats.sends_ok++;
+        stats.channel_sends_ok++;
         log1("send channel ok slot=%d msg.id=%s\n", idx, msg?.id);
     }
     else {
         stats.sends_failed++;
+        stats.channel_sends_failed++;
         log1("send channel failed slot=%d msg.id=%s\n", idx, msg?.id);
     }
     return ok;
@@ -1333,6 +1422,10 @@ export function status()
         max_pending_rx: maxPendingRx(),
         sends_ok: stats.sends_ok,
         sends_failed: stats.sends_failed,
+        direct_sends_ok: stats.direct_sends_ok,
+        direct_sends_failed: stats.direct_sends_failed,
+        channel_sends_ok: stats.channel_sends_ok,
+        channel_sends_failed: stats.channel_sends_failed,
         last_rx_time: lastRxTime,
         last_cmd: lastCmd,
         syncing_messages: syncingMessages,
@@ -1424,4 +1517,9 @@ export function _test_build_command(cmd, payload)
 export function _test_app_start_payload()
 {
     return appStartPayload();
+};
+
+export function _test_build_direct_send(prefix, text, attempt)
+{
+    return buildCommand(CMD_SEND_DIRECT_MESSAGE, buildSendDirectPayload(prefix, text, attempt));
 };
