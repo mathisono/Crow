@@ -126,8 +126,8 @@ export function updateNodeinfo(id, nodeinfo)
                 cnodeinfo[k] = nodeinfo[k];
             }
         }
-        n.nodeinfo.long_name = utils.utf8validCopy(n.nodeinfo.long_name);
-        n.nodeinfo.short_name = utils.utf8validCopy(n.nodeinfo.short_name);
+        n.nodeinfo.long_name = utils.utf8validCopy(n.nodeinfo.long_name ?? "");
+        n.nodeinfo.short_name = utils.utf8validCopy(n.nodeinfo.short_name ?? "");
         saveNode(n);
     }
 };
