@@ -249,25 +249,41 @@ export function tick()
     }
 };
 
+function isLocalDirectMessage(msg)
+{
+    return channel.isDirect(msg.namekey) && (node.toMe(msg) || msg.metadata?.local_direct);
+}
+
+function isLocalChannelMessage(msg)
+{
+    if (!msg.namekey || !channel.getLocalChannelByNameKey(msg.namekey)) {
+        return false;
+    }
+    if (node.forMe(msg)) {
+        return true;
+    }
+    // TCP API and UDP channel/group messages on joined channels are intentionally
+    // stored even when the RF destination is not Crow's native AREDN node id.
+    return msg.metadata?.is_group_message || msg.transport === "meshcore" || msg.transport === "meshtastic";
+}
+
 export function process(msg)
 {
     if (!enabled) {
         return;
     }
     if (msg.data?.text_message) {
-        if (node.forMe(msg) && channel.getLocalChannelByNameKey(msg.namekey)) {
+        if (isLocalChannelMessage(msg)) {
             addMessage(msg);
         }
-        else if (channel.isDirect(msg.namekey)) {
-            if (node.toMe(msg)) {
-                addDirectMessage(msg, `DirectMessages ${msg.from}`);
-                if (msg.want_ack) {
-                    router.queue(message.createAckMessage(msg));
-                }
+        else if (isLocalDirectMessage(msg)) {
+            addDirectMessage(msg, nodedb.namekey(msg.from));
+            if (msg.want_ack && node.toMe(msg)) {
+                router.queue(message.createAckMessage(msg));
             }
-            else if (node.fromMe(msg)) {
-                addDirectMessage(msg, msg.namekey);
-            }
+        }
+        else if (channel.isDirect(msg.namekey) && node.fromMe(msg)) {
+            addDirectMessage(msg, msg.namekey);
         }
         nodedb.updateNode(nodedb.getNode(msg.from, false));
     }
