@@ -22,11 +22,49 @@ function norm(s)
     }
 
     // Accept a callsign only when it is the leading identity token, such as
-    // "KJ6DZB mobile" or "KJ6DZB-7". Do not accept arbitrary embedded text.
-    // AREDN ucode regex compatibility: avoid non-capturing groups (?:...)
+    // "KJ6DZB mobile" or "KJ6DZB-7". Do not accept arbitrary embedded text here;
+    // message-body extraction is handled by senderCallsignFromMessageText().
     const m = match(s, /^([A-Z]{1,2}[0-9][A-Z]{1,3})([-/ ][A-Z0-9 _.-]*)?$/);
     return m ? m[1] : null;
 };
+
+function isTokenChar(b)
+{
+    return (b >= 48 && b <= 57) || (b >= 65 && b <= 90) || (b >= 97 && b <= 122);
+}
+
+export function senderCallsignFromMessageText(text)
+{
+    if (!text) {
+        return null;
+    }
+
+    // Strict Gatekeeper phase for MeshCore/Meshtastic bridge traffic: require the
+    // operator callsign to appear in the text body itself. This is intentionally
+    // conservative until MeshCore sender identity is cryptographically tied to a
+    // callsign/contact record.
+    const s = uc(`${text}`);
+    let token = "";
+    for (let i = 0; i <= length(s); i++) {
+        const b = i < length(s) ? ord(s, i) : 32;
+        if (isTokenChar(b)) {
+            token += chr(b);
+            continue;
+        }
+        if (length(token) > 0) {
+            if (match(token, US_CALLSIGN_RE)) {
+                return token;
+            }
+            token = "";
+        }
+    }
+    return null;
+};
+
+function senderCallsignFromBridgeText(msg)
+{
+    return senderCallsignFromMessageText(msg?.data?.text_message);
+}
 
 function loadAllowed(list)
 {
@@ -141,12 +179,13 @@ export function filterInboundBridge(msg)
     if (msg.from === node.id() && msg.originating_callsign === gateway_callsign) {
         return msg;
     }
-    const sender = msg.data && msg.data.text_from ? allowSenderCallsign(msg.data.text_from) : allowSenderNode(msg.from);
+
+    const sender = allowSenderCallsign(senderCallsignFromBridgeText(msg));
     if (!sender) {
+        DEBUG1("gatekeeper: drop, sender callsign not found in message text\n");
         return null;
     }
 
-    // Phase 3: Group message weak-identity tagging for AREDN bridge
     if (msg.metadata && msg.metadata.is_group_message && msg.metadata.symmetric_key) {
         return annotateGroupViaGateway(msg, sender);
     }
@@ -154,9 +193,9 @@ export function filterInboundBridge(msg)
     return annotateViaGateway(msg, sender);
 };
 
-// Phase 3: Format group messages with weak-identity tag for Part 97 compliance
 // Group messages use symmetric pre-shared keys — sender proves membership,
-// not individual identity. Tag outbound format: [CALL@MCGW-GroupName via GW]
+// not individual identity. Until a stronger MeshCore identity binding exists,
+// Strict Gatekeeper requires the sender callsign to be present in the text body.
 export function annotateGroupViaGateway(msg, sender_callsign)
 {
     if (!strict_enabled) {
@@ -184,9 +223,6 @@ export function annotateGroupViaGateway(msg, sender_callsign)
            sender_callsign, groupName, gateway_callsign);
     return msg;
 };
-
-// NEW (Phase 4): Per-channel callsign access control
-// Enforce channel-level ACLs (allowlist/denylist with wildcard patterns)
 
 function simpleWildcardMatch(text, pattern)
 {
@@ -299,10 +335,10 @@ export function enforceChannelAccess(msg, namekey, config)
         return msg;
     }
 
-    const sender_callsign = allowSenderCallsign((msg.data && msg.data.text_from) ? msg.data.text_from : senderCallsignFromNodeId(msg.from));
+    const sender_callsign = allowSenderCallsign(senderCallsignFromBridgeText(msg));
 
     if (!sender_callsign) {
-        DEBUG0("gatekeeper: channel access DENIED (no callsign) channel=%s from=%08x\n",
+        DEBUG0("gatekeeper: channel access DENIED (no callsign in text) channel=%s from=%08x\n",
                namekey, msg.from);
         return null;
     }
