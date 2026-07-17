@@ -1,10 +1,19 @@
 # MeshCore Companion TCP Backend
 
-Status: **Crow-side backend direction**.
+Status: **Crow-side MeshCore Companion API backend direction**.
 
 Crow's MeshCore TCP backend is `meshcore_tcp_api.uc`.
 
 This backend is for the MeshCore **Companion binary API over TCP**. It is the message-bridge API for Crow.
+
+## App goal
+
+Crow should use the connected MeshCore node as a bridge device to:
+
+1. monitor frames from the MeshCore node for messages on the MeshCore public channel and user-added/mapped channels;
+2. send Crow messages out through those MeshCore channels;
+3. receive direct messages delivered to the connected MeshCore node and create a direct-message thread for the sender;
+4. avoid becoming a blind bridge for unrelated LoRa traffic.
 
 ## Rule
 
@@ -12,9 +21,9 @@ Use the Companion TCP API for normal MeshCore message integration:
 
 - direct message receive;
 - channel/group message receive;
-- direct message transmit;
 - channel/group message transmit;
 - queued message draining;
+- future direct-message transmit once contact public-key routing is implemented;
 - future ACK/routing behavior;
 - future diagnostics/status/control when available through Companion commands.
 
@@ -37,6 +46,8 @@ Crow startup frame currently used for app start:
 3c0c00010000000000000043726f77
 ```
 
+This exact frame has been hardware-validated against the current RAK/Companion test node.
+
 ## Receive queue flow
 
 Messages do **not** simply flow as an unbounded stream.
@@ -46,14 +57,81 @@ The Companion API uses a push-notify plus pull/drain model:
 ```text
 0x83  message waiting push
 0x0A  Crow requests next queued message
-0x07  direct/contact message
-0x08  channel/group message
+0x07  direct/contact message v1
+0x08  channel/group message v1
 0x10  direct/contact message v3
 0x11  channel/group message v3
 0x0A  no more queued messages
 ```
 
-Crow should keep requesting queued messages until the no-more-messages response is received, but it must do so with backpressure.
+Crow keeps requesting queued messages until the no-more-messages response is received, but it does so with backpressure.
+
+## Parser model
+
+The backend now mirrors the MeshCoreOne-style separation more closely:
+
+```text
+TCP frame extraction
+  -> response code classification
+  -> direct/channel parser
+  -> normalized Crow message
+  -> router scope filter
+  -> textmessage inbox storage
+```
+
+Supported message decode paths:
+
+```text
+0x07 direct/contact message v1
+0x08 channel/group message v1
+0x10 direct/contact message v3
+0x11 channel/group message v3
+```
+
+The backend keeps a legacy fallback parser for earlier Crow tests/hardware assumptions, but the primary parser follows the Companion message layouts used by MeshCoreOne:
+
+```text
+Direct v3:
+  SNR, reserved, sender prefix, path length, text type, timestamp, text
+
+Channel v3:
+  SNR, reserved, channel index, path length, text type, timestamp, text
+```
+
+Direct messages are normalized as local direct messages:
+
+```text
+namekey = DirectMessages <sender-id>
+metadata.local_direct = true
+```
+
+Channel messages keep their MeshCore channel index / group slot so router scope can allow the public channel and user-added/mapped channels while dropping unmapped slots.
+
+## Known non-message frames
+
+The backend no longer treats all non-message frames as unknown. It counts known Companion push/misc frames and rate-limits logs.
+
+Important example:
+
+```text
+0x88 = log data
+```
+
+`0x88` frames are normal device log frames. They are counted but not logged repeatedly, preventing the AREDN node UI from being slowed by log spam.
+
+Telemetry fields include:
+
+```text
+log_data_frames
+trace_data_frames
+telemetry_response_frames
+binary_response_frames
+control_data_frames
+message_sent_frames
+ack_frames
+unknown_frames
+unknown_frames_suppressed
+```
 
 ## Backpressure
 
@@ -100,6 +178,32 @@ sync_request_in_flight
 sync_paused_backpressure
 ```
 
+## Channel send
+
+Crow can now send text out through MeshCore channel slots using:
+
+```text
+CMD_SEND_CHANNEL_MESSAGE = 0x03
+```
+
+Payload format:
+
+```text
+byte 0       text type, 0x00 plain text
+byte 1       channel index
+bytes 2-5    Unix timestamp, uint32 little-endian
+bytes 6+     UTF-8 text
+```
+
+The backend resolves channel index in this order:
+
+1. `msg.group_slot` or `msg.channel_index` when already present;
+2. runtime `discoveredChannels` map;
+3. explicit `meshcore_tcp_api.channel_slots` / `channel_map` config;
+4. public/default MeshCore channel -> slot `0`.
+
+Direct-message send is still intentionally not implemented until contact public-key prefix management and ACK correlation are completed.
+
 ## Channel discovery notifications
 
 The backend can request MeshCore Companion channel info using:
@@ -109,7 +213,9 @@ CMD_GET_CHANNEL        = 0x1F
 RESP_CODE_CHANNEL_INFO = 0x12
 ```
 
-When `meshcore_tcp_api.channel_discovery=true`, Crow requests channel slots `0` through `7` after self-info is received and again on the refresh timer.
+When `meshcore_tcp_api.channel_discovery=true`, Crow requests channel slots `0` through `15` after self-info is received and again on the refresh timer.
+
+Discovery is paced one request at a time instead of blasting all slots at once.
 
 Example config:
 
@@ -129,7 +235,7 @@ Example config:
 }
 ```
 
-Channel discovery is runtime-only in this pass. It does not write Crow config and does not auto-map MeshCore group slots.
+Channel discovery is runtime-only in this pass. It does not write Crow config. It maps a discovered channel slot only when that channel is already one of Crow's local channels. New/unknown channel discoveries notify the operator, but do not silently join or persist the channel.
 
 When a new or changed channel is discovered, the backend emits an operator notification through Crow's existing websocket command-reply path:
 
@@ -143,22 +249,29 @@ Telemetry fields:
 
 ```text
 channel_discovery
+channel_scans
 channel_discovery_requests
 channel_info_responses
+channel_discovery_timeouts
 channels_discovered
 channels_updated
 ```
 
 ## Direct-message acceptance TODO
 
-Current first-pass behavior accepts direct frames from the connected MeshCore Companion TCP API as local direct messages because they come from that radio's local API queue.
+Current behavior accepts direct frames from the connected MeshCore Companion TCP API as local direct messages because they come from that radio's local API queue. The backend sets:
+
+```text
+metadata.local_direct = true
+namekey = DirectMessages <sender-id>
+```
 
 This should be improved before production use:
 
-1. Parse or query the connected MeshCore device/node id from Companion self-info or another Companion command.
-2. Mark `metadata.local_direct=true` only when the direct message destination matches that connected device id.
-3. Update `router.uc` to prefer `metadata.local_direct` over backend-name trust.
-4. Keep the current TCP backend direct acceptance only as a compatibility fallback during hardware validation.
+1. Store the connected MeshCore device public key/prefix from self-info.
+2. Add a Companion query if needed to confirm local destination identity.
+3. Prefer `metadata.local_direct=true` set by verified backend identity over router backend-name trust.
+4. Keep current TCP backend direct acceptance as a compatibility fallback during hardware validation.
 
 ## Future command/status API
 
@@ -177,42 +290,6 @@ Rules for that future backend:
 - it must not carry normal MeshCore message traffic;
 - it must not be selected by default;
 - it must be documented separately.
-
-## Config
-
-Default MeshCore remains UDP:
-
-```json
-{
-  "meshcore": {
-    "enabled": true
-  }
-}
-```
-
-Experimental Companion TCP API:
-
-```json
-{
-  "meshcore": {
-    "enabled": false
-  },
-  "meshcore_tcp_api": {
-    "enabled": true,
-    "host": "127.0.0.1",
-    "port": 4403,
-    "max_pending_rx": 4,
-    "channel_discovery": true,
-    "channel_refresh_seconds": 600
-  }
-}
-```
-
-Expected selector log in API mode:
-
-```text
-meshcore_backend: selected tcp backend
-```
 
 ## Validation note
 
@@ -240,14 +317,24 @@ Message reception validation should confirm:
 
 - `0x83` is treated as a notification, not a message payload;
 - Crow sends `0x0A` to request the next queued message;
-- direct/group messages are decoded and queued;
+- direct v1/v3 messages decode into `DirectMessages <sender>`;
+- channel v1/v3 messages decode with a channel index / group slot;
+- channel messages on slot `0` reach the MeshCore public channel;
+- mapped user-added channel slots reach the mapped local channel;
 - Crow stops when `0x0A` no-more-messages is received;
 - `sync_backpressure` remains low during normal use;
 - `pending_rx` does not grow without bound.
 
+Channel send validation should confirm:
+
+- sending to the MeshCore public channel uses slot `0`;
+- sending to a discovered/mapped channel uses that channel index;
+- direct send reports not implemented rather than silently dropping;
+- `sends_ok` / `sends_failed` telemetry changes correctly.
+
 Channel discovery validation should confirm:
 
-- `channel_discovery=true` sends `CMD_GET_CHANNEL` for slots `0` through `7`;
+- `channel_discovery=true` sends paced `CMD_GET_CHANNEL` requests for slots `0` through `15`;
 - `RESP_CODE_CHANNEL_INFO` increments `channel_info_responses`;
 - a new channel increments `channels_discovered`;
 - a changed channel increments `channels_updated`;
