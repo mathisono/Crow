@@ -13,17 +13,18 @@ Crow should use the connected MeshCore node as a bridge device to:
 1. monitor frames from the MeshCore node for messages on the MeshCore public channel and user-added/mapped channels;
 2. send Crow messages out through those MeshCore channels;
 3. receive direct messages delivered to the connected MeshCore node and create a direct-message thread for the sender;
-4. avoid becoming a blind bridge for unrelated LoRa traffic.
+4. send direct replies when the sender's MeshCore public-key prefix has been learned from an inbound direct message;
+5. avoid becoming a blind bridge for unrelated LoRa traffic.
 
 ## Rule
 
 Use the Companion TCP API for normal MeshCore message integration:
 
 - direct message receive;
+- direct message transmit when the destination public-key prefix is known;
 - channel/group message receive;
 - channel/group message transmit;
 - queued message draining;
-- future direct-message transmit once contact public-key routing is implemented;
 - future ACK/routing behavior;
 - future diagnostics/status/control when available through Companion commands.
 
@@ -105,6 +106,8 @@ namekey = DirectMessages <sender-id>
 metadata.local_direct = true
 ```
 
+On direct receive, Crow stores the sender's 6-byte MeshCore public-key prefix in `nodedb` so later direct replies can be sent with `CMD_SEND_MESSAGE`.
+
 Channel messages keep their MeshCore channel index / group slot so router scope can allow the public channel and user-added/mapped channels while dropping unmapped slots.
 
 ## Known non-message frames
@@ -180,7 +183,7 @@ sync_paused_backpressure
 
 ## Channel send
 
-Crow can now send text out through MeshCore channel slots using:
+Crow can send text out through MeshCore channel slots using:
 
 ```text
 CMD_SEND_CHANNEL_MESSAGE = 0x03
@@ -202,7 +205,60 @@ The backend resolves channel index in this order:
 3. explicit `meshcore_tcp_api.channel_slots` / `channel_map` config;
 4. public/default MeshCore channel -> slot `0`.
 
-Direct-message send is still intentionally not implemented until contact public-key prefix management and ACK correlation are completed.
+## Direct send
+
+Crow can send direct text through MeshCore TCP when it has learned the target's public-key prefix from a prior inbound direct message.
+
+Command:
+
+```text
+CMD_SEND_MESSAGE = 0x02
+```
+
+Payload format:
+
+```text
+byte 0       text type, 0x00 plain text
+byte 1       retry attempt, currently 0 unless set on msg metadata
+bytes 2-5    Unix timestamp, uint32 little-endian
+bytes 6-11   destination public-key prefix, 6 bytes
+bytes 12+    UTF-8 text
+```
+
+If the prefix is not known, Crow fails the direct send safely and increments `direct_sends_failed`. This avoids blind or malformed direct sends.
+
+Direct-send telemetry:
+
+```text
+direct_sends_ok
+direct_sends_failed
+channel_sends_ok
+channel_sends_failed
+sends_ok
+sends_failed
+```
+
+## Strict Gatekeeper identity rule
+
+For the current pass, Strict Gatekeeper requires the sender callsign to appear in the bridged message text itself. Node names and stored contact metadata are not treated as sufficient identity for bridge forwarding yet.
+
+Examples expected to pass callsign extraction:
+
+```text
+KJ6DZB radio check
+radio check KJ6DZB
+[KJ6DZB] radio check
+```
+
+Examples expected to drop when Strict Gatekeeper is enabled:
+
+```text
+radio check
+net control here
+unknown sender test
+```
+
+This conservative behavior applies to both direct and channel/group bridge ingress. Once MeshCore identity can be strongly tied to contacts/callsigns, this rule can be relaxed deliberately.
 
 ## Channel discovery notifications
 
@@ -257,22 +313,6 @@ channels_discovered
 channels_updated
 ```
 
-## Direct-message acceptance TODO
-
-Current behavior accepts direct frames from the connected MeshCore Companion TCP API as local direct messages because they come from that radio's local API queue. The backend sets:
-
-```text
-metadata.local_direct = true
-namekey = DirectMessages <sender-id>
-```
-
-This should be improved before production use:
-
-1. Store the connected MeshCore device public key/prefix from self-info.
-2. Add a Companion query if needed to confirm local destination identity.
-3. Prefer `metadata.local_direct=true` set by verified backend identity over router backend-name trust.
-4. Keep current TCP backend direct acceptance as a compatibility fallback during hardware validation.
-
 ## Future command/status API
 
 If a diagnostic or status feature cannot be provided through the Companion API, document that gap first.
@@ -325,12 +365,21 @@ Message reception validation should confirm:
 - `sync_backpressure` remains low during normal use;
 - `pending_rx` does not grow without bound.
 
-Channel send validation should confirm:
+Send validation should confirm:
 
 - sending to the MeshCore public channel uses slot `0`;
 - sending to a discovered/mapped channel uses that channel index;
-- direct send reports not implemented rather than silently dropping;
-- `sends_ok` / `sends_failed` telemetry changes correctly.
+- receiving a direct message stores a MeshCore public-key prefix for the sender;
+- replying to that direct thread sends `CMD_SEND_MESSAGE 0x02`;
+- direct send without a learned prefix fails safely and increments `direct_sends_failed`;
+- `direct_sends_ok` / `channel_sends_ok` / failure counters change correctly.
+
+Strict Gatekeeper validation should confirm:
+
+- messages containing a valid callsign in the body pass, subject to whitelist/ACLs;
+- messages without a callsign in the body drop when strict mode is enabled;
+- group/channel messages use the body callsign for weak gateway attribution;
+- node names alone do not satisfy strict identity in this pass.
 
 Channel discovery validation should confirm:
 
