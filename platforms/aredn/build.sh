@@ -6,6 +6,11 @@ VERSION=${VER}-${REL}
 
 ROOT=/tmp/crow-build-$$
 SRC=$(dirname $0)/../..
+if command -v mkapk.py >/dev/null 2>&1; then
+    MKAPK=$(command -v mkapk.py)
+else
+    MKAPK=$SRC/tools/mkapk.py
+fi
 
 rm -rf $ROOT/
 
@@ -85,11 +90,15 @@ mv $ROOT/crow_${VERSION}_all.ipk .
 # Make APK
 #
 rm -f ./crow-*.apk
+if [ ! -x "$MKAPK" ]; then
+    echo "mkapk.py not found and vendored fallback is not executable: $MKAPK" >&2
+    exit 1
+fi
 cp $SRC/platforms/aredn/postinstall $ROOT/data/.post-install
 cp $SRC/platforms/aredn/prerm $ROOT/data/.pre-deinstall
 cp $SRC/platforms/aredn/postupgrade $ROOT/data/.post-upgrade
 chmod 755 $ROOT/data/.post-install $ROOT/data/.pre-deinstall $ROOT/data/.post-upgrade
-mkapk.py \
+"$MKAPK" \
     -n crow \
     -v ${VER} \
     -d ${ROOT}/data \
