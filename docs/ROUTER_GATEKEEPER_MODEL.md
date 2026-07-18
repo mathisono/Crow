@@ -27,7 +27,7 @@ User-added channels may be added through the UI or slash commands. Once present 
 
 UDP backends can hear traffic that is not addressed to the local Crow bridge device. Therefore UDP direct frames must be addressed to Crow's local node/device identity before the router accepts them.
 
-TCP/API backends are different. A TCP API backend is connected to a specific external radio/device API. Direct messages surfaced by that connected API are treated as local direct messages for this bridge path once the backend has verified the bridge identity.
+TCP/API backends are different. A TCP API backend is connected to a specific external radio/device API. Direct messages surfaced by that connected API are treated as local direct messages for this bridge path.
 
 Current TCP API local-direct behavior:
 
