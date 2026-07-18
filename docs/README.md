@@ -136,6 +136,7 @@ Covers common issues:
 │
 ├─ BACKEND_COMPLIANCE_PLAN.md (developer)
 ├─ MESHTASTIC_TCP_PORT_API_BACKEND.md (developer)
+├─ MESHCORE_TCP_DIRECT_VERIFICATION_NOTES.md (developer)
 └─ MESHCORE_TCP_API_BACKEND.md (developer)
 ```
 
