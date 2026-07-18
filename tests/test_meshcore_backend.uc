@@ -33,4 +33,4 @@ function assert(condition, message)
     assert(config.channels[0].label === "MeshCore~Public", "public label");
 }
 
-printf("\n✅ MeshCore backend selector defaults OK\n");
+printf("\nMeshCore backend selector defaults OK\n");

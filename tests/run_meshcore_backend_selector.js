@@ -43,5 +43,8 @@ if (uc.error && uc.error.code !== 'ENOENT') {
 if (uc.error && uc.error.code === 'ENOENT') {
     console.log('ucode not found; skipped canonical .uc test');
 }
+else if (uc.status !== 0) {
+    process.exit(uc.status);
+}
 
 process.exit(failures > 0 ? 1 : 0);
