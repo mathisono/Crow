@@ -1,5 +1,6 @@
 import * as udp from "meshcore";
 import * as api from "meshcore_tcp_api";
+import * as serialApi from "meshcore_serial_api";
 import * as channel from "channel";
 
 let active = null;
@@ -27,13 +28,20 @@ function wantsApi(config)
     return false;
 }
 
+function wantsSerial(config)
+{
+    const mode = config.meshcore?.backend ?? config.meshcore?.transport;
+    return (mode === "serial" || mode === "serial-api") &&
+        config.meshcore_serial_api?.enabled === true;
+}
+
 function wantsUdp(config)
 {
     if (!config.meshcore) {
         return false;
     }
     const mode = config.meshcore?.backend ?? config.meshcore?.transport;
-    if (mode === "api" || mode === "tcp" || mode === "tcp-api" || mode === "companion-api") {
+    if (mode === "api" || mode === "tcp" || mode === "tcp-api" || mode === "companion-api" || mode === "serial" || mode === "serial-api") {
         return false;
     }
     return config.meshcore.enabled !== false;
@@ -46,21 +54,41 @@ function hasTcpConfig(config)
         config.meshcore_tcp_api?.enabled === true;
 }
 
+function hasSerialConfig(config)
+{
+    const mode = config.meshcore?.backend ?? config.meshcore?.transport;
+    return mode === "serial" || mode === "serial-api" || config.meshcore_serial_api?.enabled === true;
+}
+
 function hasUdpConfig(config)
 {
     return !!config.meshcore && config.meshcore.enabled !== false;
 }
 
-function ensureDefaultChannel(config, namekey, label)
+function meshcoreBackendLabel(transport)
+{
+    if (transport === "udp") return "meshcore-udp[udp]";
+    if (transport === "serial") return "MeshCore USB Serial Companion API";
+    return "meshcore-tcp[tcp]";
+}
+
+function ensureDefaultChannel(config, namekey, label, backend)
 {
     if (!config.channels) config.channels = [];
     for (let i = 0; i < length(config.channels); i++) {
         if (config.channels[i].namekey === namekey) {
             config.channels[i].label = label;
+            if (backend != null) {
+                config.channels[i].backend = backend;
+            }
             return;
         }
     }
-    push(config.channels, { namekey: namekey, label: label });
+    const chan = { namekey: namekey, label: label };
+    if (backend != null) {
+        chan.backend = backend;
+    }
+    push(config.channels, chan);
 }
 
 function candidateStatus(key, label, transport, configured, isActive, host, port)
@@ -121,12 +149,18 @@ export function setup(config)
     activeName = null;
     enabled = false;
 
-    if (wantsApi(config)) {
+    serialApi.setup(config);
+
+    if (wantsSerial(config)) {
+        active = serialApi;
+        activeName = "serial";
+    }
+    else if (wantsApi(config)) {
         active = api;
         activeName = "tcp";
     }
     else if (wantsUdp(config)) {
-        ensureDefaultChannel(config, channel.meshcorePublicChannelNamekey(), "MeshCore~Public");
+        ensureDefaultChannel(config, channel.meshcorePublicChannelNamekey(), "MeshCore~Public", "meshcore.udp");
         active = udp;
         activeName = "udp";
     }
@@ -192,7 +226,7 @@ export function backendStatus()
 
     push(out, candidateStatus(
         "meshcore.udp",
-        "MeshCore UDP multicast",
+        meshcoreBackendLabel("udp"),
         "udp",
         hasUdpConfig(cfg),
         activeName === "udp" && enabled,
@@ -200,9 +234,23 @@ export function backendStatus()
         4402
     ));
 
+    const serialDetail = serialApi.status ? serialApi.status() : {};
+    push(out, {
+        family: "meshcore", key: "meshcore.serial",
+        label: "MeshCore USB Serial Companion API", transport: "serial",
+        device: cfg.meshcore_serial_api?.device ?? "/dev/ttyACM0",
+        baud: cfg.meshcore_serial_api?.baud ?? 115200,
+        configured: hasSerialConfig(cfg),
+        active: activeName === "serial" && enabled,
+        state: serialDetail.state ?? "not-configured",
+        pending_rx: serialDetail.pending_rx ?? 0,
+        max_pending_rx: cfg.meshcore_serial_api?.max_pending_rx ?? 4,
+        channel_discovery: cfg.meshcore_serial_api?.channel_discovery === true
+    });
+
     push(out, candidateStatus(
         "meshcore.tcp",
-        "MeshCore TCP Companion API",
+        meshcoreBackendLabel("tcp"),
         "tcp",
         hasTcpConfig(cfg),
         activeName === "tcp" && enabled,
@@ -210,5 +258,18 @@ export function backendStatus()
         cfg.meshcore_tcp_api?.port ?? 4403
     ));
 
+    return out;
+};
+
+export function getBackendNames()
+{
+    const out = [];
+    const status = backendStatus();
+    for (let i = 0; i < length(status); i++) {
+        const b = status[i];
+        if (b.configured || b.active) {
+            push(out, { key: b.key, label: b.label });
+        }
+    }
     return out;
 };
