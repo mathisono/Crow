@@ -55,7 +55,8 @@ You should see an empty chat interface and a **Channels** section.
 
 - If you have a **MeshCore device**:
   - Go to **Settings** → **MeshCore**
-  - Leave defaults (UDP multicast) enabled
+  - Leave defaults (UDP multicast) enabled, or switch to TCP Companion API if
+    you want the direct bridge path
   - Click **Save**
 
 Crow will discover channels automatically. You should see them in the **Channels** panel within a few seconds.
@@ -117,7 +118,7 @@ Crow Node
 │   └── TCP API (opt-in, recommended)
 ├── MeshCore Backend
 │   ├── UDP (multicast, default)
-│   └── TCP API (future)
+│   └── TCP Companion API (opt-in, recommended)
 ├── Channel Discovery
 │   └── Auto-sync from radio
 ├── Gatekeeper (ACL/anti-spam)
@@ -144,7 +145,7 @@ You can switch to **TCP Port-API** mode, which connects directly to your radio a
 
 - **Channel discovery**: Auto-sync channel list from radio
 - **Cleaner logs**: See backend selection messages
-- **Future features**: Direct radio config (coming soon)
+- **Direct radio control**: Better access to radio-side config and telemetry
 
 **To enable TCP Meshtastic:**
 
@@ -155,6 +156,10 @@ You can switch to **TCP Port-API** mode, which connects directly to your radio a
 5. Save
 
 Crow will connect and discover your channels within a few seconds.
+
+For MeshCore, use the TCP Companion API path instead of the UDP default when
+you want direct queue draining, channel discovery, and direct-message
+verification.
 
 For details, see [Backend Selection Guide](BACKEND_SELECTION.md).
 

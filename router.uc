@@ -227,10 +227,15 @@ function isDirectForLocalBridgeDevice(msg)
     }
 
     // TCP API backends surface packets from the connected radio/device queue.
-    // Marked local-direct messages, or non-group direct-looking TCP API frames,
-    // are treated as direct-to-this-bridge even when the external radio's node id
-    // does not equal Crow's native AREDN node id.
-    if (msg.metadata?.local_direct || (isTcpApiIngress(msg) && !msg.channel)) {
+    // Prefer explicit backend verification; keep the queue-origin fallback only
+    // for frames that have not supplied a verifiable destination yet.
+    if (msg.metadata?.local_direct) {
+        return true;
+    }
+    if (msg.metadata?.direct_identity_verified === true) {
+        return false;
+    }
+    if (isTcpApiIngress(msg) && !msg.channel) {
         return true;
     }
 

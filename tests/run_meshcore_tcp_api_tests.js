@@ -26,10 +26,13 @@ const CMD_ENCRYPTED_BIN = 0x91;
 const CMD_UNKNOWN = 0x77;
 
 const PART97_BLOCKED_COMMANDS = new Set([CMD_ENCRYPTED_DM, CMD_ENCRYPTED_BIN]);
+let meshcoreSelfId = null;
+const directIdentityStats = { verified: 0, mismatch: 0, unverified: 0 };
 
 function isDirect(code) { return code === RESP_DIRECT_MSG_RECV || code === RESP_DIRECT_MSG_RECV_V3; }
 function isGroup(code) { return code === RESP_CHANNEL_MSG_RECV || code === RESP_CHANNEL_MSG_RECV_V3; }
 function isMessage(code) { return isDirect(code) || isGroup(code); }
+function sameU32(a, b) { return (a >>> 0) === (b >>> 0); }
 
 class SmartAccumulator {
     constructor(gatekeeper) {
@@ -168,13 +171,26 @@ function decodeTextFrame(cmd, payload) {
         const tlen = payload[8];
         const text = payload.subarray(9, 9 + tlen).toString('utf8').replace(/\0+$/, '');
         if (!text.length) return null;
+        const verified = meshcoreSelfId !== null && meshcoreSelfId !== undefined;
+        const localDirect = verified ? sameU32(toId, meshcoreSelfId) : true;
+        if (verified) {
+            directIdentityStats.verified++;
+            if (!localDirect) directIdentityStats.mismatch++;
+        } else {
+            directIdentityStats.unverified++;
+        }
         return {
             from: fromId,
             to: toId,
             transport: 'meshcore',
             backend: 'tcp_api',
             data: { text_message: text },
-            metadata: { is_group_message: false, meshcore_response_code: cmd }
+            metadata: {
+                is_group_message: false,
+                local_direct: localDirect,
+                direct_identity_verified: verified,
+                meshcore_response_code: cmd
+            }
         };
     }
     if (isGroup(cmd)) {
@@ -243,6 +259,11 @@ const STRICT_OFF = { isEnabled: () => false };
 }
 {
     const a = new SmartAccumulator(STRICT_ON);
+    a.inject(Buffer.from([FRAME_FROM_RADIO, 0x01, 0x01]));
+    check('boundary 257 rejected', a.stats.early_drop_oversize, 1);
+}
+{
+    const a = new SmartAccumulator(STRICT_ON);
     a.inject(buildRadioFrame(CMD_ENCRYPTED_DM, Buffer.alloc(16)));
     check('encrypted strict drop', a.stats.early_drop_encrypted, 1);
 }
@@ -281,6 +302,37 @@ const STRICT_OFF = { isEnabled: () => false };
     const msg = decodeTextFrame(RESP_DIRECT_MSG_RECV, directPayload(0xCAFEBABE, 0, 'hi'));
     check('decode direct text', msg?.data?.text_message, 'hi');
     check('decode direct group flag', msg?.metadata?.is_group_message, false);
+    check('decode direct unverified accepted', msg?.metadata?.local_direct, true);
+    check('decode direct identity unverified', msg?.metadata?.direct_identity_verified, false);
+    check('decode direct unverified stat', directIdentityStats.unverified, 1);
+}
+{
+    meshcoreSelfId = 0x55667788;
+    const match = decodeTextFrame(RESP_DIRECT_MSG_RECV, directPayload(0xCAFEBABE, 0x55667788, 'for me'));
+    const mismatch = decodeTextFrame(RESP_DIRECT_MSG_RECV, directPayload(0xCAFEBABE, 0x11111111, 'not me'));
+    check('decode direct verified match accepted', match?.metadata?.local_direct, true);
+    check('decode direct verified match marked', match?.metadata?.direct_identity_verified, true);
+    check('decode direct verified mismatch not local', mismatch?.metadata?.local_direct, false);
+    check('decode direct verified mismatch marked', mismatch?.metadata?.direct_identity_verified, true);
+    check('decode direct verified stat', directIdentityStats.verified, 2);
+    check('decode direct mismatch stat', directIdentityStats.mismatch, 1);
+    meshcoreSelfId = null;
+}
+{
+    meshcoreSelfId = 0xF5667788;
+    const msg = decodeTextFrame(RESP_DIRECT_MSG_RECV, directPayload(0xCAFEBABE, 0xF5667788, 'high id'));
+    check('decode direct high-bit id accepted', msg?.metadata?.local_direct, true);
+    check('decode direct high-bit id to', msg?.to, 0xF5667788);
+    check('decode direct verified stat high-bit', directIdentityStats.verified, 3);
+    meshcoreSelfId = null;
+}
+{
+    meshcoreSelfId = 0;
+    const msg = decodeTextFrame(RESP_DIRECT_MSG_RECV, directPayload(0xCAFEBABE, 0, 'zero id'));
+    check('decode direct zero self id accepted', msg?.metadata?.local_direct, true);
+    check('decode direct zero self id verified', msg?.metadata?.direct_identity_verified, true);
+    check('decode direct verified stat zero id', directIdentityStats.verified, 4);
+    meshcoreSelfId = null;
 }
 {
     const msg = decodeTextFrame(RESP_CHANNEL_MSG_RECV, groupPayload(0xDEADBEEF, 5, 'yo'));

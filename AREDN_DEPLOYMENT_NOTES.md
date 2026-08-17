@@ -1,8 +1,10 @@
-# AREDN Deployment Notes - Module Resolution Fix
+# AREDN Deployment Notes - Module Resolution History
 
 **Date:** 2026-06-20  
 **Issue:** Module resolution on AREDN's ucode interpreter  
-**Status:** ✅ SOLVED - Documented workaround & permanent fix implemented
+**Status:** Historical note. The current branch restored `import`/`export`
+module flow in commit `778433f`; do not treat the older `require()` conversion
+below as the current source layout.
 
 ---
 
@@ -19,7 +21,7 @@ This occurs because the ucode module loader can't resolve custom import paths ou
 
 ---
 
-## Solution 1: Symlink + Require() (Recommended for Production)
+## Historical Solution 1: Symlink + Require()
 
 ### Step 1: Install package
 
@@ -37,9 +39,11 @@ ln -sf /usr/local/crow/*.uc /usr/share/ucode/
 ls -la /usr/share/ucode/ | grep crow
 ```
 
-### Step 3: Router will auto-load with require()
+### Step 3: Router loaded with require()
 
-The package includes source code converted from ES6 `import` to `require()` statements, which work with AREDN's ucode when modules are in `/usr/share/ucode/`.
+Older packages briefly included source code converted from ES6 `import` to
+`require()` statements, which worked with AREDN's ucode when modules were in
+`/usr/share/ucode/`. Current source files use `import`/`export` again.
 
 ### Step 4: Restart service
 
@@ -66,9 +70,10 @@ sh -c 'export UCODE_REQUIRE_PATH="/usr/share/ucode/?.uc:/usr/local/crow/?.uc" &&
 
 ---
 
-## What Changed in 0.0.2
+## Historical 0.0.2 Experiment
 
-All `.uc` files now use `require()` instead of ES6 `import`:
+Commit `78b7d36` converted all `.uc` files to `require()` instead of ES6
+`import`:
 
 **Before:**
 ```javascript
@@ -82,13 +87,17 @@ const meshtastic = require("meshtastic_backend");
 const meshcore = require("meshcore_backend");
 ```
 
-**Why:** AREDN's ucode doesn't support ES6 module syntax, only require().
+**Why:** At the time, AREDN's ucode compatibility looked like it required
+CommonJS-style loading.
+
+Commit `778433f` later restored `import`/`export` module flow and adjusted the
+AREDN init path instead.
 
 ---
 
-## Verification on Hub5 (AREDN 4.26.1.0)
+## Historical Verification on Hub5 (AREDN 4.26.1.0)
 
-✅ **Tested & Verified:**
+The temporary `require()` layout was tested with:
 
 ```bash
 # Direct ucode test
@@ -99,7 +108,7 @@ ucode -c 'let router = require("router"); print("✅ Router loaded");'
 
 ---
 
-## Deployment Checklist
+## Historical Deployment Checklist
 
 - [ ] Install IPK package
 - [ ] Create symlinks: `ln -sf /usr/local/crow/*.uc /usr/share/ucode/`
@@ -110,7 +119,7 @@ ucode -c 'let router = require("router"); print("✅ Router loaded");'
 
 ---
 
-## Troubleshooting
+## Troubleshooting Notes
 
 ### "Module not found" errors
 
@@ -133,34 +142,36 @@ ucode router.uc
 
 ### "Exports may only appear at top level"
 
-**Cause:** Using old package (pre-require() conversion)  
-**Fix:** Rebuild package from commit `78b7d36` or later
+**Cause:** Module loader/runtime mismatch for the package installed on the node.
+**Fix:** Rebuild from the current branch and confirm the init wrapper/module path
+matches the current import/export layout.
 
 ---
 
 ## Technical Details
 
-### Why require() works on AREDN
+### Why the require() experiment worked on AREDN
 
 - AREDN's ucode has built-in require() function
 - Module path resolution looks in `/usr/share/ucode/` by default
 - Environment variable `UCODE_REQUIRE_PATH` extends search path
 - Symlinks in `/usr/share/ucode/` are discovered by require()
 
-### Why ES6 import doesn't work on AREDN
+### Why import/export needed init wrapper care
 
-- ES6 module syntax is newer ucode feature
-- AREDN's ucode version is from 2023
-- Standard OpenWrt supports ES6 import; AREDN's doesn't
-- Fix: Downgrade to CommonJS require() for compatibility
+- ES module syntax depends on the file being loaded through ucode's module flow.
+- Direct entrypoint execution on AREDN can produce module loader/runtime errors.
+- Current Crow source uses `import`/`export`; rebuild from the current branch and
+  use the restored AREDN init/module path rather than converting source files
+  back to `require()`.
 
 ---
 
 ## Future Improvements
 
-1. **Consider AREDN ucode version upgrade** when available
-   - Newer versions may support ES6 import
-   - Would simplify cross-platform code
+1. **Track AREDN ucode/module behavior** as node firmware versions change
+   - Newer versions may simplify direct ES module entrypoints
+   - Keep package init behavior aligned with the source module layout
 
 2. **Document module path in AREDN ucode changelog**
    - Help future developers understand limitations
@@ -174,13 +185,15 @@ ucode router.uc
 
 ## Files Modified
 
-All 34 `.uc` files in `/home/bill/Crow/*.uc` converted from `import` to `require()`:
+Commit `78b7d36` converted all 34 `.uc` files in `/home/bill/Crow/*.uc` from
+`import` to `require()`:
 - router.uc
 - meshtastic_backend.uc, meshcore_backend.uc
 - meshtastic.uc, meshcore.uc
 - All supporting modules (aprs, channel, commands, etc.)
 
-Commit: `78b7d36` - "fix: convert ES6 import to require() for AREDN ucode compatibility"
+Historical commit: `78b7d36` - "fix: convert ES6 import to require() for AREDN ucode compatibility"
+Current-flow restore: `778433f` - "fix(aredn): restore import/export module flow; remove exports from router entrypoint"
 
 ---
 

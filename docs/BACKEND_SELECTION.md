@@ -16,7 +16,7 @@ Crow can talk to **Meshtastic** and **MeshCore** radios in two ways:
 | **Discovery** | ❌ No channel discovery | ✅ Auto-discovers channels |
 | **Performance** | Local broadcast | Direct connection |
 | **Best for** | Quick setup, simple networks | Advanced users, large networks |
-| **Future-proof** | ⚠️ Limited features coming | ✅ Full feature support |
+| **Capability depth** | Basic bridge mode | Full bridge and radio control path |
 
 ---
 
@@ -40,7 +40,7 @@ UDP multicast broadcasts messages on your local network to **everyone listening*
 
 - ❌ **No channel discovery**: You must manually configure channels
 - ❌ **Blind operation**: Crow doesn't know which channels exist on the radio
-- ❌ **Limited future features**: New features like radio config require TCP
+- ❌ **Limited radio control**: Direct radio config and deeper telemetry require TCP
 
 ### UDP Configuration
 
@@ -85,14 +85,14 @@ Or just enable them and accept defaults—UDP is the default.
 TCP Port-API is a **direct connection** from Crow to your Meshtastic or MeshCore device:
 
 - **Meshtastic**: Port `4403`
-- **MeshCore**: Port `4403`
+- **MeshCore Companion TCP**: Port `4403`
 
 ### Advantages of TCP
 
 - ✅ **Channel discovery**: Crow automatically fetches and syncs channels
 - ✅ **Channel info**: Crow knows channel names, encryption status, member count
 - ✅ **Cleaner operation**: No blind broadcasting
-- ✅ **Future features**: Direct radio config (read/write) coming soon
+- ✅ **Direct radio control**: Better access to radio-side config and telemetry
 - ✅ **Multi-radio**: Can talk to multiple Meshtastic devices independently
 - ✅ **Better logging**: Clear log messages about backend selection
 
@@ -120,7 +120,7 @@ In Crow Settings:
 }
 ```
 
-**MeshCore TCP:**
+**MeshCore TCP / Companion API:**
 ```json
 {
   "meshcore_tcp_api": {
@@ -137,7 +137,7 @@ In Crow Settings:
 - ✅ You're running Crow on a different machine than the radio
 - ✅ Your radio has a static IP
 - ✅ You care about detailed logging
-- ✅ You want to prepare for future Crow features
+- ✅ You want direct radio control and the current MeshCore TCP path
 
 ---
 

@@ -37,7 +37,7 @@ const FRAME_FROM_RADIO         = 0x3E;   // '>'
 const FRAME_TO_RADIO           = 0x3C;   // '<'
 const HEADER_BYTES             = 3;      // marker(1) + length LE(2)
 
-const SMART_MAX_PAYLOAD        = 512;
+const SMART_MAX_PAYLOAD        = 256;
 const RESYNC_BUFFER_CAP        = 4096;
 const MAX_TEXT_MESSAGE_LENGTH  = 200;
 
@@ -176,6 +176,9 @@ let stats            = {
     channel_discovery_timeouts: 0,
     channels_discovered: 0,
     channels_updated: 0,
+    direct_identity_verified: 0,
+    direct_identity_mismatch: 0,
+    direct_identity_unverified: 0,
     log_data_frames: 0,
     trace_data_frames: 0,
     telemetry_response_frames: 0,
@@ -458,8 +461,25 @@ function isMostlyPrintable(s)
 
 function idFromPrefix(prefix)
 {
-    if (!prefix || length(prefix) < 4) return 0;
+    if (!prefix || length(prefix) < 4) return null;
     return u32le(prefix, 0);
+}
+
+function sameU32(a, b)
+{
+    return (a & 0xFFFFFFFF) === (b & 0xFFFFFFFF);
+}
+
+function directDestinationMatchesSelf(toId)
+{
+    if (toId === null || toId === undefined || !meshcoreSelfPublicKeyPrefix) {
+        return null;
+    }
+    const selfId = idFromPrefix(meshcoreSelfPublicKeyPrefix);
+    if (selfId === null || selfId === undefined) {
+        return null;
+    }
+    return sameU32(toId, selfId);
 }
 
 function maxPendingRx()
@@ -818,7 +838,7 @@ function parseSelfInfo(framePayload)
     return null;
 }
 
-function directMsg(fromId, prefix, text, textType, timestamp, snr, pathLen, strong)
+function directMsg(fromId, prefix, text, textType, timestamp, snr, pathLen, strong, toId)
 {
     if (!text || length(text) === 0) {
         return null;
@@ -833,10 +853,20 @@ function directMsg(fromId, prefix, text, textType, timestamp, snr, pathLen, stro
 
     msgSeq = (msgSeq + 1) & 0xFFFFFFFF;
     const namekey = nodedb.namekey(fromId);
+    const directMatch = directDestinationMatchesSelf(toId);
+    if (directMatch === null) {
+        stats.direct_identity_unverified++;
+    }
+    else {
+        stats.direct_identity_verified++;
+        if (!directMatch) {
+            stats.direct_identity_mismatch++;
+        }
+    }
     return {
         id:                   msgSeq,
         from:                 fromId,
-        to:                   0,
+        to:                   toId ?? 0,
         rx_time:              timestamp ?? time(),
         hop_limit:            1,
         transport:            "meshcore",
@@ -848,7 +878,8 @@ function directMsg(fromId, prefix, text, textType, timestamp, snr, pathLen, stro
         },
         metadata: {
             is_group_message: false,
-            local_direct: true,
+            local_direct: directMatch === null ? true : directMatch,
+            direct_identity_verified: directMatch !== null,
             meshcore_sender_prefix: prefix ? b64enc(prefix) : null,
             text_type: textType,
             path_length: pathLen,
@@ -917,7 +948,7 @@ function parseDirectModern(payload, version)
     }
     const text = textClean(substr(payload, off));
     if (!isMostlyPrintable(text)) return null;
-    return directMsg(idFromPrefix(prefix), prefix, text, textType, timestamp, snr, pathLen, true);
+    return directMsg(idFromPrefix(prefix), prefix, text, textType, timestamp, snr, pathLen, true, null);
 }
 
 function parseDirectLegacy(payload)
@@ -929,9 +960,7 @@ function parseDirectLegacy(payload)
     if (9 + tlen > length(payload)) return null;
     const text = textClean(substr(payload, 9, tlen));
     if (!isMostlyPrintable(text)) return null;
-    const msg = directMsg(fromId, null, text, TEXT_TYPE_PLAIN, time(), null, null, true);
-    if (msg) msg.to = toId;
-    return msg;
+    return directMsg(fromId, null, text, TEXT_TYPE_PLAIN, time(), null, null, true, toId);
 }
 
 function parseChannelModern(payload, version)
@@ -1438,6 +1467,9 @@ export function status()
         channel_discovery_timeouts: stats.channel_discovery_timeouts,
         channels_discovered: stats.channels_discovered,
         channels_updated: stats.channels_updated,
+        direct_identity_verified: stats.direct_identity_verified,
+        direct_identity_mismatch: stats.direct_identity_mismatch,
+        direct_identity_unverified: stats.direct_identity_unverified,
         log_data_frames: stats.log_data_frames,
         trace_data_frames: stats.trace_data_frames,
         telemetry_response_frames: stats.telemetry_response_frames,
@@ -1480,6 +1512,11 @@ export function _test_reset()
     meshcoreSelfPublicKey = null;
     meshcoreSelfPublicKeyPrefix = null;
     for (let k in stats) stats[k] = 0;
+};
+
+export function _test_set_self_public_key_prefix(prefix)
+{
+    meshcoreSelfPublicKeyPrefix = prefix;
 };
 
 export function _test_stats()

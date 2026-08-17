@@ -14,7 +14,8 @@ Crow should be Crow-first at runtime and packaging time:
 - Sysupgrade config naming should be generic, not tied to a personal callsign.
 - Raven config import must be schema-aware. Do not blindly copy whole old Raven config files into Crow if the Crow schema changes.
 - Meshtastic should move to a direct TCP Port-API backend.
-- MeshCore cleanup is planned but deferred; do not rework MeshCore in the current Meshtastic pass.
+- MeshCore TCP work is no longer covered by this historical plan; see the
+  current MeshCore TCP backend and direct-verification docs.
 
 ## Current status
 
@@ -28,7 +29,7 @@ Crow should be Crow-first at runtime and packaging time:
 | Sysupgrade naming | **Updated target** | Use a generic sysupgrade config filename such as `crow.conf`. Do not use `KJ6DZB.crow.conf` or another personal callsign. |
 | Raven-to-Crow import | **Schema-aware import required** | Import only compatible Raven keys into the current Crow default config. Do not blindly copy old Raven config wholesale. Runtime data directories can be copied only when Crow paths are missing. |
 | Meshtastic backend | **Current focus** | Build a direct TCP Port-API backend to a Meshtastic ESP32 node, default port `4403`. See `docs/MESHTASTIC_TCP_PORT_API_BACKEND.md`. |
-| MeshCore backend | **On hold** | Keep current `meshcore.uc` UDP backend working. MeshCore TNC/KISS code has been removed from the repo. When MeshCore work resumes, start from a fresh hardware/API assessment. |
+| MeshCore backend | **Moved to current MeshCore TCP docs** | This migration plan is no longer the source of truth for MeshCore TCP. See `docs/MESHCORE_COMPANION_TCP_BACKEND.md` and `docs/MESHCORE_TCP_DIRECT_VERIFICATION.md`. |
 | Build packaging | **Needs validation** | Ensure packages include all required UI/runtime files and do not include stale overlay files once direct UI merge is complete. APK still depends on `mkapk.py` being available in PATH. |
 
 ## UI hardening plan
@@ -212,4 +213,4 @@ Current added planning items:
 7. Use generic sysupgrade config naming.
 8. Make Raven import schema-aware.
 9. Implement Meshtastic direct TCP Port-API backend.
-10. Keep MeshCore work planned but deferred.
+10. MeshCore follow-up moved to the dedicated MeshCore TCP backend docs.

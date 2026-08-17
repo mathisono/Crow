@@ -1,10 +1,16 @@
 # MeshCore TCP Direct-Message Verification TODO
 
-Status: follow-up item for `meshcore_tcp_api.uc` and `router.uc`.
+Status: partially implemented for legacy direct frames in `meshcore_tcp_api.uc`
+and enforced by `router.uc`; modern Companion direct frames still need hardware
+validation because the current parser does not expose an explicit destination id
+for that format.
 
-The current branch accepts MeshCore TCP Companion direct messages as local direct messages because they are surfaced by the connected Companion API device queue.
+Legacy MeshCore TCP direct-message destinations are already verified when the
+connected radio/device identity is known from self-info.
 
-That is acceptable for hardware bring-up, but it should be improved before treating the TCP backend as production-ready.
+Modern Companion direct frames are still accepted as local direct messages
+because they are surfaced by the connected Companion API device queue and this
+Crow-side parser currently only sees the sender prefix, not a destination id.
 
 ## Current behavior
 
@@ -12,13 +18,18 @@ That is acceptable for hardware bring-up, but it should be improved before treat
 transport = meshcore
 backend   = tcp_api
 non-group direct-looking message
-=> router treats it as local direct ingress
+direct_identity_verified = true
+local_direct = false
+=> router drops it
 ```
 
 Reason:
 
 ```text
-Crow is connected to one external MeshCore radio/device Companion API queue, so messages surfaced by that queue are presumed to belong to the connected bridge device.
+Legacy direct frames carry `to`, so Crow compares that destination against the
+id derived from the connected radio/device public-key prefix learned from
+self-info. Frames without an exposed destination keep the existing queue-origin
+fallback for bring-up.
 ```
 
 ## Desired improvement
@@ -27,11 +38,13 @@ Improve the backend so it verifies direct-message destination against the connec
 
 Target design:
 
-1. Learn the connected MeshCore radio/device node id from self-info or an explicit Companion API identity command.
-2. Store that identity in `meshcore_tcp_api.uc`.
-3. Mark `metadata.local_direct = true` only when the decoded direct message destination matches the learned radio/device id.
-4. Update `router.uc` to prefer `metadata.local_direct` instead of trusting only the backend name.
-5. Remove or demote the current backend-name fallback after hardware validation confirms self-id matching works.
+1. Confirm on hardware whether modern Companion direct frames expose the
+   destination id through another command/format variant.
+2. If available, pass that destination into `directMsg()`.
+3. Mark `metadata.local_direct = true` only when the decoded direct message
+   destination matches the learned radio/device id.
+4. Remove or demote the current queue-origin fallback after hardware validation
+   confirms self-id matching works for all direct formats.
 
 ## Validation target
 

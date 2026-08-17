@@ -370,7 +370,6 @@ meshtastic_backend: selected tcp-port-api backend
 Planned for future versions:
 - ⏳ Mute channels
 - ⏳ Persistent message archive
-- ⏳ MeshCore TCP API
 - ⏳ Radio config write (Meshtastic)
 - ⏳ @ mentions
 

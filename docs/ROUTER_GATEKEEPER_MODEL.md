@@ -32,17 +32,27 @@ TCP/API backends are different. A TCP API backend is connected to a specific ext
 Current TCP API local-direct behavior:
 
 ```text
-MeshCore TCP Companion API direct frame  -> local direct
-Meshtastic TCP Port-API direct frame     -> local direct
+MeshCore TCP Companion verified direct match     -> local direct
+MeshCore TCP Companion verified direct mismatch  -> dropped
+MeshCore TCP Companion unverified direct frame   -> local direct fallback
+Meshtastic TCP Port-API direct frame             -> local direct
 ```
 
-TCP/API direct frames are marked with:
+TCP direct frames may be marked with:
 
 ```text
 metadata.local_direct = true
 ```
 
-and the router also recognizes the TCP API backend names as local direct paths.
+MeshCore TCP direct frames that can be verified also include:
+
+```text
+metadata.direct_identity_verified = true
+```
+
+The router prefers `metadata.local_direct`. If a MeshCore TCP direct frame is
+verified and does not match the connected radio/device id, the router drops it
+before falling back to the TCP API backend name.
 
 ## What router drops
 

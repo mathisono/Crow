@@ -336,34 +336,48 @@ Transport type for MeshCore.
 **Defaults:** `"udp"`
 
 **Valid values:**
-- `"udp"` — UDP multicast (only supported currently)
+- `"udp"` — UDP multicast
+- `"tcp"` / `"tcp-api"` / `"api"` / `"companion-api"` — MeshCore Companion TCP API
 
 **Notes:**
-- Currently only UDP multicast is supported
-- TCP API for MeshCore is planned
+- UDP multicast remains the default
+- TCP mode requires `meshcore_tcp_api.enabled=true` or one of the TCP/API
+  transport aliases above
 
 ---
 
-## MeshCore TCP API (Future)
+## MeshCore TCP API
 
-### Placeholder Configuration
+### Configuration
 
 ```json
 {
   "meshcore_tcp_api": {
     "enabled": false,
     "host": "127.0.0.1",
-    "port": 4403
+    "port": 4403,
+    "max_pending_rx": 4,
+    "channel_discovery": true,
+    "channel_refresh_seconds": 600
   }
 }
 ```
 
-**Status:** Not yet implemented
+**Defaults:**
+- `enabled`: `false`
+- `host`: `"127.0.0.1"`
+- `port`: `4403`
+- `max_pending_rx`: `4`
+- `channel_discovery`: `false`
+- `channel_refresh_seconds`: `600`
 
 **Notes:**
-- Configuration structure is reserved
-- Enable when MeshCore TCP API is ready (future version)
-- Same pattern as Meshtastic TCP API
+- This uses the MeshCore Companion binary API over TCP, not a line-oriented
+  command/status API.
+- Direct-message destinations are verified when Companion frames expose a
+  destination id and self-info has provided the connected device identity.
+- Channel discovery is runtime-only in this branch; it does not write Crow
+  config or auto-map MeshCore group slots.
 
 ---
 

@@ -190,6 +190,43 @@ api._test_reset();
     check("decode direct: to",        msg?.to,        0);
     check("decode direct: text",      msg?.data?.text_message, "hi");
     check("decode direct: not group", msg?.metadata?.is_group_message, false);
+    check("decode direct: unverified accepted", msg?.metadata?.local_direct, true);
+    check("decode direct: identity unverified", msg?.metadata?.direct_identity_verified, false);
+    check("decode direct: unverified stat", api._test_stats().direct_identity_unverified, 1);
+}
+
+// ---- 13b. Decoder: legacy direct destination is verified when self id is known
+api._test_reset();
+{
+    api._test_set_self_public_key_prefix(u32le(0x55667788) + "\x00\x00");
+    const match = api._test_decode(RESP_DIRECT_MSG_RECV, directPayload(0xCAFEBABE, 0x55667788, "for me"));
+    const mismatch = api._test_decode(RESP_DIRECT_MSG_RECV, directPayload(0xCAFEBABE, 0x11111111, "not me"));
+    check("decode direct: verified match accepted", match?.metadata?.local_direct, true);
+    check("decode direct: verified match marked", match?.metadata?.direct_identity_verified, true);
+    check("decode direct: verified mismatch not local", mismatch?.metadata?.local_direct, false);
+    check("decode direct: verified mismatch marked", mismatch?.metadata?.direct_identity_verified, true);
+    check("decode direct: verified stat", api._test_stats().direct_identity_verified, 2);
+    check("decode direct: mismatch stat", api._test_stats().direct_identity_mismatch, 1);
+}
+
+// ---- 13c. Decoder: verified legacy direct handles ids with high bit set
+api._test_reset();
+{
+    api._test_set_self_public_key_prefix(u32le(0xF5667788) + "\x00\x00");
+    const msg = api._test_decode(RESP_DIRECT_MSG_RECV, directPayload(0xCAFEBABE, 0xF5667788, "high id"));
+    check("decode direct: high-bit id accepted", msg?.metadata?.local_direct, true);
+    check("decode direct: high-bit id verified", msg?.metadata?.direct_identity_verified, true);
+    check("decode direct: high-bit verified stat", api._test_stats().direct_identity_verified, 1);
+}
+
+// ---- 13d. Decoder: verified legacy direct handles zero-valued self id
+api._test_reset();
+{
+    api._test_set_self_public_key_prefix(u32le(0) + "\x00\x00");
+    const msg = api._test_decode(RESP_DIRECT_MSG_RECV, directPayload(0xCAFEBABE, 0, "zero id"));
+    check("decode direct: zero self id accepted", msg?.metadata?.local_direct, true);
+    check("decode direct: zero self id verified", msg?.metadata?.direct_identity_verified, true);
+    check("decode direct: zero self id stat", api._test_stats().direct_identity_verified, 1);
 }
 
 // ---- 14. Decoder: older group response marks group metadata

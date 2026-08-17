@@ -1,12 +1,15 @@
 # MeshCore TCP / Serial-WiFi API Backend
 
-> Status: Experimental. Stock outer framing and message-waiting sync scaffolding are now implemented; live hardware validation is still pending. Outbound text send is not implemented yet.
+> Status: Experimental. Stock outer framing, message-waiting sync, channel discovery, and text send scaffolding are implemented; direct-message verification is partially implemented and live hardware validation is still pending.
 
 ## Scope
 
-This backend exists to surface cleartext MeshCore text messages into the Crow router through the MeshCore TCP / Serial-WiFi API path.
+This backend exists to surface cleartext MeshCore text messages into the Crow
+router through the MeshCore TCP / Serial-WiFi API path.
 
-It is not the production MeshCore path yet. Production outbound MeshCore traffic still uses the original UDP backend, `meshcore.uc`.
+It is not the production MeshCore path yet. The original UDP backend,
+`meshcore.uc`, remains available while TCP API send/receive behavior is
+validated on live hardware.
 
 ## Critical distinction: MeshCore 4403 is not Meshtastic 4403
 
@@ -147,11 +150,20 @@ Direct message example:
   },
   "metadata": {
     "is_group_message": false,
+    "local_direct": true,
+    "direct_identity_verified": false,
     "identity_strength": "strong",
-    "meshcore_response_code": 7
+    "text_type": 0
   }
 }
 ```
+
+Legacy direct frames carry a destination id. When self-info has provided the
+connected radio public-key prefix, Crow verifies that destination and sets
+`direct_identity_verified = true`; verified mismatches are dropped by
+`router.uc`. Modern Companion direct frames in this parser do not expose a
+destination id, so they keep the queue-origin `local_direct` fallback until
+hardware validation identifies a destination-bearing format or command.
 
 Group message example:
 

@@ -1,6 +1,6 @@
 # MeshCore Companion TCP Backend
 
-Status: **Crow-side MeshCore Companion API backend direction**.
+Status: **Crow-side MeshCore Companion API backend**.
 
 Crow's MeshCore TCP backend is `meshcore_tcp_api.uc`.
 
@@ -99,12 +99,16 @@ Channel v3:
   SNR, reserved, channel index, path length, text type, timestamp, text
 ```
 
-Direct messages are normalized as local direct messages:
+Direct messages are normalized with explicit local-direct metadata:
 
 ```text
 namekey = DirectMessages <sender-id>
-metadata.local_direct = true
+metadata.local_direct = true for verified matches or unverified queue-origin fallback
+metadata.direct_identity_verified = true when a legacy destination id was checked
 ```
+
+Legacy verified mismatches are dropped by `router.uc`; only frames without an
+exposed destination id keep the queue-origin fallback during bring-up.
 
 On direct receive, Crow stores the sender's 6-byte MeshCore public-key prefix in `nodedb` so later direct replies can be sent with `CMD_SEND_MESSAGE`.
 
@@ -311,6 +315,9 @@ channel_info_responses
 channel_discovery_timeouts
 channels_discovered
 channels_updated
+direct_identity_verified
+direct_identity_mismatch
+direct_identity_unverified
 ```
 
 ## Future command/status API
