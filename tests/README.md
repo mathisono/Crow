@@ -10,7 +10,7 @@ Lightweight regression tests for Crow modules. No test framework dependency.
 | `run_formatter_tests.js` | `node` | Node runner with a JS port of the formatter contract. Runs the same logical cases without needing a ucode interpreter, and auto-invokes the `.uc` tests when `ucode` is on PATH. |
 | `test_meshcore_tcp_api.uc` | `ucode` | Canonical tests for `meshcore_tcp_api.uc` Smart Accumulator: fragmentation, oversize kill switch, encrypted/unknown-cmd early-drop, resync. |
 | `run_meshcore_tcp_api_tests.js` | `node` | Node mirror with a JS port of the accumulator. Same logical cases, runnable without ucode; auto-invokes `.uc` tests when `ucode` is on PATH. |
-| `run_meshcore_backend_selector.js` | `node` | Smoke tests for MeshCore backend public-channel selection and label setup. |
+| `run_meshcore_backend_selector.js` | `node` | Smoke tests for MeshCore backend public-channel selection, TCP/USB precedence, and label setup. |
 | `run_router_gatekeeper_matrix.js` | `node` | Router/gatekeeper scope matrix, including MeshCore TCP local-direct handling, slot mapping, and strict callsign checks. |
 
 ## When to run

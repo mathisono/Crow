@@ -33,4 +33,13 @@ function assert(condition, message)
     assert(config.channels[0].label === "MeshCore~Public", "public label");
 }
 
+assert(backend._test_backend_choice({
+    meshcore_serial_api: { enabled: true }
+}) === "serial", "USB serial backend selected");
+
+assert(backend._test_backend_choice({
+    meshcore_tcp_api: { enabled: true },
+    meshcore_serial_api: { enabled: true }
+}) === "tcp", "TCP remains preferred when both are enabled");
+
 printf("\nMeshCore backend selector defaults OK\n");

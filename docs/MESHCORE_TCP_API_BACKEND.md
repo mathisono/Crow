@@ -1,11 +1,13 @@
 # MeshCore TCP / Serial-WiFi API Backend
 
-> Status: Experimental. Stock outer framing, message-waiting sync, channel discovery, and text send scaffolding are implemented; direct-message verification is partially implemented and live hardware validation is still pending.
+> Status: Implemented. Stock outer framing, bounded message-waiting sync, channel discovery, direct/channel receive, and direct/channel transmit are shared by the TCP and USB serial transports. Live hardware validation remains transport/device dependent.
 
 ## Scope
 
 This backend exists to surface cleartext MeshCore text messages into the Crow
-router through the MeshCore TCP / Serial-WiFi API path.
+router through the MeshCore TCP / Serial-WiFi API path. The same Companion
+implementation is exposed as `meshcore_serial_api.uc` for directly attached
+USB serial radios; see `MESHCORE_USB_SERIAL_COMPANION_BACKEND.md`.
 
 It is not the production MeshCore path yet. The original UDP backend,
 `meshcore.uc`, remains available while TCP API send/receive behavior is
@@ -93,6 +95,10 @@ TCP 4403 ──►│  recv()                                  │
                           ▼
             gatekeeper.filterInboundBridge() in router.uc
 ```
+
+USB serial uses the same diagram and parser. Its transport operations are
+`fs.read()`/`fs.write()` on the pollable serial device rather than
+`socket.recv()`/`socket.send()`.
 
 No double-filtering: `router.uc:queue()` runs the canonical `gatekeeper.filterInboundBridge()` pass on every queued `meshcore` message. The backend only uses a cached strict-mode probe for early encrypted-frame dropping.
 

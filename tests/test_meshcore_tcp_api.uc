@@ -270,5 +270,31 @@ api._test_reset();
     check("command payload code", ord(cmd, 3), CMD_SYNC_NEXT_MESSAGE);
 }
 
+// ---- 18. TX payloads are shared by TCP and USB transports
+{
+    const direct = api._test_build_direct_send("ABCDEF", "hello", 2);
+    check("direct tx marker", ord(direct, 0), 0x3C);
+    check("direct tx command", ord(direct, 3), 0x02);
+    check("direct tx text type", ord(direct, 4), 0x00);
+    check("direct tx retry", ord(direct, 5), 2);
+    check("direct tx prefix", substr(direct, 10, 6), "ABCDEF");
+
+    const channel = api._test_build_channel_send(4, "hello");
+    check("channel tx marker", ord(channel, 0), 0x3C);
+    check("channel tx command", ord(channel, 3), 0x03);
+    check("channel tx text type", ord(channel, 4), 0x00);
+    check("channel tx slot", ord(channel, 5), 4);
+    check("channel tx text", substr(channel, 10), "hello");
+}
+
+// ---- 19. USB app-start profiles use valid Companion command framing
+{
+    const zeros = api._test_app_start_payload_profile("crow_zeros");
+    const cli = api._test_app_start_payload_profile("meshcore_cli");
+    check("USB crow profile marker", ord(zeros, 0), 0x3C);
+    check("USB crow profile payload", substr(zeros, 3), "\x01\x00\x00\x00\x00\x00\x00\x00Crow");
+    check("USB CLI profile payload", substr(cli, 3), "\x01\x03      Crow");
+}
+
 printf("\n%d passed, %d failed\n", count - failures, failures);
 exit(failures > 0 ? 1 : 0);

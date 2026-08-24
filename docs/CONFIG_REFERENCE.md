@@ -338,11 +338,14 @@ Transport type for MeshCore.
 **Valid values:**
 - `"udp"` — UDP multicast
 - `"tcp"` / `"tcp-api"` / `"api"` / `"companion-api"` — MeshCore Companion TCP API
+- `"serial"` / `"serial-api"` / `"usb"` / `"usb-api"` — MeshCore Companion USB serial API
 
 **Notes:**
 - UDP multicast remains the default
 - TCP mode requires `meshcore_tcp_api.enabled=true` or one of the TCP/API
   transport aliases above
+- USB mode uses `meshcore_serial_api` (or the `meshcore_usb_api` alias) and
+  defaults to `/dev/ttyACM0` at 115200 baud
 
 ---
 
@@ -378,6 +381,26 @@ Transport type for MeshCore.
   destination id and self-info has provided the connected device identity.
 - Channel discovery is runtime-only in this branch; it does not write Crow
   config or auto-map MeshCore group slots.
+
+## MeshCore USB Serial API
+
+```json
+{
+  "meshcore_serial_api": {
+    "enabled": true,
+    "device": "/dev/ttyACM0",
+    "baud": 115200,
+    "app_start_profile": "crow_zeros",
+    "max_pending_rx": 4,
+    "channel_discovery": true
+  }
+}
+```
+
+This is the same framed Companion protocol used by the TCP API, carried over
+the local USB serial device. It includes both receive queue draining and
+direct/channel transmit. Use `meshcore.backend: "serial"` to force it when
+TCP is also configured.
 
 ---
 

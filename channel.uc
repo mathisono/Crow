@@ -192,7 +192,7 @@ export function getChannelsByMeshcoreHash(hash)
 // Used for routing group messages (CHANNEL_MSG_RECV, frame 0x08)
 export function getChannelByMeshcoreSlot(slot)
 {
-    if (slot === null || slot === undefined || slot < 0 || slot > 7) {
+    if (slot === null || slot < 0 || slot > 7) {
         return null;
     }
     return channelsByMeshcoreSlot[slot];
@@ -202,7 +202,7 @@ export function getChannelByMeshcoreSlot(slot)
 // Called during auto-discovery to map slot->channel
 export function setMeshcoreSlotChannel(slot, channel)
 {
-    if (slot === null || slot === undefined || slot < 0 || slot > 7) {
+    if (slot === null || slot < 0 || slot > 7) {
         return false;
     }
     if (!channel || !channel.namekey) {

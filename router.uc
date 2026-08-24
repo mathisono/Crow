@@ -34,7 +34,7 @@ export function setGatekeeper(gk)
 // Usage: router.registerGroupChannel(0, group_channel_object)
 export function registerGroupChannel(slot, channelObj)
 {
-    if (slot === null || slot === undefined || slot < 0 || slot > 7) {
+    if (slot === null || slot < 0 || slot > 7) {
         return false;
     }
     if (!channelObj || !channelObj.namekey) {
@@ -184,7 +184,7 @@ function resolveGroupChannel(msg)
     }
     
     const slot = msg.group_slot;
-    if (slot === null || slot === undefined) {
+    if (slot === null) {
         DEBUG0("router: group message missing group_slot, dropping\n");
         return null;
     }
@@ -212,10 +212,11 @@ function isLoRaIngress(msg)
     return msg && (msg.transport === "meshtastic" || msg.transport === "meshcore");
 }
 
-function isTcpApiIngress(msg)
+function isCompanionApiIngress(msg)
 {
     return msg && (
         (msg.transport === "meshcore" && msg.backend === "tcp_api") ||
+        (msg.transport === "meshcore" && msg.backend === "serial_api") ||
         (msg.transport === "meshtastic" && msg.backend === "tcp-port-api")
     );
 }
@@ -235,7 +236,7 @@ function isDirectForLocalBridgeDevice(msg)
     if (msg.metadata?.direct_identity_verified === true) {
         return false;
     }
-    if (isTcpApiIngress(msg) && !msg.channel) {
+    if (isCompanionApiIngress(msg) && !msg.channel) {
         return true;
     }
 
@@ -255,7 +256,7 @@ function isJoinedBridgeChannel(msg)
         return false;
     }
     const localChannel = channel.getLocalChannelByNameKey(msg.namekey);
-    return localChannel !== null && localChannel !== undefined;
+    return localChannel !== null;
 }
 
 function filterLoRaIngressScope(msg)

@@ -222,6 +222,22 @@ function buildCommand(cmd, payload = Buffer.alloc(0)) {
     return Buffer.concat([Buffer.from([FRAME_TO_RADIO, fp.length & 0xFF, (fp.length >> 8) & 0xFF]), fp]);
 }
 
+function appStartPayload(profile) {
+    return profile === 'meshcore_cli'
+        ? Buffer.from([0x03, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, ...Buffer.from('Crow')])
+        : Buffer.from([0, 0, 0, 0, 0, 0, 0, ...Buffer.from('Crow')]);
+}
+
+function buildChannelSend(slot, text) {
+    const t = Buffer.from(text).subarray(0, 200);
+    return buildCommand(0x03, Buffer.concat([Buffer.from([0x00, slot]), Buffer.alloc(4), t]));
+}
+
+function buildDirectSend(prefix, text, attempt) {
+    const t = Buffer.from(text).subarray(0, 200);
+    return buildCommand(0x02, Buffer.concat([Buffer.from([0x00, attempt & 0xff]), Buffer.alloc(4), Buffer.from(prefix), t]));
+}
+
 function u32le(n) { return Buffer.from([n & 0xFF, (n >> 8) & 0xFF, (n >> 16) & 0xFF, (n >> 24) & 0xFF]); }
 function directPayload(from, to, text) { const t = Buffer.from(text); return Buffer.concat([u32le(from), u32le(to), Buffer.from([t.length]), t]); }
 function groupPayload(from, slot, text) { return Buffer.concat([u32le(from), Buffer.from([slot]), Buffer.from(text)]); }
@@ -357,6 +373,18 @@ const STRICT_OFF = { isEnabled: () => false };
     check('command marker', cmd[0], FRAME_TO_RADIO);
     check('command length LSB', cmd[1], 1);
     check('command payload code', cmd[3], CMD_SYNC_NEXT_MESSAGE);
+}
+{
+    const direct = buildDirectSend('ABCDEF', 'hello', 2);
+    check('direct tx command', direct[3], 0x02);
+    check('direct tx retry', direct[5], 2);
+    check('direct tx prefix', direct.subarray(10, 16).toString(), 'ABCDEF');
+    const channel = buildChannelSend(4, 'hello');
+    check('channel tx command', channel[3], 0x03);
+    check('channel tx slot', channel[5], 4);
+    check('channel tx text', channel.subarray(10).toString(), 'hello');
+    check('USB crow profile', appStartPayload('crow_zeros').toString('hex'), '0000000000000043726f77');
+    check('USB CLI profile', appStartPayload('meshcore_cli').toString('hex'), '0320202020202043726f77');
 }
 
 console.log(`\n${count - failures} passed, ${failures} failed`);

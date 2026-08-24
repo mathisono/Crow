@@ -5,6 +5,7 @@ import * as channel from "channel";
 let active = null;
 let activeName = null;
 let lastConfig = null;
+let serial = null;
 export let enabled = false;
 
 function log0(fmt, ...args)
@@ -27,13 +28,32 @@ function wantsApi(config)
     return false;
 }
 
+function wantsSerial(config)
+{
+    const mode = config.meshcore?.backend ?? config.meshcore?.transport;
+    if (mode === "serial" || mode === "serial-api" || mode === "usb" || mode === "usb-api") {
+        return true;
+    }
+    if (mode === "api" || mode === "tcp" || mode === "tcp-api" || mode === "companion-api") {
+        return false;
+    }
+    if (mode === "udp") {
+        return false;
+    }
+    // Preserve existing TCP precedence when both backends are configured;
+    // select USB implicitly only when TCP is not enabled.
+    return (config.meshcore_serial_api?.enabled === true || config.meshcore_usb_api?.enabled === true) &&
+        config.meshcore_tcp_api?.enabled !== true;
+}
+
 function wantsUdp(config)
 {
     if (!config.meshcore) {
         return false;
     }
     const mode = config.meshcore?.backend ?? config.meshcore?.transport;
-    if (mode === "api" || mode === "tcp" || mode === "tcp-api" || mode === "companion-api") {
+    if (mode === "api" || mode === "tcp" || mode === "tcp-api" || mode === "companion-api" ||
+        mode === "serial" || mode === "serial-api" || mode === "usb" || mode === "usb-api") {
         return false;
     }
     return config.meshcore.enabled !== false;
@@ -42,8 +62,15 @@ function wantsUdp(config)
 function hasTcpConfig(config)
 {
     const mode = config.meshcore?.backend ?? config.meshcore?.transport;
-    return mode === "api" || mode === "tcp-api" || mode === "companion-api" ||
+    return mode === "api" || mode === "tcp" || mode === "tcp-api" || mode === "companion-api" ||
         config.meshcore_tcp_api?.enabled === true;
+}
+
+function hasSerialConfig(config)
+{
+    const mode = config.meshcore?.backend ?? config.meshcore?.transport;
+    return mode === "serial" || mode === "serial-api" || mode === "usb" || mode === "usb-api" ||
+        config.meshcore_serial_api?.enabled === true || config.meshcore_usb_api?.enabled === true;
 }
 
 function hasUdpConfig(config)
@@ -141,9 +168,19 @@ export function setup(config)
     lastConfig = config;
     active = null;
     activeName = null;
+    serial = null;
     enabled = false;
 
-    if (wantsApi(config)) {
+    if (wantsSerial(config)) {
+        ensureDefaultPublicChannel(config);
+        // Load the serial wrapper only when selected.  Keeping this import
+        // lazy avoids the config -> commands -> discovery -> TCP module cycle
+        // on ucode versions that reject parallel module initialization.
+        serial = require("meshcore_serial_api");
+        active = serial;
+        activeName = "serial";
+    }
+    else if (wantsApi(config)) {
         ensureDefaultPublicChannel(config);
         active = api;
         activeName = "tcp";
@@ -233,10 +270,32 @@ export function backendStatus()
         cfg.meshcore_tcp_api?.port ?? 4403
     ));
 
+    const serialConfig = cfg.meshcore_serial_api ?? cfg.meshcore_usb_api ?? {};
+    const serialStatus = candidateStatus(
+        "meshcore.serial",
+        "MeshCore USB Serial Companion API",
+        "serial",
+        hasSerialConfig(cfg),
+        activeName === "serial" && enabled,
+        serialConfig.device ?? "/dev/ttyACM0",
+        serialConfig.baud ?? 115200
+    );
+    serialStatus.device = serialConfig.device ?? "/dev/ttyACM0";
+    serialStatus.baud = serialConfig.baud ?? 115200;
+    push(out, serialStatus);
+
     return out;
 };
 
 export function _test_ensure_default_public_channel(config)
 {
     ensureDefaultPublicChannel(config);
+};
+
+export function _test_backend_choice(config)
+{
+    if (wantsSerial(config)) return "serial";
+    if (wantsApi(config)) return "tcp";
+    if (wantsUdp(config)) return "udp";
+    return null;
 };

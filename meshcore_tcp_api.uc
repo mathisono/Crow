@@ -124,6 +124,10 @@ let callsign         = null;
 let router           = null;
 let tcpHost          = null;
 let tcpPort          = DEFAULT_PORT;
+let serialMode       = false;
+let serialDevice     = null;
+let serialBaud       = 115200;
+let serialProfile    = "crow_zeros";
 let nextReconnectTime = 0;
 let strictHook       = null;
 let channelDiscovery = false;
@@ -188,6 +192,7 @@ let stats            = {
     ack_frames: 0,
     unknown_frames: 0,
     unknown_frames_suppressed: 0,
+    early_drop_unknown_cmd: 0,
     early_drop_oversize: 0,
     early_drop_encrypted: 0,
     early_drop_malformed_text: 0,
@@ -311,7 +316,7 @@ function publicChannelLabel()
 
 function mapMeshcoreSlot(slot, chan)
 {
-    if (slot === null || slot === undefined || !chan) {
+    if (slot === null || !chan) {
         return false;
     }
     return channel.setMeshcoreSlotChannel(slot, chan);
@@ -395,11 +400,11 @@ function meshcoreChannelIndexForNamekey(namekey)
 
     const slots = cfg?.channel_slots ?? cfg?.channel_map;
     if (slots) {
-        if (slots[namekey] !== null && slots[namekey] !== undefined) {
+        if (slots[namekey] !== null) {
             return int(slots[namekey]);
         }
         const cname = split(namekey, " ")[0];
-        if (slots[cname] !== null && slots[cname] !== undefined) {
+        if (slots[cname] !== null) {
             return int(slots[cname]);
         }
     }
@@ -472,11 +477,11 @@ function sameU32(a, b)
 
 function directDestinationMatchesSelf(toId)
 {
-    if (toId === null || toId === undefined || !meshcoreSelfPublicKeyPrefix) {
+    if (toId === null || !meshcoreSelfPublicKeyPrefix) {
         return null;
     }
     const selfId = idFromPrefix(meshcoreSelfPublicKeyPrefix);
-    if (selfId === null || selfId === undefined) {
+    if (selfId === null) {
         return null;
     }
     return sameU32(toId, selfId);
@@ -508,7 +513,7 @@ function directTargetId(msg)
 
 function publicKeyPrefixFromNode(id)
 {
-    if (id === null || id === undefined) {
+    if (id === null) {
         return null;
     }
     const info = nodedb.getNode(id, false)?.nodeinfo;
@@ -605,6 +610,57 @@ function closeSocket(reason)
     resetState();
 }
 
+function serialDeviceSafe(path)
+{
+    return path && match(path, /^\/dev\/[A-Za-z0-9._+\/-]+$/);
+}
+
+function configureSerial()
+{
+    if (!serialDeviceSafe(serialDevice)) {
+        log0("serial device path rejected: %s\n", serialDevice ?? "");
+        return false;
+    }
+    if (serialBaud < 1 || serialBaud > 4000000) {
+        log0("serial baud rejected: %s\n", serialBaud);
+        return false;
+    }
+
+    // USB CDC devices generally ignore baud, while USB UART bridges use it.
+    // Keep the setup here so both classes receive the same raw 8N1 settings.
+    const rc = system(`/bin/stty -F ${serialDevice} ${serialBaud} raw -echo -ixon -ixoff cs8 -cstopb -parenb`);
+    if (rc !== 0) {
+        log0("serial stty failed device=%s baud=%d rc=%d\n", serialDevice, serialBaud, rc);
+        return false;
+    }
+    return true;
+}
+
+function openSerial()
+{
+    if (!serialDeviceSafe(serialDevice)) {
+        log0("serial device not configured; backend disabled\n");
+        return null;
+    }
+    try {
+        if (!configureSerial()) return null;
+        const ns = fs.open(serialDevice, "r+");
+        if (!ns) {
+            log0("serial open failed %s\n", serialDevice);
+            return null;
+        }
+        log0("opened MeshCore USB serial %s baud=%d profile=%s\n",
+            serialDevice, serialBaud, serialProfile);
+        stats.connects++;
+        return ns;
+    }
+    catch (e) {
+        log0("serial open failed %s: %s\n", serialDevice, e);
+        nextReconnectTime = time() + RECONNECT_INTERVAL;
+        return null;
+    }
+}
+
 function openTcp()
 {
     if (!tcpHost) {
@@ -626,6 +682,11 @@ function openTcp()
     }
 }
 
+function openTransport()
+{
+    return serialMode ? openSerial() : openTcp();
+}
+
 // ---------------------------------------------------------------------
 // MeshCore boot handshake, queue polling, channel discovery, and sending.
 // ---------------------------------------------------------------------
@@ -644,12 +705,40 @@ function buildCommand(cmd, payload)
     return chr(FRAME_TO_RADIO) + pack_le16(length(framePayload)) + framePayload;
 }
 
+function writeTransport(frame)
+{
+    // Preserve the AREDN ucode socket semantics: socket.send() is the
+    // established TCP path and returns null after a successful write.
+    if (!serialMode) {
+        return s.send(frame);
+    }
+
+    let remaining = frame;
+    let sent = 0;
+    while (length(remaining) > 0) {
+        const n = s.write(remaining);
+        if (n === false) return -1;
+        if (n === null || type(n) !== "number") {
+            sent += length(remaining);
+            break;
+        }
+        if (n <= 0) return -1;
+        sent += n;
+        remaining = substr(remaining, n);
+    }
+    return sent;
+}
+
 export function sendCommand(cmd, payload)
 {
     if (!s) return false;
     try {
         const frame = buildCommand(cmd, payload ?? "");
-        const sent = s.send(frame);
+        const sent = writeTransport(frame);
+        if (sent < 0) {
+            closeSocket("command send failed");
+            return false;
+        }
         stats.commands_sent++;
         log1("send command=0x%02x frame_bytes=%d sent=%s\n", cmd, length(frame), sent);
         return true;
@@ -660,9 +749,17 @@ export function sendCommand(cmd, payload)
     }
 };
 
+function appStartPayloadFor(profile)
+{
+    if (profile === "meshcore_cli") {
+        return chr(3) + "      " + "Crow";
+    }
+    return chr(0) + chr(0) + chr(0) + chr(0) + chr(0) + chr(0) + chr(0) + "Crow";
+}
+
 function appStartPayload()
 {
-    return chr(0) + chr(0) + chr(0) + chr(0) + chr(0) + chr(0) + chr(0) + "Crow";
+    return appStartPayloadFor(serialMode ? serialProfile : "crow_zeros");
 }
 
 function sendBootHandshake()
@@ -671,7 +768,7 @@ function sendBootHandshake()
     try {
         const payload = appStartPayload();
         const frame = buildCommand(CMD_APP_START, payload);
-        const sent = s.send(frame);
+        const sent = writeTransport(frame);
         stats.handshakes_sent++;
         log0("handshake sent (CMD_APP_START) frame_bytes=%d sent=%s\n", length(frame), sent);
         log1("  expecting RESP_SELF_INFO(0x05), PUSH_MSG_WAITING(0x83), then bounded SYNC_NEXT_MESSAGE drain\n");
@@ -733,20 +830,6 @@ function requestChannelInfo(index, reason)
     return sendCommand(CMD_GET_CHANNEL, chr(index & 0xff));
 }
 
-function startChannelScan(reason)
-{
-    if (!channelDiscovery || !s || channelScanActive) {
-        return;
-    }
-    channelScanActive = true;
-    channelScanNext = 0;
-    channelScanInFlight = false;
-    channelScanCurrent = null;
-    stats.channel_scans++;
-    log1("channel discovery scan start reason=%s\n", reason ?? "unknown");
-    continueChannelScan(reason);
-}
-
 function continueChannelScan(reason)
 {
     if (!channelDiscovery || !s || !channelScanActive || channelScanInFlight) {
@@ -760,6 +843,20 @@ function continueChannelScan(reason)
     }
     const idx = channelScanNext++;
     requestChannelInfo(idx, reason);
+}
+
+function startChannelScan(reason)
+{
+    if (!channelDiscovery || !s || channelScanActive) {
+        return;
+    }
+    channelScanActive = true;
+    channelScanNext = 0;
+    channelScanInFlight = false;
+    channelScanCurrent = null;
+    stats.channel_scans++;
+    log1("channel discovery scan start reason=%s\n", reason ?? "unknown");
+    continueChannelScan(reason);
 }
 
 function checkChannelScanTimeout()
@@ -870,7 +967,7 @@ function directMsg(fromId, prefix, text, textType, timestamp, snr, pathLen, stro
         rx_time:              timestamp ?? time(),
         hop_limit:            1,
         transport:            "meshcore",
-        backend:              "tcp_api",
+        backend:              serialMode ? "serial_api" : "tcp_api",
         originating_callsign: callsign,
         namekey:              namekey,
         data: {
@@ -905,7 +1002,7 @@ function channelMsg(index, text, textType, timestamp, snr, pathLen)
         rx_time:              timestamp ?? time(),
         hop_limit:            1,
         transport:            "meshcore",
-        backend:              "tcp_api",
+        backend:              serialMode ? "serial_api" : "tcp_api",
         originating_callsign: callsign,
         namekey:              mapped?.namekey ?? (index === 0 ? channelNamekey : null),
         data: {
@@ -1223,6 +1320,7 @@ function smartAccumulate(data)
         }
 
         stats.unknown_frames++;
+        stats.early_drop_unknown_cmd++;
         syncRequestInFlight = false;
         if (shouldLogFrame(cmd)) {
             log1("drop non-message cmd=0x%02x plen=%d count=%d\n",
@@ -1244,19 +1342,31 @@ function popPending(reason)
 // Public lifecycle API
 // ---------------------------------------------------------------------
 
-export function setup(config)
+function setupTransport(config, kind)
 {
-    cfg = config.meshcore_tcp_api;
+    if (s) closeSocket("reconfigure");
+    enabled = false;
+    cfg = kind === "serial"
+        ? (config.meshcore_serial_api ?? config.meshcore_usb_api)
+        : config.meshcore_tcp_api;
     rootConfig = config;
     if (!cfg || cfg.enabled === false) {
         return;
     }
     enabled = true;
 
+    serialMode = kind === "serial";
+
     callsign = config.callsign;
     router   = config.router;
     tcpHost  = cfg.host ?? DEFAULT_HOST;
     tcpPort  = cfg.port ?? DEFAULT_PORT;
+    serialDevice = cfg.device ?? "/dev/ttyACM0";
+    serialBaud = cfg.baud ?? 115200;
+    serialProfile = cfg.app_start_profile ?? "crow_zeros";
+    if (serialProfile !== "crow_zeros" && serialProfile !== "meshcore_cli") {
+        serialProfile = "crow_zeros";
+    }
     channelDiscovery = !!cfg.channel_discovery;
     channelRefreshSeconds = cfg.channel_refresh_seconds ?? DEFAULT_CHANNEL_REFRESH;
     channelDiscoveryWindow = cfg.channel_discovery_window ?? DEFAULT_DISCOVERY_WINDOW;
@@ -1272,11 +1382,21 @@ export function setup(config)
         : null;
 
     nextReconnectTime = 0;
-    s = openTcp();
+    s = openTransport();
     if (s) sendBootHandshake();
     if (channelDiscovery) {
         timers.setInterval("meshcore_tcp_api.channel_refresh", channelRefreshSeconds);
     }
+};
+
+export function setup(config)
+{
+    setupTransport(config, "tcp");
+};
+
+export function setupSerial(config)
+{
+    setupTransport(config, "serial");
 };
 
 export function shutdown()
@@ -1293,7 +1413,7 @@ function readSocket()
 {
     if (!s) return null;
     try {
-        const data = s.recv(SOCKET_READ_CHUNK);
+        const data = serialMode ? s.read(SOCKET_READ_CHUNK) : s.recv(SOCKET_READ_CHUNK);
         if (!data || length(data) === 0) {
             closeSocket("peer closed");
             return null;
@@ -1375,7 +1495,7 @@ export function send(msg)
     }
 
     const idx = msg.group_slot ?? msg.channel_index ?? meshcoreChannelIndexForNamekey(msg.namekey);
-    if (idx === null || idx === undefined || idx < 0 || idx > MAX_CHANNEL_INDEX) {
+    if (idx === null || idx < 0 || idx > MAX_CHANNEL_INDEX) {
         stats.sends_failed++;
         stats.channel_sends_failed++;
         log1("send channel: no MeshCore slot for namekey=%s msg.id=%s\n", msg.namekey ?? "", msg?.id);
@@ -1410,7 +1530,7 @@ export function tick()
     }
     if (enabled && !s && time() >= nextReconnectTime) {
         nextReconnectTime = time() + RECONNECT_INTERVAL;
-        s = openTcp();
+        s = openTransport();
         if (s) sendBootHandshake();
     }
     if (enabled && s && syncingMessages && !syncRequestInFlight && !pendingFull()) {
@@ -1478,7 +1598,11 @@ export function status()
         message_sent_frames: stats.message_sent_frames,
         ack_frames: stats.ack_frames,
         unknown_frames: stats.unknown_frames,
-        unknown_frames_suppressed: stats.unknown_frames_suppressed
+        unknown_frames_suppressed: stats.unknown_frames_suppressed,
+        early_drop_unknown_cmd: stats.early_drop_unknown_cmd,
+        transport: serialMode ? "serial" : "tcp",
+        device: serialMode ? serialDevice : null,
+        baud: serialMode ? serialBaud : null
     };
 };
 
@@ -1488,7 +1612,7 @@ export function status()
 
 export function _test_inject(data, gatekeeperShim)
 {
-    if (gatekeeperShim !== null && gatekeeperShim !== undefined) {
+    if (gatekeeperShim !== null) {
         strictHook = function () {
             return gatekeeperShim.isEnabled() === true;
         };
@@ -1556,7 +1680,17 @@ export function _test_app_start_payload()
     return appStartPayload();
 };
 
+export function _test_app_start_payload_profile(profile)
+{
+    return buildCommand(CMD_APP_START, appStartPayloadFor(profile));
+};
+
 export function _test_build_direct_send(prefix, text, attempt)
 {
     return buildCommand(CMD_SEND_DIRECT_MESSAGE, buildSendDirectPayload(prefix, text, attempt));
+};
+
+export function _test_build_channel_send(index, text)
+{
+    return buildCommand(CMD_SEND_CHANNEL_MESSAGE, buildSendChannelPayload(index, text));
 };

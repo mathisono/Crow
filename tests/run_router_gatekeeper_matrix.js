@@ -144,6 +144,7 @@ function makeRouter({ strict = false, allowed = ['KJ6DZB', 'KN6PLV', 'W2ABC'] } 
     function isTcpApiIngress(msg) {
         return msg && (
             (msg.transport === 'meshcore' && msg.backend === 'tcp_api') ||
+            (msg.transport === 'meshcore' && msg.backend === 'serial_api') ||
             (msg.transport === 'meshtastic' && msg.backend === 'tcp-port-api')
         );
     }
@@ -289,6 +290,13 @@ function msg(overrides) {
     checkTrue('scope: MeshCore TCP local direct accepted', r.queue(msg({
         transport: 'meshcore',
         backend: 'tcp_api',
+        to: 0x999999,
+        namekey: null,
+        metadata: { local_direct: true }
+    })));
+    checkTrue('scope: MeshCore USB local direct accepted', r.queue(msg({
+        transport: 'meshcore',
+        backend: 'serial_api',
         to: 0x999999,
         namekey: null,
         metadata: { local_direct: true }
