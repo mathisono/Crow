@@ -6,6 +6,7 @@ VERSION=${VER}-${REL}
 
 ROOT=/tmp/crow-build-$$
 SRC=$(dirname $0)/../..
+GO_BIN=${GO_BIN:-go}
 if command -v mkapk.py >/dev/null 2>&1; then
     MKAPK=$(command -v mkapk.py)
 else
@@ -31,6 +32,15 @@ cp $SRC/platforms/aredn/*.uc $ROOT/data/usr/local/crow/platforms/aredn/
 cp $SRC/platforms/aredn/raven.conf $ROOT/data/usr/local/crow/crow.conf
 cp $SRC/platforms/aredn/crow-migrate-raven.sh $ROOT/data/usr/local/crow/platforms/aredn/crow-migrate-raven.sh
 cp $SRC/platforms/aredn/crow-runner.sh $ROOT/data/usr/local/crow/platforms/aredn/crow-runner.sh
+if ! command -v "$GO_BIN" >/dev/null 2>&1; then
+    echo "Go is required to build the AREDN crow-rawtty helper (set GO_BIN or install go)." >&2
+    exit 1
+fi
+GO111MODULE=off GOOS=linux GOARCH=arm GOARM=7 CGO_ENABLED=0 "$GO_BIN" build \
+    -trimpath -ldflags='-s -w' \
+    -o "$ROOT/data/usr/local/crow/crow-rawtty" \
+    "$SRC/tools/crow-rawtty"
+chmod 755 "$ROOT/data/usr/local/crow/crow-rawtty"
 echo "export const version = '${VERSION}';" > $ROOT/data/usr/local/crow/version.uc
 
 cp $SRC/ui/ui.js $SRC/ui/ui.css $SRC/ui/crow.svg $ROOT/data/www/apps/crow/

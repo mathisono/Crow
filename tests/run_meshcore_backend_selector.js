@@ -2,6 +2,7 @@
 'use strict';
 
 const { spawnSync } = require('child_process');
+const fs = require('fs');
 const path = require('path');
 
 function check(name, got, want) {
@@ -49,7 +50,14 @@ failures += check('TCP preferred over USB', backendChoice({
     meshcore_tcp_api: { enabled: true }, meshcore_serial_api: { enabled: true }
 }), 'tcp');
 
-console.log(`\n${failures === 0 ? 5 : 5 - failures} passed, ${failures} failed`);
+{
+    const serial = fs.readFileSync(path.resolve(__dirname, '..', 'meshcore_serial_api.uc'), 'utf8');
+    failures += check('serial uses separate read/write handles',
+        serial.includes('fs.open(serialDevice, "r")') && serial.includes('fs.open(serialDevice, "w")'), true);
+    failures += check('serial TTY is excluded from socket.poll', serial.includes('return null;'), true);
+}
+
+console.log(`\n${failures === 0 ? 7 : 7 - failures} passed, ${failures} failed`);
 
 const uc = spawnSync('ucode', [path.join(__dirname, 'test_meshcore_backend.uc')], { stdio: 'inherit' });
 if (uc.error && uc.error.code !== 'ENOENT') {

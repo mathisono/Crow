@@ -905,26 +905,20 @@ function parseSelfInfo(framePayload)
         meshcoreSelfPublicKeyPrefix = substr(meshcoreSelfPublicKey, 0, 6);
     }
 
-    let name = null;
-    if (length(framePayload) > 58) {
-        name = textClean(substr(framePayload, 58));
-        if (!isMostlyPrintable(name)) {
-            name = null;
-        }
+    // Firmware metadata between the public key and the name is binary and
+    // differs by release.  The node name is the final printable ASCII tail;
+    // parsing from an assumed fixed offset can display those metadata bytes
+    // as part of the name on real Companion radios.
+    let nameEnd = length(framePayload);
+    while (nameEnd > 0 && ord(framePayload, nameEnd - 1) === 0) nameEnd--;
+    let nameStart = nameEnd;
+    while (nameStart > 0) {
+        const byte = ord(framePayload, nameStart - 1);
+        if (byte < 0x20 || byte > 0x7e) break;
+        nameStart--;
     }
-
-    if (!name) {
-        let nameStart = 36;
-        const payloadLen = length(framePayload);
-        while (nameStart < payloadLen) {
-            const byte = ord(framePayload, nameStart);
-            if ((byte >= 0x20 && byte <= 0x7E) || byte >= 0x80) break;
-            nameStart++;
-        }
-        if (nameStart < payloadLen) {
-            name = textClean(substr(framePayload, nameStart));
-        }
-    }
+    const name = nameStart < nameEnd
+        ? substr(framePayload, nameStart, nameEnd - nameStart) : null;
 
     if (name && length(name) > 0) {
         log0("parseSelfInfo: device name = %s\n", name);
