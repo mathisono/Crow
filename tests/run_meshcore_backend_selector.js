@@ -14,6 +14,7 @@ assert(selector.includes('active = api'));
 assert(selector.includes('active = udp'));
 assert(serial.includes('fs.open(serialDevice, "r")'));
 assert(serial.includes('fs.open(serialDevice, "w")'));
-assert(serial.includes('return serialRx;'));
+assert(serial.includes('timers.setInterval("meshcore_serial_api.poll", SERIAL_POLL_INTERVAL)'));
+assert(serial.includes('return null;'));
 assert(serial.includes('CMD_SEND_CHANNEL_TXT_MSG = 0x03'));
 console.log('meshcore backend selector checks passed');

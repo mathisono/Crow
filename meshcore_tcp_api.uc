@@ -598,24 +598,22 @@ function parseSelfInfo(payload)
         return null;
     }
 
-    let nameStart = SELF_INFO_PUBKEY_OFFSET + SELF_INFO_PUBKEY_SIZE;
-    const payloadLen = length(payload);
-    while (nameStart < payloadLen) {
-        const byte = ord(payload, nameStart);
-        if ((byte >= 0x20 && byte <= 0x7E) || byte >= 0x80) break;
-        nameStart++;
+    // Firmware metadata after the public key is binary and varies by version;
+    // the device name is the printable ASCII tail of RESP_SELF_INFO.
+    let nameEnd = length(payload);
+    while (nameEnd > 0 && ord(payload, nameEnd - 1) === 0) nameEnd--;
+    let nameStart = nameEnd;
+    while (nameStart > 0) {
+        const byte = ord(payload, nameStart - 1);
+        if (byte < 0x20 || byte > 0x7E) break;
+        nameStart--;
     }
-    if (nameStart >= payloadLen) {
+    if (nameStart >= nameEnd) {
         log1("parseSelfInfo: no printable name found\n");
         return null;
     }
 
-    let name = "";
-    for (let i = nameStart; i < payloadLen; i++) {
-        const byte = ord(payload, i);
-        if (byte === 0) break;
-        name += chr(byte);
-    }
+    const name = substr(payload, nameStart, nameEnd - nameStart);
 
     log0("parseSelfInfo: device name = %s\n", name);
     return name;

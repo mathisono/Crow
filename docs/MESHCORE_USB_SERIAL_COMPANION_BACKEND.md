@@ -5,11 +5,24 @@ RAK3401 BLE/USB Companion build. It opens the radio's CDC serial device at
 115200 baud and speaks the binary Companion protocol; it does not invoke or
 parse `meshcore-cli`.
 
-This is a real USB serial transport, not a `ser2net`/`socat` TCP bridge. It
-uses the `fs.file` handle's `fileno()` in Crow's normal poll loop, opens
-separate read/write device handles, and configures the port with a fixed-argv
-`stty` call after validating the device path. Only `/dev/ttyACM<N>` and
-`/dev/ttyUSB<N>` paths and 115200 baud are accepted.
+This is a real USB serial transport, not a `ser2net` or TCP bridge. It opens
+separate read/write device handles and drains the CDC port through a one-second
+nonblocking timer; this avoids an AREDN `socket.poll()` hang on raw TTY handles.
+After validating the device path, it configures the port with fixed command
+components: `stty` when present, or Crow's bundled static `crow-rawtty` helper
+on minimal AREDN images that omit `stty`. The helper uses a direct termios
+`ioctl`, so its raw-mode setting persists after it exits. Only
+`/dev/ttyACM<N>` and `/dev/ttyUSB<N>` paths and 115200 baud are accepted.
+
+### AREDN package prerequisite
+
+The AREDN package build cross-compiles `tools/crow-rawtty/main.go` as a static
+ARMv7 helper and installs it at `/usr/local/crow/crow-rawtty`. Build with Go
+available in `PATH`, or set `GO_BIN` to its path:
+
+```sh
+GO_BIN=/path/to/go ./platforms/aredn/build.sh
+```
 
 ## Supported Companion features
 

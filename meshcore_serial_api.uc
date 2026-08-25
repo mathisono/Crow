@@ -14,11 +14,13 @@
 // real MeshCore contact/path table, which Crow does not own yet, so it is
 // explicitly rejected rather than guessing a recipient prefix.
 //
-// The ucode fs.file resource has fileno(), so it can be registered in the
-// existing socket.poll loop.  The device is opened as separate read/write
-// handles to avoid stdio update-stream direction rules.  stty is called with
-// a fixed argv vector after validating the only supported USB CDC paths and
-// 115200 baud; no config value is interpolated into a shell command.
+// The AREDN socket.poll implementation can hang on a raw TTY file descriptor,
+// so serial receive is drained by a short nonblocking timer rather than being
+// registered with the socket poll loop. The device is opened as separate
+// read/write handles to avoid stdio update-stream direction rules. After
+// validating the only supported USB CDC paths and 115200 baud, fixed serial setup is applied.
+// Stripped-down AREDN images use Crow's bundled rawtty helper. The only
+// interpolated value is the strict-whitelisted device path.
 
 import * as fs from "fs";
 import * as timers from "timers";
@@ -31,11 +33,13 @@ const SERIAL_READ_CHUNK        = 2048;
 const SMART_MAX_PAYLOAD        = 256;
 const RESYNC_BUFFER_CAP        = 4096;
 const REOPEN_INTERVAL          = 5;
+const SERIAL_POLL_INTERVAL     = 1;
 const DEFAULT_MAX_PENDING_RX   = 4;
 const HARD_MAX_PENDING_RX      = 32;
 const DEFAULT_CHANNEL_REFRESH  = 600;
 const MAX_CHANNEL_INDEX        = 7;
 const MAX_GROUP_TEXT_LENGTH    = 160;
+const RAWTTY_HELPER            = "/usr/local/crow/crow-rawtty";
 
 const CMD_APP_START            = 0x01;
 const CMD_SEND_CHANNEL_TXT_MSG = 0x03;
@@ -200,9 +204,12 @@ function validDevicePath(device)
 {
     // CDC ACM is expected for the RAK3401 Companion USB device; USB serial
     // adapters are allowed too.  This rejects shell metacharacters and other
-    // arbitrary files before the fixed-argv stty call or fs.open().
+    // arbitrary files before the fixed-argv serial setup or fs.open().
     return type(device) === "string" &&
-        match(device, /^\/dev\/tty(?:ACM|USB)[0-9]+$/) !== null;
+        // ucode's target regex engine does not support non-capturing groups.
+        // Keep the two exact alternatives rather than weakening validation.
+        (match(device, /^\/dev\/ttyACM[0-9]+$/) !== null ||
+            match(device, /^\/dev\/ttyUSB[0-9]+$/) !== null);
 }
 
 function resetWireState()
@@ -237,19 +244,17 @@ function closeSerial(reason)
     }
 }
 
-function configureSerialPort()
+function runSerialSetup(command, label)
 {
-    // Keep the physical serial setup deterministic.  `fs.popen()` with an
-    // argument array invokes exec directly, so `serialDevice` is never parsed
-    // by a shell.  The baud literal is intentionally fixed at 115200.
     let p = null;
     try {
-        p = fs.popen([
-            "/bin/stty", "-F", serialDevice, "115200", "raw", "-echo",
-            "cs8", "-cstopb", "-parenb", "-ixon", "-ixoff", "min", "0", "time", "0"
-        ], "r");
+        // The AREDN ucode runtime accepts only a command string here (not an
+        // argv array).  `serialDevice` was strictly constrained by
+        // validDevicePath() before this function can be reached, and every
+        // other token is an internal literal.
+        p = fs.popen(command, "r");
         if (!p) {
-            lastError = fs.error() ?? "unable to start stty";
+            lastError = fs.error() ?? `unable to start ${label}`;
             return false;
         }
         // Consume stderr-less output and wait for command completion.  A
@@ -257,7 +262,7 @@ function configureSerialPort()
         p.read("all");
         const result = p.close();
         if (result !== 0) {
-            lastError = `stty exit ${result}`;
+            lastError = `${label} exit ${result}`;
             return false;
         }
         return true;
@@ -267,6 +272,30 @@ function configureSerialPort()
         lastError = `${e}`;
         return false;
     }
+}
+
+function configureSerialPort()
+{
+    // Keep the physical serial setup deterministic. The device value is the
+    // exact `/dev/ttyACM<N>` or `/dev/ttyUSB<N>` path already validated by
+    // openSerial(); the baud literal is intentionally fixed at 115200.
+    if (fs.access("/bin/stty")) {
+        return runSerialSetup(
+            `/bin/stty -F ${serialDevice} 115200 raw -echo cs8 -cstopb -parenb -ixon -ixoff min 0 time 0`,
+            "stty");
+    }
+
+    // AREDN's minimal busybox image omits stty. The bundled static helper
+    // applies termios directly with ioctl and exits without restoring it.
+    // Crow remains the sole owner of the radio's read/write handles.
+    if (fs.access(RAWTTY_HELPER)) {
+        return runSerialSetup(
+            `${RAWTTY_HELPER} ${serialDevice}`,
+            "bundled rawtty setup");
+    }
+
+    lastError = "neither /bin/stty nor bundled crow-rawtty is available for serial setup";
+    return false;
 }
 
 function openSerial()
@@ -449,22 +478,18 @@ function parseSelfInfo(framePayload)
     if (!framePayload || length(framePayload) < 36 || ord(framePayload, 0) !== RESP_SELF_INFO) {
         return null;
     }
-    // Self info contains fixed binary fields before a trailing device name.
-    // Scan after the public key and stop on NUL, mirroring the TCP backend.
-    let start = 33;
-    while (start < length(framePayload)) {
-        const byte = ord(framePayload, start);
-        if ((byte >= 0x20 && byte <= 0x7e) || byte >= 0x80) break;
-        start++;
+    // Self info has variable firmware metadata after the public key and a
+    // trailing node name. Scan backward from the tail so binary public-key or
+    // metadata bytes that happen to look printable cannot become the name.
+    let end = length(framePayload);
+    while (end > 0 && ord(framePayload, end - 1) === 0) end--;
+    let start = end;
+    while (start > 0) {
+        const byte = ord(framePayload, start - 1);
+        if (byte < 0x20 || byte > 0x7e) break;
+        start--;
     }
-    if (start >= length(framePayload)) return null;
-    let name = "";
-    for (let i = start; i < length(framePayload); i++) {
-        const byte = ord(framePayload, i);
-        if (byte === 0) break;
-        name += chr(byte);
-    }
-    return name || null;
+    return start < end ? substr(framePayload, start, end - start) : null;
 }
 
 function decodeChannelInfo(framePayload)
@@ -516,12 +541,12 @@ function processChannelInfo(framePayload)
     if (!old) {
         discoveredChannels[key] = found;
         stats.channels_discovered++;
-        log1("discovered channel slot=%d name=%s\n", found.index, found.name);
+        log0("discovered channel slot=%d name=%s\n", found.index, found.name);
     }
     else if (old.name !== found.name || old.secret_b64 !== found.secret_b64) {
         discoveredChannels[key] = found;
         stats.channels_updated++;
-        log1("updated channel slot=%d name=%s\n", found.index, found.name);
+        log0("updated channel slot=%d name=%s\n", found.index, found.name);
     }
     mapConfiguredChannels();
 }
@@ -809,6 +834,7 @@ export function setup(config)
     if (openSerial()) {
         sendBootHandshake();
     }
+    timers.setInterval("meshcore_serial_api.poll", SERIAL_POLL_INTERVAL);
     if (channelDiscovery) {
         timers.setInterval("meshcore_serial_api.channel_refresh", channelRefreshSeconds);
     }
@@ -817,13 +843,16 @@ export function setup(config)
 export function shutdown()
 {
     enabled = false;
+    timers.cancel("meshcore_serial_api.poll");
     closeSerial("shutdown");
     serialState = "stopped";
 };
 
 export function handle()
 {
-    return serialRx;
+    // Do not pass a fs.file TTY to socket.poll(): on AREDN 4.26 it can block
+    // indefinitely even with a finite timeout. tick() drains it instead.
+    return null;
 };
 
 function readSerial()
@@ -849,6 +878,17 @@ function readSerial()
     }
 }
 
+function pumpSerial(reason)
+{
+    const data = readSerial();
+    if (data === null || length(data) === 0) return false;
+    const frames = smartAccumulate(data);
+    deferFrames(frames);
+    promoteDeferredFrames();
+    maybeRequestNext(reason ?? "serial timer");
+    return true;
+}
+
 export function recv()
 {
     const queued = popPending("pending delivered");
@@ -858,14 +898,9 @@ export function recv()
     const deferred = popPending("deferred message delivered");
     if (deferred) return deferred;
 
-    const data = readSerial();
-    if (data === null || length(data) === 0) return null;
-    const frames = smartAccumulate(data);
-    deferFrames(frames);
-    promoteDeferredFrames();
+    if (!pumpSerial("router receive")) return null;
     const msg = popPending("message delivered");
     if (msg) return msg;
-    maybeRequestNext("resume drain");
     return null;
 };
 
@@ -901,6 +936,9 @@ export function tick()
     if (!serialRx && time() >= nextOpenTime) {
         nextOpenTime = time() + REOPEN_INTERVAL;
         if (openSerial()) sendBootHandshake();
+    }
+    if (serialRx && timers.tick("meshcore_serial_api.poll")) {
+        pumpSerial("serial timer");
     }
     if (serialTx && syncingMessages && !syncRequestInFlight && !pendingFull()) {
         maybeRequestNext(syncPausedBackpressure ? "resume after backpressure" : "tick resume");
@@ -1019,6 +1057,11 @@ export function _test_build_group_send(msg, slot)
 export function _test_app_start_payload()
 {
     return appStartPayload();
+};
+
+export function _test_parse_self_info(payload)
+{
+    return parseSelfInfo(payload);
 };
 
 export function _test_stats()
