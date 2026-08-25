@@ -68,6 +68,15 @@ function byteAt(data, off)
     return type(data) === "array" ? data[off] : ord(data, off);
 };
 
+function isAllZeros(data)
+{
+    if (!data) return true;
+    for (let i = 0; i < length(data); i++) {
+        if (data[i] !== 0x00) return false;
+    }
+    return true;
+};
+
 function parseChannelInfo(data)
 {
     if (!data || length(data) < CHANNEL_RESPONSE_SIZE) {
@@ -116,15 +125,6 @@ function parseChannelInfo(data)
         raw_name_bytes: nameBytes,
         raw_key_bytes: secretKey
     };
-};
-
-function isAllZeros(data)
-{
-    if (!data) return true;
-    for (let i = 0; i < length(data); i++) {
-        if (data[i] !== 0x00) return false;
-    }
-    return true;
 };
 
 function groupFromParsed(parsed)
@@ -252,24 +252,14 @@ function detectKeyChanges(current)
 function autoDiscoverGroup(group)
 {
     const keyStr = encodeGroupKey(group.key);
-    const namekey = sprintf("MeshCore:%s %s", group.name, keyStr);
-
-    const channelObj = {
-        namekey: namekey,
-        name: group.name,
-        source: "meshcore",
-        slot_index: group.slot,
-        key: group.key,
-        is_group_message: true,
-        auto_discovered: true,
-        created_time: systime(),
-        last_sync_time: systime()
-    };
-
-    channel.addMessageNameKey(namekey);
-    channel.setMeshcoreSlotChannel(group.slot, channelObj);
-
-    log1("auto-discovered: %s (slot %d)\n", namekey, group.slot);
+    const namekey = `${group.name} ${keyStr}`;
+    const local = channel.getLocalChannelByNameKey(namekey);
+    if (!local) {
+        log1("radio group discovered but not enabled in Crow: %s (slot %d)\n", namekey, group.slot);
+        return;
+    }
+    channel.setMeshcoreSlotChannel(group.slot, local);
+    log1("matched configured Crow channel: %s (slot %d)\n", namekey, group.slot);
 };
 
 function deprecateGroup(group)

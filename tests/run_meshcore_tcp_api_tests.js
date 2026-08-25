@@ -28,6 +28,10 @@ const CMD_UNKNOWN = 0x77;
 const PART97_BLOCKED_COMMANDS = new Set([CMD_ENCRYPTED_DM, CMD_ENCRYPTED_BIN]);
 let meshcoreSelfId = null;
 const directIdentityStats = { verified: 0, mismatch: 0, unverified: 0 };
+const localGroupChannels = new Set();
+const discoveredGroupChannels = new Map();
+const mappedGroupChannels = new Map();
+let groupReceiveUnverified = 0;
 
 function isDirect(code) { return code === RESP_DIRECT_MSG_RECV || code === RESP_DIRECT_MSG_RECV_V3; }
 function isGroup(code) { return code === RESP_CHANNEL_MSG_RECV || code === RESP_CHANNEL_MSG_RECV_V3; }
@@ -145,6 +149,10 @@ class SmartAccumulator {
                 frames.push({ cmd: code, payload });
                 continue;
             }
+            if (code === 0x82 || code === 0x84 || code === 0x8A || code === 0x88 ||
+                code === 0x89 || code === 0x8B || code === 0x8C || code === 0x8E || code === 0x90) {
+                continue;
+            }
             if (code === RESP_CHANNEL_INFO) {
                 this.stats.responses_cached++;
                 this.responses.push({ cmd: code, payload: framePayload });
@@ -198,9 +206,15 @@ function decodeTextFrame(cmd, payload) {
         const slot = payload[4];
         const text = payload.subarray(5).toString('utf8').replace(/\0+$/, '');
         if (!text.length) return null;
+        const namekey = mappedGroupChannels.get(slot);
+        if (!namekey || !localGroupChannels.has(namekey) || discoveredGroupChannels.get(slot) !== namekey) {
+            groupReceiveUnverified++;
+            return null;
+        }
         return {
             from: fromId,
             group_slot: slot,
+            namekey,
             transport: 'meshcore',
             backend: 'tcp_api',
             data: { text_message: text },
@@ -208,6 +222,29 @@ function decodeTextFrame(cmd, payload) {
         };
     }
     return null;
+}
+
+function configureGroupChannel(slot, namekey) {
+    discoveredGroupChannels.set(slot, namekey);
+    if (localGroupChannels.has(namekey)) {
+        mappedGroupChannels.set(slot, namekey);
+        return true;
+    }
+    mappedGroupChannels.delete(slot);
+    return false;
+}
+
+function clearGroupChannels() {
+    localGroupChannels.clear();
+    discoveredGroupChannels.clear();
+    mappedGroupChannels.clear();
+    groupReceiveUnverified = 0;
+}
+
+function channelSendAllowed(slot, namekey) {
+    return !!namekey && localGroupChannels.has(namekey) &&
+        discoveredGroupChannels.get(slot) === namekey &&
+        mappedGroupChannels.get(slot) === namekey;
 }
 
 function buildRadioFrame(cmd, payload = Buffer.alloc(0)) {
@@ -286,7 +323,7 @@ const STRICT_OFF = { isEnabled: () => false };
 {
     const a = new SmartAccumulator(STRICT_OFF);
     a.inject(buildRadioFrame(CMD_ENCRYPTED_DM, Buffer.alloc(16)));
-    check('encrypted strict-off unknown', a.stats.early_drop_unknown_cmd, 1);
+    check('encrypted strict-off ignored as known non-message', a.stats.early_drop_unknown_cmd, 0);
 }
 {
     const a = new SmartAccumulator(STRICT_ON);
@@ -351,11 +388,29 @@ const STRICT_OFF = { isEnabled: () => false };
     meshcoreSelfId = null;
 }
 {
+    clearGroupChannels();
+    localGroupChannels.add('TacNet AQ==');
+    check('group setup: exact radio/Crow channel mapped', configureGroupChannel(5, 'TacNet AQ=='), true);
     const msg = decodeTextFrame(RESP_CHANNEL_MSG_RECV, groupPayload(0xDEADBEEF, 5, 'yo'));
     check('decode group text', msg?.data?.text_message, 'yo');
     check('decode group slot', msg?.group_slot, 5);
+    check('decode group exact namekey', msg?.namekey, 'TacNet AQ==');
+    check('group send exact channel allowed', channelSendAllowed(5, 'TacNet AQ=='), true);
 }
 {
+    clearGroupChannels();
+    localGroupChannels.add('TacNet AQ==');
+    check('group mismatch wrong radio key not mapped', configureGroupChannel(5, 'TacNet Ag=='), false);
+    check('group mismatch receive dropped', decodeTextFrame(RESP_CHANNEL_MSG_RECV, groupPayload(1, 5, 'wrong key')), null);
+    check('group mismatch send blocked', channelSendAllowed(5, 'TacNet AQ=='), false);
+    check('group mismatch wrong radio slot not mapped', configureGroupChannel(4, 'TacNet AQ=='), true);
+    check('group mismatch receive wrong slot dropped', decodeTextFrame(RESP_CHANNEL_MSG_RECV, groupPayload(1, 5, 'wrong slot')), null);
+    check('group mismatch send wrong slot blocked', channelSendAllowed(5, 'TacNet AQ=='), false);
+}
+{
+    clearGroupChannels();
+    localGroupChannels.add('V3 AQ==');
+    configureGroupChannel(2, 'V3 AQ==');
     const d = decodeTextFrame(RESP_DIRECT_MSG_RECV_V3, directPayload(1, 2, 'v3d'));
     const g = decodeTextFrame(RESP_CHANNEL_MSG_RECV_V3, groupPayload(3, 2, 'v3g'));
     check('decode v3 direct', d?.data?.text_message, 'v3d');

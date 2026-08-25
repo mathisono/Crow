@@ -4,7 +4,8 @@ Status: **historical hardware validation report; not validation of current HEAD*
 
 The report below covers the 2026-07-06 build listed in its Build tested
 section. Use `DEVELOPMENT_PLAN.md` for the current validation gates and do not
-use this document as evidence that commit `421aa78` has passed live RF tests.
+use this document as evidence that the current release-prep commit has passed
+live RF tests.
 
 This report records the validation run performed from MSE-88 against Hub5 and the MeshCore Companion TCP device.
 

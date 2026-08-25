@@ -1,7 +1,7 @@
 # Crow Development Plan
 
 Status: **2026-08-25**  
-Current source revision: `421aa78` — Implement MeshCore TCP and USB Companion backends
+Current source revision: local release-prep commit — exact-match RF group gate
 
 This is the current development and validation plan. Historical Raven migration notes remain in `CROW_MIGRATION_PLAN.md`; they are not the active feature plan.
 
@@ -58,37 +58,45 @@ Issue #1 about the custom firmware link is no longer an active Crow development 
 
 ## RF group-channel safety gate
 
-RF group receive and send must remain intentionally unavailable until the same group channel is configured on both the radio and Crow. Channel discovery may report a runtime channel, but it must not silently join, persist, or enable it.
+The MeshCore TCP or USB backend may remain enabled. RF group receive and send
+activate per channel only after the radio reports the exact same channel name,
+key, and slot that Crow has configured. Channel discovery is authoritative for
+the radio side; it must not silently join, persist, or enable an unmatched
+channel.
 
-### Gate 0: disabled baseline
+### Gate 0: safe enabled baseline
 
 Before a matching channel is configured:
 
 ```json
 {
-  "meshcore": { "enabled": false },
-  "meshcore_tcp_api": { "enabled": false }
+  "meshcore": { "enabled": true, "backend": "tcp" },
+  "meshcore_tcp_api": {
+    "enabled": true,
+    "channel_discovery": true
+  }
 }
 ```
 
 Expected behavior:
 
-- no MeshCore RF socket or serial transport is active;
-- no Crow-originated group send is attempted;
-- no RF group receive is routed into Crow.
+- the MeshCore transport may connect and discover the radio;
+- no unmatched Crow-originated group send is attempted;
+- no unmatched RF group receive is routed into Crow;
+- direct traffic follows its separate identity and routing checks.
 
 ### Gate 1: negative software tests
 
-With the backend test harness enabled but no matching local channel:
+With the backend test harness enabled but no exact local/radio match:
 
-- an inbound group frame whose `group_slot` has no Crow mapping is dropped by router scope;
-- an outbound group message with no resolvable slot fails safely and increments the channel-send failure counter;
-- a discovered radio channel remains runtime-only and does not modify Crow config;
+- an inbound group frame whose slot, name, or key differs is dropped before routing;
+- an outbound group message without an exact verified slot/name/key tuple fails safely and increments the channel-send failure counter;
+- a discovered radio channel that is absent from Crow remains runtime-only and does not modify Crow config;
 - direct-message tests remain separate from group-channel tests.
 
 ### Gate 2: configure one matching group channel
 
-Choose one radio group slot `N`. Configure that channel on the radio, then configure the exact same MeshCore channel name/key in Crow and explicitly map it to `N`:
+Choose one radio group slot `N`. Configure that channel on the radio, then configure the exact same MeshCore channel name/key in Crow. Enable read-only discovery so Crow can verify the radio slot:
 
 ```json
 {
@@ -97,22 +105,22 @@ Choose one radio group slot `N`. Configure that channel on the radio, then confi
   ],
   "meshcore_tcp_api": {
     "enabled": true,
-    "channel_discovery": true,
-    "channel_slots": {
-      "<exact-radio-channel-name-and-key>": N
-    }
+    "channel_discovery": true
   }
 }
 ```
 
-The radio remains the authority for channel name, key, and slot. Crow must not invent a key or write the radio configuration.
+When discovery reports slot `N` with the exact name/key, Crow maps that slot
+to the local channel for receive and send. The radio remains the authority for
+channel name, key, and slot. Crow must not invent a key or write the radio
+configuration.
 
 ### Gate 3: positive RF receive
 
 Send a test message over RF on slot `N` and verify:
 
 - the Companion frame decodes with `group_slot: N`;
-- Crow resolves `N` to the configured local channel;
+- Crow resolves `N` only when the discovered name/key is an exact local match;
 - the message appears only in that channel;
 - an otherwise identical message on an unmapped slot is dropped;
 - no raw PSK appears in logs, telemetry, or UI.
@@ -121,14 +129,17 @@ Send a test message over RF on slot `N` and verify:
 
 Send a Crow message to the mapped local channel and verify:
 
-- `CMD_SEND_CHANNEL_MESSAGE (0x03)` is built for slot `N`;
+- `CMD_SEND_CHANNEL_MESSAGE (0x03)` is built for the verified slot `N`;
 - the radio receives the message on the matching channel;
 - `channel_sends_ok` increments;
 - a Crow message targeting an unmapped channel does not produce an RF send and increments `channel_sends_failed` instead.
 
 ### RF gate acceptance
 
-The RF work is complete only when the negative tests pass before configuration and the positive receive/send tests pass after the exact radio/Crow channel mapping is installed. Until then, release notes must say **hardware validation pending**.
+The software gate is complete when mismatched tuples are rejected and an
+exact discovered tuple enables receive/send. Live RF work is complete only
+when the positive receive/send tests pass after the radio and Crow are
+configured. Until then, release notes must say **hardware validation pending**.
 
 ## Required checks before release
 
@@ -143,4 +154,6 @@ for f in tests/run_*.js; do node "$f" || exit $?; done
 sha256sum crow_alpha.ipk crow-alpha.apk
 ```
 
-The canonical `.uc` tests must also be run on a host or AREDN node with `ucode` available.
+The canonical `.uc` tests must also be run with `ucode` available. If the
+interpreter is unavailable on the target host, record that limitation rather
+than treating the Node mirror as the native test.

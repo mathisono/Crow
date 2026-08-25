@@ -110,6 +110,17 @@ function isGroupFrame(cmd)
     return cmd === RESP_CHANNEL_MSG_RECV || cmd === RESP_CHANNEL_MSG_RECV_V3;
 }
 
+function validTextPayload(cmd, payload)
+{
+    if (isDirectFrame(cmd)) {
+        return length(payload) >= 9 && 9 + ord(payload, 8) <= length(payload);
+    }
+    if (isGroupFrame(cmd)) {
+        return length(payload) >= 5;
+    }
+    return false;
+}
+
 // ---------------------------------------------------------------------
 // Module state
 // ---------------------------------------------------------------------
@@ -174,6 +185,7 @@ let stats            = {
     direct_sends_failed: 0,
     channel_sends_ok: 0,
     channel_sends_failed: 0,
+    group_receive_unverified: 0,
     channel_scans: 0,
     channel_discovery_requests: 0,
     channel_info_responses: 0,
@@ -354,7 +366,6 @@ function ensureRuntimePublicChannel()
                 rootConfig.update?.("channels");
                 log0("channel label updated: %s (label: %s)\n", channelNamekey, label);
             }
-            mapMeshcoreSlot(0, localChannels[i]);
             channelCreated = true;
             return false;
         }
@@ -364,7 +375,6 @@ function ensureRuntimePublicChannel()
     push(localChannels, chan);
     channel.updateLocalChannels(localChannels);
     rootConfig.update?.("channels");
-    mapMeshcoreSlot(0, channel.getLocalChannelByNameKey(channelNamekey) ?? channel.addMessageNameKey(channelNamekey));
     channelCreated = true;
     log0("auto-created channel: %s (label: %s)\n", channelNamekey, label);
     return true;
@@ -375,10 +385,11 @@ function mapDiscoveredChannelIfLocal(ch)
     if (!ch || ch.index === null || !ch.namekey) {
         return false;
     }
-    let chan = channel.getLocalChannelByNameKey(ch.namekey);
-    if (!chan && ch.index === 0) {
-        chan = channel.getLocalChannelByNameKey(channelNamekey) ?? channel.addMessageNameKey(channelNamekey);
+    const mapped = channel.getChannelByMeshcoreSlot(ch.index);
+    if (mapped && mapped.namekey !== ch.namekey) {
+        channel.clearMeshcoreSlotChannel(ch.index);
     }
+    const chan = channel.getLocalChannelByNameKey(ch.namekey);
     if (chan) {
         mapMeshcoreSlot(ch.index, chan);
         return true;
@@ -386,26 +397,32 @@ function mapDiscoveredChannelIfLocal(ch)
     return false;
 }
 
+function verifiedLocalChannelForSlot(slot, namekey)
+{
+    if (slot === null || slot < 0 || slot > MAX_CHANNEL_INDEX || !namekey) {
+        return null;
+    }
+    const discovered = discoveredChannels[`${slot}`];
+    if (!discovered || discovered.namekey !== namekey) {
+        return null;
+    }
+    const local = channel.getLocalChannelByNameKey(namekey);
+    const mapped = channel.getChannelByMeshcoreSlot(slot);
+    if (!local || !mapped || mapped.namekey !== namekey) {
+        return null;
+    }
+    return local;
+}
+
 function meshcoreChannelIndexForNamekey(namekey)
 {
-    if (!namekey || channel.isMeshcorePreset(namekey)) {
-        return 0;
+    if (!namekey) {
+        return null;
     }
 
     for (let idx in discoveredChannels) {
-        if (discoveredChannels[idx]?.namekey === namekey) {
+        if (discoveredChannels[idx]?.namekey === namekey && verifiedLocalChannelForSlot(int(idx), namekey)) {
             return int(idx);
-        }
-    }
-
-    const slots = cfg?.channel_slots ?? cfg?.channel_map;
-    if (slots) {
-        if (slots[namekey] !== null) {
-            return int(slots[namekey]);
-        }
-        const cname = split(namekey, " ")[0];
-        if (slots[cname] !== null) {
-            return int(slots[cname]);
         }
     }
     return null;
@@ -988,6 +1005,11 @@ function channelMsg(index, text, textType, timestamp, snr, pathLen)
 
     msgSeq = (msgSeq + 1) & 0xFFFFFFFF;
     const mapped = channel.getChannelByMeshcoreSlot(index);
+    if (!mapped || !verifiedLocalChannelForSlot(index, mapped.namekey)) {
+        stats.group_receive_unverified++;
+        log1("drop MeshCore group slot=%d until radio/Crow channel namekey matches\n", index);
+        return null;
+    }
     return {
         id:                   msgSeq,
         from:                 0,
@@ -998,7 +1020,7 @@ function channelMsg(index, text, textType, timestamp, snr, pathLen)
         transport:            "meshcore",
         backend:              serialMode ? "serial_api" : "tcp_api",
         originating_callsign: callsign,
-        namekey:              mapped?.namekey ?? (index === 0 ? channelNamekey : null),
+        namekey:              mapped.namekey,
         data: {
             text_message: text
         },
@@ -1048,7 +1070,7 @@ function parseDirectLegacy(payload)
     const fromId = u32le(payload, 0);
     const toId = u32le(payload, 4);
     const tlen = ord(payload, 8);
-    if (9 + tlen > length(payload)) return null;
+    if (9 + tlen !== length(payload)) return null;
     const text = textClean(substr(payload, 9, tlen));
     if (!isMostlyPrintable(text)) return null;
     return directMsg(fromId, null, text, TEXT_TYPE_PLAIN, time(), null, null, true, toId);
@@ -1093,10 +1115,10 @@ function decodeTextFrame(cmd, payload)
 {
     let msg = null;
     if (cmd === RESP_DIRECT_MSG_RECV_V3) {
-        msg = parseDirectModern(payload, 3) ?? parseDirectLegacy(payload);
+        msg = parseDirectLegacy(payload) ?? parseDirectModern(payload, 3);
     }
     else if (cmd === RESP_DIRECT_MSG_RECV) {
-        msg = parseDirectModern(payload, 1) ?? parseDirectLegacy(payload);
+        msg = parseDirectLegacy(payload) ?? parseDirectModern(payload, 1);
     }
     else if (cmd === RESP_CHANNEL_MSG_RECV_V3) {
         msg = parseChannelModern(payload, 3) ?? parseChannelLegacy(payload);
@@ -1293,6 +1315,12 @@ function smartAccumulate(data)
 
         if (isDirectFrame(cmd) || isGroupFrame(cmd)) {
             syncRequestInFlight = false;
+            if (!validTextPayload(cmd, payload)) {
+                stats.early_drop_malformed_text++;
+                log1("drop malformed text frame cmd=0x%02x plen=%d\n", cmd, plen);
+                maybeRequestNext("drop malformed text");
+                continue;
+            }
             push(frames, { cmd: cmd, payload: payload });
             continue;
         }
@@ -1489,10 +1517,12 @@ export function send(msg)
     }
 
     const idx = msg.group_slot ?? msg.channel_index ?? meshcoreChannelIndexForNamekey(msg.namekey);
-    if (idx === null || idx < 0 || idx > MAX_CHANNEL_INDEX) {
+    if (idx === null || idx < 0 || idx > MAX_CHANNEL_INDEX ||
+        !verifiedLocalChannelForSlot(idx, msg.namekey)) {
         stats.sends_failed++;
         stats.channel_sends_failed++;
-        log1("send channel: no MeshCore slot for namekey=%s msg.id=%s\n", msg.namekey ?? "", msg?.id);
+        log1("send channel: unverified MeshCore slot/namekey namekey=%s slot=%s msg.id=%s\n",
+            msg.namekey ?? "", idx ?? "", msg?.id);
         return false;
     }
 
@@ -1569,6 +1599,7 @@ export function status()
         direct_sends_failed: stats.direct_sends_failed,
         channel_sends_ok: stats.channel_sends_ok,
         channel_sends_failed: stats.channel_sends_failed,
+        group_receive_unverified: stats.group_receive_unverified,
         last_rx_time: lastRxTime,
         last_cmd: lastCmd,
         syncing_messages: syncingMessages,
@@ -1626,10 +1657,34 @@ export function _test_reset()
     responses = [];
     msgSeq = 0;
     discoveredChannels = {};
+    channel.clearMeshcoreSlotChannels();
     unknownFrameCounts = {};
     meshcoreSelfPublicKey = null;
     meshcoreSelfPublicKeyPrefix = null;
     for (let k in stats) stats[k] = 0;
+};
+
+export function _test_set_local_channels(configs)
+{
+    return channel.setLocalChannels(configs ?? []);
+};
+
+export function _test_set_discovered_channel(index, namekey)
+{
+    const parts = split(namekey ?? "", " ");
+    if (length(parts) !== 2) return false;
+    discoveredChannels[`${index}`] = {
+        index: index,
+        name: parts[0],
+        secret_b64: parts[1],
+        namekey: namekey
+    };
+    return mapDiscoveredChannelIfLocal(discoveredChannels[`${index}`]);
+};
+
+export function _test_channel_send_allowed(index, namekey)
+{
+    return verifiedLocalChannelForSlot(index, namekey) !== null;
 };
 
 export function _test_set_self_public_key_prefix(prefix)
@@ -1644,7 +1699,14 @@ export function _test_stats()
 
 export function _test_take_response(cmd)
 {
-    return takeResponse(cmd);
+    for (let i = 0; i < length(responses); i++) {
+        if (responses[i].cmd === cmd) {
+            const resp = responses[i];
+            splice(responses, i, 1);
+            return resp;
+        }
+    }
+    return null;
 };
 
 export function takeResponse(cmd)

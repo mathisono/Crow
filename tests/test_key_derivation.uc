@@ -2,7 +2,7 @@
 // Run: ucode test_key_derivation.uc
 // Expected: Deterministic keys, correct length
 
-import * as crypto from "../crypto.crypto";
+import * as crypto from "../crypto/crypto.uc";
 
 let passed = 0;
 let failed = 0;

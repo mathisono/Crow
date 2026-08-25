@@ -14,6 +14,9 @@
 
 import * as discovery from "meshcore_tcp_discovery";
 
+global.DEBUG0 = function (...args) {};
+global.DEBUG1 = function (...args) {};
+
 function assert(condition, message)
 {
     if (!condition) {
@@ -52,21 +55,15 @@ function test_parse_sample_channel()
 {
     printf("\\n=== Test 1: Parse Sample Channel Info ===\\n");
     
-    // Build sample data: 50 bytes
-    // 12 01 54 65 73 74 43 68 61 6E 6E 65 6C [nulls] [secret]
-    const sample = [
-        0x12,                                           // Packet ID
-        0x01,                                           // Index 1
-        0x54, 0x65, 0x73, 0x74, 0x43, 0x68,           // "TestCh"
-        0x61, 0x6E, 0x6E, 0x65, 0x6C,                 // "annel"
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00,           // Null padding
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF,           // Secret key
-        0x00, 0x11, 0x22, 0x33, 0x44, 0x55,
-        0x66, 0x77, 0x88, 0x99
-    ];
+    // Build the documented 50-byte response: id + slot + 32-byte name + key.
+    const sample = [0x12, 0x01];
+    const sampleName = "TestChannel";
+    for (let i = 0; i < length(sampleName); i++) push(sample, ord(sampleName, i));
+    for (let i = length(sampleName); i < 32; i++) push(sample, 0);
+    const sampleKey = [0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF,
+                       0x00, 0x11, 0x22, 0x33, 0x44, 0x55,
+                       0x66, 0x77, 0x88, 0x99];
+    for (let i = 0; i < length(sampleKey); i++) push(sample, sampleKey[i]);
     
     assert(length(sample) === 50, "Sample data is 50 bytes");
     
@@ -125,7 +122,7 @@ function test_parse_short_name()
     // Name: "TacNet"
     const name = "TacNet";
     for (let i = 0; i < 6; i++) {
-        push(sample, name.charCodeAt(i));
+        push(sample, ord(name, i));
     }
     // Pad with nulls to 32 bytes
     for (let i = 6; i < 32; i++) {
@@ -160,7 +157,7 @@ function test_parse_public_channel()
     // Name: "Public"
     const name = "Public";
     for (let i = 0; i < 6; i++) {
-        push(sample, name.charCodeAt(i));
+        push(sample, ord(name, i));
     }
     // Pad with nulls
     for (let i = 6; i < 32; i++) {
@@ -227,7 +224,7 @@ function test_parse_max_index()
     // Name: "Emergency"
     const name = "Emergency";
     for (let i = 0; i < length(name); i++) {
-        push(sample, name.charCodeAt(i));
+        push(sample, ord(name, i));
     }
     // Pad with nulls
     while (length(sample) < 2 + 32) {

@@ -3,9 +3,9 @@
 Status: current validation notes for the direct-message verification path in
 `meshcore_tcp_api.uc`, `router.uc`, and `nodedb.uc`.
 
-The first committed implementation was verified locally in `421aa78` on
-2026-08-25. Live hardware verification of modern Companion destination fields
-is still pending.
+The current release-prep implementation was verified locally on 2026-08-25.
+Live hardware verification of modern Companion destination fields is still
+pending.
 
 Crow receives direct frames from the connected MeshCore Companion queue as
 local direct messages. Legacy direct frames carry a destination id; when Crow
@@ -47,7 +47,7 @@ Legacy direct where destination does not match connected radio identity -> dropp
 Modern direct from the connected Companion queue without exposed destination -> accepted as unverified local direct ingress
 Direct reply to a sender with a learned public-key prefix -> sent through CMD_SEND_DIRECT_MESSAGE
 Direct reply without a learned public-key prefix -> fails safely
-MeshCore TCP group message -> routes through public channel or group-slot mapping
+MeshCore TCP group message -> routes only after an exact discovered radio/Crow name-key-slot match
 ```
 
 ## Related files

@@ -7,7 +7,7 @@
 // entry, matching the APRS backend pattern.
 // =====================================================================
 
-import * as backend from "../meshcore_backend";
+import * as backend from "../meshcore_backend.uc";
 
 function assert(condition, message)
 {

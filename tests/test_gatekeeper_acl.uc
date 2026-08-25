@@ -2,7 +2,10 @@
 // Run: ucode test_gatekeeper_acl.uc
 // Expected: All assertions pass
 
-import * as gatekeeper from "../gatekeeper";
+import * as gatekeeper from "../gatekeeper.uc";
+
+global.DEBUG0 = function (...args) {};
+global.DEBUG1 = function (...args) {};
 
 let passed = 0;
 let failed = 0;
@@ -23,7 +26,7 @@ gatekeeper.setup({
     strict_gatekeeper: {
         enabled: true,
         gateway_callsign: "KJ6DZB",
-        allowed_callsigns: ["K6DZB", "KN6PLV", "W2ABC"]
+        allowed_callsigns: ["K6DZB", "KN6PLV", "W2ABC", "W2DZB"]
     }
 });
 
@@ -36,7 +39,7 @@ function makeMsg(callsign, namekey)
         from: 0x12345678,
         data: {
             text_from: callsign,
-            text_message: "test message"
+            text_message: `${callsign} test message`
         },
         namekey: namekey,
         metadata: {}

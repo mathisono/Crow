@@ -50,6 +50,13 @@ function u32le(n)
     return chr(n & 0xFF) + chr((n >> 8) & 0xFF) + chr((n >> 16) & 0xFF) + chr((n >> 24) & 0xFF);
 }
 
+function fillBytes(byte, count)
+{
+    let out = "";
+    for (let i = 0; i < count; i++) out += chr(byte);
+    return out;
+}
+
 function directPayload(from, to, text)
 {
     return u32le(from) + u32le(to) + chr(length(text)) + text;
@@ -107,7 +114,7 @@ api._test_reset();
 // ---- 5. Encrypted early-drop under strict mode
 api._test_reset();
 {
-    const enc = api._test_build_frame(CMD_ENCRYPTED_DM, "X" * 32);
+    const enc = api._test_build_frame(CMD_ENCRYPTED_DM, fillBytes(0x58, 32));
     check("encrypted: dropped", length(api._test_inject(enc, STRICT_ON)), 0);
     check("encrypted: stat incremented", api._test_stats().early_drop_encrypted, 1);
 }
@@ -115,10 +122,10 @@ api._test_reset();
 // ---- 6. Encrypted frames with strict OFF -> unknown gate
 api._test_reset();
 {
-    const enc = api._test_build_frame(CMD_ENCRYPTED_DM, "X" * 16);
+    const enc = api._test_build_frame(CMD_ENCRYPTED_DM, fillBytes(0x58, 16));
     api._test_inject(enc, STRICT_OFF);
     check("encrypted strict-off: not counted as encrypted drop", api._test_stats().early_drop_encrypted, 0);
-    check("encrypted strict-off: counted as unknown-cmd drop", api._test_stats().early_drop_unknown_cmd, 1);
+    check("encrypted strict-off: ignored as known non-message", api._test_stats().early_drop_unknown_cmd, 0);
 }
 
 // ---- 7. Unknown command early-drop
@@ -162,8 +169,8 @@ api._test_reset();
 api._test_reset();
 {
     api._test_inject(chr(0x3E) + chr(0x00) + chr(0x04), STRICT_ON); // claim 1024
-    api._test_inject("\xAA" * 600, STRICT_ON);
-    api._test_inject("\xAA" * 424, STRICT_ON);
+    api._test_inject(fillBytes(0xAA, 600), STRICT_ON);
+    api._test_inject(fillBytes(0xAA, 424), STRICT_ON);
     const good = api._test_build_frame(RESP_DIRECT_MSG_RECV, directPayload(7, 8, "ok"));
     const f = api._test_inject(good, STRICT_ON);
     check("oversize drain: next valid frame parses", length(f), 1);
@@ -232,16 +239,35 @@ api._test_reset();
 // ---- 14. Decoder: older group response marks group metadata
 api._test_reset();
 {
+    api._test_set_local_channels([{ namekey: "TacNet AQ==" }]);
+    check("group setup: exact radio/Crow channel mapped", api._test_set_discovered_channel(5, "TacNet AQ=="), true);
     const payload = groupPayload(0xDEADBEEF, 5, "yo");
     const msg = api._test_decode(RESP_CHANNEL_MSG_RECV, payload);
     check("decode group: is_group", msg?.metadata?.is_group_message, true);
     check("decode group: slot", msg?.group_slot, 5);
+    check("decode group: exact namekey", msg?.namekey, "TacNet AQ==");
     check("decode group: text", msg?.data?.text_message, "yo");
+    check("group send: exact channel allowed", api._test_channel_send_allowed(5, "TacNet AQ=="), true);
+}
+
+// ---- 14b. Group receive/send stay disabled for name/key or slot mismatches
+api._test_reset();
+{
+    api._test_set_local_channels([{ namekey: "TacNet AQ==" }]);
+    check("group mismatch: wrong radio key not mapped", api._test_set_discovered_channel(5, "TacNet Ag=="), false);
+    check("group mismatch: receive dropped", api._test_decode(RESP_CHANNEL_MSG_RECV, groupPayload(1, 5, "wrong key")), null);
+    check("group mismatch: send blocked", api._test_channel_send_allowed(5, "TacNet AQ=="), false);
+
+    check("group mismatch: wrong radio slot not mapped", api._test_set_discovered_channel(4, "TacNet AQ=="), true);
+    check("group mismatch: receive wrong slot dropped", api._test_decode(RESP_CHANNEL_MSG_RECV, groupPayload(1, 5, "wrong slot")), null);
+    check("group mismatch: send wrong slot blocked", api._test_channel_send_allowed(5, "TacNet AQ=="), false);
 }
 
 // ---- 15. Decoder: v3 direct and group response codes are accepted
 api._test_reset();
 {
+    api._test_set_local_channels([{ namekey: "V3 AQ==" }]);
+    api._test_set_discovered_channel(2, "V3 AQ==");
     const d = api._test_decode(RESP_DIRECT_MSG_RECV_V3, directPayload(1, 2, "v3d"));
     const g = api._test_decode(RESP_CHANNEL_MSG_RECV_V3, groupPayload(3, 2, "v3g"));
     check("decode v3 direct: text", d?.data?.text_message, "v3d");
@@ -251,7 +277,7 @@ api._test_reset();
 // ---- 16. Channel info response is cached for discovery/control
 api._test_reset();
 {
-    const response = chr(RESP_CHANNEL_INFO) + chr(0) + ("TacNet" + "\x00" * 26) + ("\x01" * 16);
+    const response = chr(RESP_CHANNEL_INFO) + chr(0) + ("TacNet" + fillBytes(0, 26)) + fillBytes(1, 16);
     const frame = chr(0x3E) + chr(length(response) & 0xFF) + chr((length(response) >> 8) & 0xFF) + response;
     check("channel info: no Crow message emitted", length(api._test_inject(frame, STRICT_ON)), 0);
     check("channel info: cached stat", api._test_stats().responses_cached, 1);

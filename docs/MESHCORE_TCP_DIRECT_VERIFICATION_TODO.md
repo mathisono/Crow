@@ -1,6 +1,6 @@
 # MeshCore TCP Direct-Message Verification TODO
 
-Status: **v1 implemented and locally verified in commit `421aa78`; v2 hardware
+Status: **v1 implemented and locally verified in the current release-prep commit; v2 hardware
 validation pending.** Legacy direct frames are enforced by `router.uc`. Modern
 Companion direct frames still need hardware validation because the current
 parser does not expose an explicit destination id for that format.
@@ -63,7 +63,7 @@ After hardware exposes and Crow verifies the destination for modern frames:
 ```text
 Direct MeshCore TCP message where msg.to == connected radio/device id -> accepted
 Direct MeshCore TCP message where msg.to != connected radio/device id -> dropped
-MeshCore TCP group message -> still requires group_slot mapped to a local Crow channel
+MeshCore TCP group message -> still requires an exact discovered radio/Crow name-key-slot match
 ```
 
 ## Related files

@@ -128,6 +128,21 @@ The TCP backend caches `0x12` responses. Discovery drains cached responses using
 
 Because the socket is non-blocking, discovery is asynchronous: one sync may send requests, and a later sync may parse responses that arrived afterward.
 
+## Exact-match RF group gate
+
+The TCP and USB backends can stay enabled while RF group traffic remains safe
+per channel. A group frame is accepted only when all three values agree:
+
+1. the radio-reported channel slot from `0x12`;
+2. the radio-reported channel name/key;
+3. Crow's local channel `namekey` (`<name> <base64-key>`).
+
+Discovery is read-only and authoritative for the radio side. Crow does not
+invent a key, write the radio, or auto-enable an unmatched discovered group.
+If the exact tuple is not present, inbound group traffic is dropped and
+outbound channel sends fail safely. Set `channel_discovery: true` when using
+this gate; a static slot/namekey guess is not sufficient to verify the radio.
+
 ## Smart Accumulator
 
 The Smart Accumulator protects low-RAM OpenWrt nodes by rejecting unsafe frames as early as possible.
@@ -171,7 +186,7 @@ connected radio public-key prefix, Crow verifies that destination and sets
 destination id, so they keep the queue-origin `local_direct` fallback until
 hardware validation identifies a destination-bearing format or command.
 
-Group message example:
+Group message example (after the exact-match gate passes):
 
 ```json
 {

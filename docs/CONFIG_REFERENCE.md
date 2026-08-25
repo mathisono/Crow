@@ -379,8 +379,13 @@ Transport type for MeshCore.
   command/status API.
 - Direct-message destinations are verified when Companion frames expose a
   destination id and self-info has provided the connected device identity.
-- Channel discovery is runtime-only in this branch; it does not write Crow
-  config or auto-map MeshCore group slots.
+- Channel discovery is read-only and runtime-only. It does not write Crow
+  config or auto-map an unmatched MeshCore group slot.
+- RF group receive/send is enabled per channel only after the discovered radio
+  slot, channel name, and key exactly match a Crow local `channels[].namekey`.
+- Keep `channel_discovery: true` when using the TCP/serial group path; a
+  configured namekey without a verified radio slot remains receive/send
+  disabled.
 
 ## MeshCore USB Serial API
 

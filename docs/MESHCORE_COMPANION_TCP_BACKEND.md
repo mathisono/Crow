@@ -202,12 +202,11 @@ bytes 2-5    Unix timestamp, uint32 little-endian
 bytes 6+     UTF-8 text
 ```
 
-The backend resolves channel index in this order:
-
-1. `msg.group_slot` or `msg.channel_index` when already present;
-2. runtime `discoveredChannels` map;
-3. explicit `meshcore_tcp_api.channel_slots` / `channel_map` config;
-4. public/default MeshCore channel -> slot `0`.
+The backend sends only after the radio's `0x12` discovery response verifies
+the exact slot, channel name, and key against Crow's local `channels[].namekey`.
+`channel_slots`, `channel_map`, and a default slot guess are not sufficient
+and are not used to bypass this check. An unmatched channel send fails safely
+and increments `channel_sends_failed`.
 
 ## Direct send
 

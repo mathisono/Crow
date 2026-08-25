@@ -141,6 +141,7 @@ function candidateStatus(key, label, transport, configured, isActive, host, port
         direct_sends_failed: detail.direct_sends_failed,
         channel_sends_ok: detail.channel_sends_ok,
         channel_sends_failed: detail.channel_sends_failed,
+        group_receive_unverified: detail.group_receive_unverified,
         responses_cached: detail.responses_cached,
         channel_discovery: detail.channel_discovery,
         channel_scans: detail.channel_scans,

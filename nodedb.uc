@@ -6,7 +6,8 @@ import * as utils from "utils";
 const SAVE_INTERVAL = 31 * 60; // 31 minutes
 const KEEP_WINDOW = 7 * 24 * 60 * 60; // 7 days
 
-let nodedb;
+// Keep standalone module tests safe before the platform lifecycle calls setup().
+let nodedb = {};
 
 export function setup(config)
 {
@@ -38,7 +39,13 @@ export function shutdown()
 
 export function getNode(id, create)
 {
-    if (id == node.id()) {
+    // The node module has no identity until platform setup() runs.  Keep
+    // standalone module tests and early boot callers from dereferencing it.
+    let selfId = null;
+    try {
+        selfId = node.id();
+    } catch (_) {}
+    if (selfId !== null && id == selfId) {
         return {
             me: true,
             id: id,
@@ -54,7 +61,7 @@ function saveNode(n)
         nodedb[n.id] = n;
         n.lastseen = time();
         n.sortkey = time() + (n.nodeinfo?.platform === "native" ? 10000000000 : 0);
-        event.notify({ cmd: "node", id: n.id }, `node ${n.id}`);
+        global.event?.notify?.({ cmd: "node", id: n.id }, `node ${n.id}`);
     }
 }
 

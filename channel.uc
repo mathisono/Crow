@@ -213,6 +213,20 @@ export function setMeshcoreSlotChannel(slot, channel)
     return true;
 };
 
+export function clearMeshcoreSlotChannel(slot)
+{
+    if (slot === null || slot < 0 || slot > 15) {
+        return false;
+    }
+    delete channelsByMeshcoreSlot[slot];
+    return true;
+};
+
+export function clearMeshcoreSlotChannels()
+{
+    channelsByMeshcoreSlot = {};
+};
+
 export function getLocalChannelByNameKey(namekey)
 {
     if (!namekey) {

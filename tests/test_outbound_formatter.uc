@@ -5,6 +5,9 @@
 
 import * as fmt from "lora_outbound_text";
 
+global.DEBUG0 = function (...args) {};
+global.DEBUG1 = function (...args) {};
+
 let failed = 0;
 let passed = 0;
 

@@ -1,11 +1,12 @@
-# Crow v0.0.2-r20389266 — pre-release candidate
+# Crow v0.0.2-r20391386 — pre-release candidate
 
-Commit: `421aa78`
+Commit: local release-prep commit
 Status: **hardware validation pending**
 
 This candidate contains the first committed MeshCore Companion TCP and USB
-serial backend implementation. RF group receive/send remains intentionally
-gated until an exact group channel is configured in both Crow and the radio.
+serial backend implementation. The backends may remain enabled; RF group
+receive/send activates only when radio discovery verifies an exact channel
+name/key/slot match with Crow. Live RF validation remains pending.
 See [DEVELOPMENT_PLAN.md](docs/DEVELOPMENT_PLAN.md).
 
 ## New in this candidate
@@ -15,22 +16,24 @@ See [DEVELOPMENT_PLAN.md](docs/DEVELOPMENT_PLAN.md).
 - Direct and channel receive for legacy and v3 response formats.
 - Direct replies using learned MeshCore public-key prefixes.
 - Channel discovery, runtime notifications, telemetry, and backpressure.
+- Exact-match RF group receive/send gate with negative key/slot coverage.
 - Backend selection tests and direct-identity regression coverage.
 - Vendored APK builder support for current AREDN packaging.
 
 ## Validation
 
-- 104 Node regression tests passed.
+- 113 Node regression tests passed.
 - UI and shell syntax checks passed.
 - IPK/APK package build passed.
-- Canonical `ucode` tests were not run on the build host because `ucode` is not installed.
+- Canonical native `.uc` regression tests passed with a locally built upstream
+  `ucode` interpreter; the target AREDN hardware still needs live validation.
 - Live MeshCore TCP/USB and RF validation is pending hardware access/configuration.
 
 ## Candidate artifacts
 
 ```text
-a3b5a997d47a12a0456c424312a26a34b3577116aa6fd616cf6d3b941389caa7  crow_alpha.ipk
-113274efa9a9ea49ec8ad355bc694d8edbe1780cd5ebf5b054016fc7786ce76a  crow-alpha.apk
+751959542fd11d32031c22e9acc9935605caaaeedaf5bba126b411cee463ec41  crow_alpha.ipk
+aac549131ff346736566b272e8f59db74bce2fbbf021196b633549a88b716abb  crow-alpha.apk
 ```
 
 ---
