@@ -15,6 +15,7 @@ const SMART_MAX_PAYLOAD = 256;
 const RESYNC_BUFFER_CAP = 4096;
 
 const PUSH_CODE_MSG_WAITING = 0x83;
+const CMD_SEND_CHANNEL_TXT_MSG = 0x03;
 const CMD_SYNC_NEXT_MESSAGE = 0x0A;
 const RESP_DIRECT_MSG_RECV = 0x07;
 const RESP_CHANNEL_MSG_RECV = 0x08;
@@ -152,39 +153,47 @@ class SmartAccumulator {
     }
 }
 
-function validTextPayload(code, payload) {
+function receiveLayout(code, payload) {
+    const off = code === RESP_DIRECT_MSG_RECV_V3 || code === RESP_CHANNEL_MSG_RECV_V3 ? 3 : 0;
     if (isDirect(code)) {
-        if (payload.length < 9) return false;
-        return 9 + payload[8] <= payload.length;
+        if (payload.length < off + 12) return null;
+        if (payload[off + 7] !== 0 && payload[off + 7] !== 2) return null;
+        const textStart = off + 12 + (payload[off + 7] === 2 ? 4 : 0);
+        return textStart <= payload.length ? { direct: true, off, textStart } : null;
     }
-    if (isGroup(code)) return payload.length >= 5;
-    return false;
+    if (isGroup(code)) {
+        if (payload.length < off + 7 || payload[off] > 7 || payload[off + 2] !== 0) return null;
+        return { direct: false, off, textStart: off + 7 };
+    }
+    return null;
+}
+
+function validTextPayload(code, payload) {
+    return receiveLayout(code, payload) !== null;
 }
 
 function decodeTextFrame(cmd, payload) {
-    if (isDirect(cmd)) {
-        const fromId = payload.readUInt32LE(0);
-        const toId = payload.readUInt32LE(4);
-        const tlen = payload[8];
-        const text = payload.subarray(9, 9 + tlen).toString('utf8').replace(/\0+$/, '');
+    const layout = receiveLayout(cmd, payload);
+    if (!layout) return null;
+    if (layout.direct) {
+        const text = payload.subarray(layout.textStart).toString('utf8').replace(/\0+$/, '');
         if (!text.length) return null;
         return {
-            from: fromId,
-            to: toId,
+            from: payload.subarray(layout.off, layout.off + 6).toString('hex'),
+            sender_timestamp: payload.readUInt32LE(layout.off + 8),
             transport: 'meshcore',
             backend: 'tcp_api',
             data: { text_message: text },
             metadata: { is_group_message: false, meshcore_response_code: cmd }
         };
     }
-    if (isGroup(cmd)) {
-        const fromId = payload.readUInt32LE(0);
-        const slot = payload[4];
-        const text = payload.subarray(5).toString('utf8').replace(/\0+$/, '');
+    if (!layout.direct) {
+        const slot = payload[layout.off];
+        const text = payload.subarray(layout.textStart).toString('utf8').replace(/\0+$/, '');
         if (!text.length) return null;
         return {
-            from: fromId,
             group_slot: slot,
+            sender_timestamp: payload.readUInt32LE(layout.off + 3),
             transport: 'meshcore',
             backend: 'tcp_api',
             data: { text_message: text },
@@ -206,9 +215,25 @@ function buildCommand(cmd, payload = Buffer.alloc(0)) {
     return Buffer.concat([Buffer.from([FRAME_TO_RADIO, fp.length & 0xFF, (fp.length >> 8) & 0xFF]), fp]);
 }
 
+function buildGroupTextCommand(msg, slot) {
+    const text = msg?.data?.text_message;
+    if (typeof text !== 'string' || !text.length || slot < 0 || slot > 7) return null;
+    const safe = Buffer.from(text.slice(0, 160), 'utf8');
+    const timestamp = msg?.rx_time ?? Math.floor(Date.now() / 1000);
+    return buildCommand(CMD_SEND_CHANNEL_TXT_MSG,
+        Buffer.concat([Buffer.from([0, slot]), u32le(timestamp), safe]));
+}
+
 function u32le(n) { return Buffer.from([n & 0xFF, (n >> 8) & 0xFF, (n >> 16) & 0xFF, (n >> 24) & 0xFF]); }
-function directPayload(from, to, text) { const t = Buffer.from(text); return Buffer.concat([u32le(from), u32le(to), Buffer.from([t.length]), t]); }
-function groupPayload(from, slot, text) { return Buffer.concat([u32le(from), Buffer.from([slot]), Buffer.from(text)]); }
+function directPayload(from, _to, text) {
+    return Buffer.concat([
+        u32le(from), Buffer.from([0xaa, 0xbb, 0xff, 0x00]),
+        u32le(0x55667788), Buffer.from(text)
+    ]);
+}
+function groupPayload(_from, slot, text) {
+    return Buffer.concat([Buffer.from([slot, 0xff, 0x00]), u32le(0x11223344), Buffer.from(text)]);
+}
 
 let failures = 0, count = 0;
 function check(name, got, want) {
@@ -273,7 +298,7 @@ const STRICT_OFF = { isEnabled: () => false };
 }
 {
     const a = new SmartAccumulator(STRICT_ON);
-    const evil = Buffer.concat([u32le(1), u32le(2), Buffer.from([99]), Buffer.from('abc')]);
+    const evil = Buffer.concat([Buffer.alloc(6), Buffer.from([0xff, 0x09]), u32le(0), Buffer.from('abc')]);
     check('malformed direct dropped', a.inject(buildRadioFrame(RESP_DIRECT_MSG_RECV, evil)).length, 0);
     check('malformed stat', a.stats.early_drop_malformed_text, 1);
 }
@@ -288,9 +313,11 @@ const STRICT_OFF = { isEnabled: () => false };
     check('decode group slot', msg?.group_slot, 5);
 }
 {
-    const d = decodeTextFrame(RESP_DIRECT_MSG_RECV_V3, directPayload(1, 2, 'v3d'));
-    const g = decodeTextFrame(RESP_CHANNEL_MSG_RECV_V3, groupPayload(3, 2, 'v3g'));
-    check('decode v3 direct', d?.data?.text_message, 'v3d');
+    const g = decodeTextFrame(RESP_CHANNEL_MSG_RECV_V3,
+        Buffer.concat([Buffer.from([0xf8, 0, 0]), groupPayload(3, 2, 'v3g')]));
+    const v3d = decodeTextFrame(RESP_DIRECT_MSG_RECV_V3,
+        Buffer.concat([Buffer.from([0xf8, 0, 0]), directPayload(1, 2, 'v3d')]));
+    check('decode v3 direct', v3d?.data?.text_message, 'v3d');
     check('decode v3 group', g?.data?.text_message, 'v3g');
 }
 {
@@ -305,6 +332,20 @@ const STRICT_OFF = { isEnabled: () => false };
     check('command marker', cmd[0], FRAME_TO_RADIO);
     check('command length LSB', cmd[1], 1);
     check('command payload code', cmd[3], CMD_SYNC_NEXT_MESSAGE);
+}
+{
+    const cmd = buildGroupTextCommand({
+        rx_time: 0x11223344,
+        data: { text_message: 'Crow transmit' }
+    }, 3);
+    check('group send marker', cmd[0], FRAME_TO_RADIO);
+    check('group send payload length', cmd.readUInt16LE(1), 1 + 1 + 1 + 4 + Buffer.byteLength('Crow transmit'));
+    check('group send code', cmd[3], CMD_SEND_CHANNEL_TXT_MSG);
+    check('group send text type', cmd[4], 0);
+    check('group send slot', cmd[5], 3);
+    check('group send timestamp', cmd.readUInt32LE(6), 0x11223344);
+    check('group send text', cmd.subarray(10).toString(), 'Crow transmit');
+    check('group send invalid slot', buildGroupTextCommand({ data: { text_message: 'no' } }, 8), null);
 }
 
 console.log(`\n${count - failures} passed, ${failures} failed`);

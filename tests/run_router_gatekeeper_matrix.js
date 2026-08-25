@@ -14,5 +14,6 @@ for (const name of ['setup', 'shutdown', 'handle', 'recv', 'send', 'tick', 'pend
   assert(serial.includes(`export function ${name}`), `serial lifecycle: ${name}`);
 }
 assert(tcp.includes('CMD_APP_START'));
+assert(router.includes('msg.backend === "serial_api"'));
 assert(router.includes('gatekeeper'));
 console.log('router/gatekeeper backend matrix checks passed');

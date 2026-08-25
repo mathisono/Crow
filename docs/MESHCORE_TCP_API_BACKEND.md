@@ -1,10 +1,10 @@
 # MeshCore TCP / Serial-WiFi API Backend
 
-> Status: Experimental. Stock outer framing and message-waiting sync scaffolding are now implemented; live hardware validation is still pending. Outbound text send is not implemented yet.
+> Status: Experimental. Framing, queued receive, and group-text transmit are implemented; live hardware validation is still pending.
 
 ## Scope
 
-This backend exists to surface cleartext MeshCore text messages into the Crow router through the MeshCore TCP / Serial-WiFi API path.
+This backend bridges MeshCore group text to and from the Crow router through the MeshCore TCP / Serial-Wi-Fi API path.
 
 It is not the production MeshCore path yet. Production outbound MeshCore traffic still uses the original UDP backend, `meshcore.uc`.
 
@@ -54,11 +54,12 @@ Handled codes:
 | `0x0A` | command: sync/fetch next queued message | sent by `sendCommand()` |
 | `0x07` | older direct-message receive response | decoded as direct text |
 | `0x08` | older channel/group-message receive response | decoded as group text with slot metadata |
-| `0x10` | newer v3 direct-message receive response | decoded through the current direct-text envelope |
-| `0x11` | newer v3 channel/group-message receive response | decoded through the current group-text envelope |
+| `0x10` | newer v3 direct-message receive response | decodes SNR/reserved prefix, contact-key prefix, type, timestamp, and text |
+| `0x11` | newer v3 channel/group-message receive response | decodes SNR/reserved prefix, slot, type, timestamp, and text |
 | `0x12` | channel info response | cached for discovery/control |
 
-If v3 payloads add fields before text, split the v3 decode logic in `decodeTextFrame()`.
+The v3 three-byte SNR/reserved prefix is handled separately from the legacy
+record layout, so the radio channel slot is not mistaken for a sender ID.
 
 ## Architecture
 
@@ -118,6 +119,24 @@ RESP_CODE_CHANNEL_INFO = 0x12
 The TCP backend caches `0x12` responses. Discovery drains cached responses using `takeResponse(0x12)` and maps discovered slots to channels.
 
 Because the socket is non-blocking, discovery is asynchronous: one sync may send requests, and a later sync may parse responses that arrived afterward.
+
+## Outbound group text
+
+Crow sends a normal routed group message using the Companion command below:
+
+```text
+CMD_SEND_CHANNEL_TXT_MSG = 0x03
+payload = 0x00 (plain text) + channel slot + uint32_le(timestamp) + UTF-8 text
+```
+
+Set `tx_channel_index` to the radio channel slot (0-7). By default it is slot
+`0`. Crow only transmits messages for its auto-created Companion channel after
+the radio handshake, unless `channel_namekey` explicitly maps another local
+Crow channel to that slot.
+
+Direct-message transmission is intentionally not enabled yet: it needs the
+radio's contact and route state, and Crow must not guess a six-byte contact
+prefix. Cleartext group text is the supported bidirectional path in this pass.
 
 ## Smart Accumulator
 
@@ -199,6 +218,7 @@ The tests cover:
 - group response decode `0x08`
 - v3 response decode acceptance `0x10` / `0x11`
 - channel-info response cache `0x12`
+- outbound group-text frame `0x03`
 - resync after garbage
 - back-to-back frames
 
@@ -209,8 +229,9 @@ Before using this as the production MeshCore path:
 1. Test against real MeshCore TCP/Wi-Fi or USB serial frames.
 2. Add captured-frame regression tests.
 3. Confirm whether v3 `0x10` / `0x11` payloads match the current envelope.
-4. Implement outbound text send for the TCP API backend.
+4. Confirm outbound group transmit and radio response with real hardware.
 5. Confirm discovery timing with real hardware.
+6. Add contact synchronisation and direct-message routing before enabling DMs.
 
 ## Wiring up
 
@@ -223,7 +244,8 @@ Enable for bench testing with:
 "meshcore_tcp_api": {
   "enabled": true,
   "host": "127.0.0.1",
-  "port": 4403
+  "port": 4403,
+  "tx_channel_index": 0
 }
 ```
 

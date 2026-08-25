@@ -149,8 +149,6 @@ export function setup(config)
     activeName = null;
     enabled = false;
 
-    serialApi.setup(config);
-
     if (wantsSerial(config)) {
         active = serialApi;
         activeName = "serial";

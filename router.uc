@@ -215,7 +215,7 @@ function isLoRaIngress(msg)
 function isTcpApiIngress(msg)
 {
     return msg && (
-        (msg.transport === "meshcore" && msg.backend === "tcp_api") ||
+        (msg.transport === "meshcore" && (msg.backend === "tcp_api" || msg.backend === "serial_api")) ||
         (msg.transport === "meshtastic" && msg.backend === "tcp-port-api")
     );
 }

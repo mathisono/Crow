@@ -741,15 +741,19 @@ a
 }
 .config .b .ct div:nth-child(4),
 .config .b .ct div:nth-child(5),
-.config .b .ct div:nth-child(6),
-.config .b .ct div:nth-child(7)
+.config .b .ct div:nth-child(6)
 {
     width: 44px;
     justify-content: center;
 }
+.config .b .ct div:nth-child(7),
+.config .b .c > select:nth-child(7)
+{
+    width: 180px;
+}
 .config .b .ct div:nth-child(8)
 {
-    width: 120px;
+    width: 180px;
 }
 .config .b .c
 {
@@ -779,6 +783,10 @@ a
 .config .b .c select
 {
     margin-right: 10px;
+}
+.config .b .c > select:nth-child(8)
+{
+    width: 180px;
 }
 .config .b .c button
 {

@@ -10,6 +10,7 @@ import * as router from "router";
 import * as winlink from "winlink";
 import * as commands from "commands";
 import * as aprs from "aprs";
+import * as meshcore_backend from "meshcore_backend";
 
 const MAXNODES = 1000;
 const MAXNODESSAFARI = 400;
@@ -228,7 +229,12 @@ export function tick()
                     const channels = map(channel.getAllLocalChannels(), c => {
                         return { namekey: c.namekey, meshtastic: channel.isMeshtasticPreset(c.namekey), meshcore: channel.isMeshcorePreset(c.namekey), aredn: channel.isAREDNPreset(c.namekey), winlink: c.winlink, telemetry: c.telemetry, backend: c.backend ?? "", state: textmessage.state(c.namekey) };
                     });
-                    send({ event: msg.cmd, channels: channels, aprs_backends: aprs.enabled ? aprs.getBackendNames() : [] });
+                    send({
+                        event: msg.cmd,
+                        channels: channels,
+                        aprs_backends: aprs.enabled ? aprs.getBackendNames() : [],
+                        meshcore_backends: meshcore_backend.enabled && meshcore_backend.getBackendNames ? meshcore_backend.getBackendNames() : []
+                    });
                     break;
                 }
                 case "newchannels":

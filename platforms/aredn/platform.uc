@@ -970,6 +970,7 @@ function sameOrigin(headers)
 
 /* export */ function auth(headers)
 {
+    let cookieAuth = false;
     for (let i = 0; i < length(headers); i++) {
         const kv = split(headers[i], ": ");
         if (lc(kv[0]) === "cookie") {
@@ -988,13 +989,16 @@ function sameOrigin(headers)
                         }
                         f.close();
                     }
-                    return (key == b64dec(substr(cookie, 7)) ? true : false);
+                    cookieAuth = (key == b64dec(substr(cookie, 7)) ? true : false);
+                    break;
                 }
             }
             break;
         }
     }
-    return sameOrigin(headers);
+    // Same-origin traffic should stay usable even if the browser has a stale
+    // auth cookie from another AREDN page or an earlier install.
+    return sameOrigin(headers) || cookieAuth;
 };
 
 function refreshTargets()

@@ -285,9 +285,11 @@ Crow uses a **smart selector** to pick the right backend:
 
 ### For MeshCore:
 
-1. If `meshcore_tcp_api.enabled == true` → **use TCP API** (when available)
-2. Else if `meshcore.enabled != false` → **use UDP multicast**
-3. Else → **disabled**
+1. If `meshcore.backend` is `"serial"` or `"serial-api"` **and**
+   `meshcore_serial_api.enabled == true` → **use direct USB Companion API**
+2. Else if `meshcore_tcp_api.enabled == true` → **use TCP Companion API**
+3. Else if `meshcore.enabled != false` → **use UDP multicast**
+4. Else → **disabled**
 
 ### Log Messages
 
@@ -310,6 +312,17 @@ Or:
 meshtastic_backend: selected tcp-port-api backend
 meshcore_backend: selected tcp-api backend
 ```
+
+Or, for a directly attached RAK USB Companion Radio:
+
+```text
+meshcore_backend: selected serial backend
+meshcore_serial_api: opened USB Companion serial /dev/ttyACM0 at 115200
+```
+
+The USB Companion backend is group-text bidirectional. Configure an exact
+radio `channel_namekey` and slot before selecting it; see
+[MeshCore USB Serial Companion backend](MESHCORE_USB_SERIAL_COMPANION_BACKEND.md).
 
 ---
 

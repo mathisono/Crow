@@ -336,17 +336,18 @@ Transport type for MeshCore.
 **Defaults:** `"udp"`
 
 **Valid values:**
-- `"udp"` — UDP multicast (only supported currently)
+- `"udp"` — UDP multicast
+- `"tcp-api"` / `"companion-api"` — MeshCore Companion API over TCP
+- `"serial-api"` — directly attached USB MeshCore Companion radio
 
 **Notes:**
-- Currently only UDP multicast is supported
-- TCP API for MeshCore is planned
+- UDP remains the default.
+- TCP and USB Companion transports are opt-in and select exactly one active
+  MeshCore backend.
 
 ---
 
-## MeshCore TCP API (Future)
-
-### Placeholder Configuration
+## MeshCore TCP Companion API
 
 ```json
 {
@@ -358,12 +359,45 @@ Transport type for MeshCore.
 }
 ```
 
-**Status:** Not yet implemented
+See [MeshCore TCP Companion backend](MESHCORE_TCP_API_BACKEND.md) for
+the supported message scope and channel configuration.
 
-**Notes:**
-- Configuration structure is reserved
-- Enable when MeshCore TCP API is ready (future version)
-- Same pattern as Meshtastic TCP API
+---
+
+## MeshCore USB Serial Companion API
+
+Use this with a USB-attached **MeshCore USB Companion Radio** firmware image.
+It does not work with Repeater firmware or a text CLI port.
+
+```json
+{
+  "meshcore": {
+    "backend": "serial-api"
+  },
+  "meshcore_serial_api": {
+    "enabled": true,
+    "device": "/dev/ttyACM0",
+    "baud": 115200,
+    "frame_mode": "framed",
+    "channel_namekey": "TacNet AAECAwQFBgcICQoLDA0ODw==",
+    "tx_channel_index": 0,
+    "channel_discovery": true
+  }
+}
+```
+
+- `device`: only `/dev/ttyACM<N>` or `/dev/ttyUSB<N>` is accepted.
+- `baud`: must be `115200`.
+- `frame_mode`: `framed` (or legacy `auto`) only; USB Companion uses binary
+  `<`/`>` frames.
+- `channel_namekey`: exact radio group channel name and Base64 key. Add the
+  same namekey to Crow's top-level `channels` array.
+- `tx_channel_index`: the radio's group-channel slot, 0 through 7.
+- Outbound capability is cleartext group text. Direct messages are rejected
+  until Crow has radio contact/path synchronisation.
+
+See [MeshCore USB Serial Companion backend](MESHCORE_USB_SERIAL_COMPANION_BACKEND.md)
+for safe hardware ownership and test steps.
 
 ---
 

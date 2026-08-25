@@ -36,6 +36,7 @@ const STRICT_ON  = { isEnabled: () => true };
 const STRICT_OFF = { isEnabled: () => false };
 
 const PUSH_CODE_MSG_WAITING    = 0x83;
+const CMD_SEND_CHANNEL_TXT_MSG = 0x03;
 const CMD_SYNC_NEXT_MESSAGE    = 0x0A;
 const RESP_DIRECT_MSG_RECV     = 0x07;
 const RESP_CHANNEL_MSG_RECV    = 0x08;
@@ -50,14 +51,24 @@ function u32le(n)
     return chr(n & 0xFF) + chr((n >> 8) & 0xFF) + chr((n >> 16) & 0xFF) + chr((n >> 24) & 0xFF);
 }
 
+function repeatedByte(byte, count)
+{
+    let out = "";
+    for (let i = 0; i < count; i++) out += chr(byte);
+    return out;
+}
+
 function directPayload(from, to, text)
 {
-    return u32le(from) + u32le(to) + chr(length(text)) + text;
+    // Six-byte contact-key prefix, path, type, sender timestamp, text.
+    // The Companion API does not expose a destination node-id in this frame.
+    return u32le(from) + "\xaa\xbb" + chr(0xff) + chr(0) + u32le(0x55667788) + text;
 }
 
 function groupPayload(from, slot, text)
 {
-    return u32le(from) + chr(slot) + text;
+    // Channel frames carry a slot rather than an originating node-id.
+    return chr(slot) + chr(0xff) + chr(0) + u32le(0x11223344) + text;
 }
 
 // ---- 1. Single complete direct response frame decodes through accumulator
@@ -162,18 +173,18 @@ api._test_reset();
 api._test_reset();
 {
     api._test_inject(chr(0x3E) + chr(0x00) + chr(0x04), STRICT_ON); // claim 1024
-    api._test_inject("\xAA" * 600, STRICT_ON);
-    api._test_inject("\xAA" * 424, STRICT_ON);
+    api._test_inject(repeatedByte(0xAA, 600), STRICT_ON);
+    api._test_inject(repeatedByte(0xAA, 424), STRICT_ON);
     const good = api._test_build_frame(RESP_DIRECT_MSG_RECV, directPayload(7, 8, "ok"));
     const f = api._test_inject(good, STRICT_ON);
     check("oversize drain: next valid frame parses", length(f), 1);
     check("oversize drain: cmd correct", f[0]?.cmd, RESP_DIRECT_MSG_RECV);
 }
 
-// ---- 12. Malformed direct text — length byte exceeds plen
+// ---- 12. Malformed direct text — unsupported text type
 api._test_reset();
 {
-    const evil = u32le(1) + u32le(2) + chr(99) + "abc";
+    const evil = ("\x00" * 6) + chr(0xff) + chr(9) + u32le(0) + "abc";
     const frame = api._test_build_frame(RESP_DIRECT_MSG_RECV, evil);
     check("malformed: dropped", length(api._test_inject(frame, STRICT_ON)), 0);
     check("malformed: stat incremented", api._test_stats().early_drop_malformed_text, 1);
@@ -186,8 +197,8 @@ api._test_reset();
     const msg = api._test_decode(RESP_DIRECT_MSG_RECV, payload);
     check("decode direct: transport", msg?.transport, "meshcore");
     check("decode direct: backend",   msg?.backend,   "tcp_api");
-    check("decode direct: from",      msg?.from,      0xCAFEBABE);
-    check("decode direct: to",        msg?.to,        0);
+    check("decode direct: prefix length", length(msg?.from), 12);
+    check("decode direct: timestamp", msg?.sender_timestamp, 0x55667788);
     check("decode direct: text",      msg?.data?.text_message, "hi");
     check("decode direct: not group", msg?.metadata?.is_group_message, false);
 }
@@ -205,8 +216,8 @@ api._test_reset();
 // ---- 15. Decoder: v3 direct and group response codes are accepted
 api._test_reset();
 {
-    const d = api._test_decode(RESP_DIRECT_MSG_RECV_V3, directPayload(1, 2, "v3d"));
-    const g = api._test_decode(RESP_CHANNEL_MSG_RECV_V3, groupPayload(3, 2, "v3g"));
+    const d = api._test_decode(RESP_DIRECT_MSG_RECV_V3, "\xf8\x00\x00" + directPayload(1, 2, "v3d"));
+    const g = api._test_decode(RESP_CHANNEL_MSG_RECV_V3, "\xf8\x00\x00" + groupPayload(3, 2, "v3g"));
     check("decode v3 direct: text", d?.data?.text_message, "v3d");
     check("decode v3 group: text", g?.data?.text_message, "v3g");
 }
@@ -214,7 +225,8 @@ api._test_reset();
 // ---- 16. Channel info response is cached for discovery/control
 api._test_reset();
 {
-    const response = chr(RESP_CHANNEL_INFO) + chr(0) + ("TacNet" + "\x00" * 26) + ("\x01" * 16);
+    const response = chr(RESP_CHANNEL_INFO) + chr(0) + "TacNet" +
+        repeatedByte(0, 26) + repeatedByte(1, 16);
     const frame = chr(0x3E) + chr(length(response) & 0xFF) + chr((length(response) >> 8) & 0xFF) + response;
     check("channel info: no Crow message emitted", length(api._test_inject(frame, STRICT_ON)), 0);
     check("channel info: cached stat", api._test_stats().responses_cached, 1);
@@ -231,6 +243,25 @@ api._test_reset();
     check("command length LSB", ord(cmd, 1), 1);
     check("command length MSB", ord(cmd, 2), 0);
     check("command payload code", ord(cmd, 3), CMD_SYNC_NEXT_MESSAGE);
+}
+
+// ---- 18. Group text transmit uses the Companion command and configured slot
+api._test_reset();
+{
+    const msg = {
+        rx_time: 0x11223344,
+        data: { text_message: "Crow transmit" }
+    };
+    const cmd = api._test_build_group_send(msg, 3);
+    check("group send marker", ord(cmd, 0), 0x3C);
+    check("group send payload length", ord(cmd, 1), 1 + 1 + 1 + 4 + length("Crow transmit"));
+    check("group send command", ord(cmd, 3), CMD_SEND_CHANNEL_TXT_MSG);
+    check("group send text type", ord(cmd, 4), 0);
+    check("group send slot", ord(cmd, 5), 3);
+    check("group send timestamp LSB", ord(cmd, 6), 0x44);
+    check("group send timestamp MSB", ord(cmd, 9), 0x11);
+    check("group send text", substr(cmd, 10), "Crow transmit");
+    check("group send rejects invalid slot", api._test_build_group_send(msg, 8), null);
 }
 
 printf("\n%d passed, %d failed\n", count - failures, failures);

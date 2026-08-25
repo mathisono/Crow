@@ -550,6 +550,8 @@ Hard refresh the page:
 - Chrome/Firefox: `Ctrl+Shift+R` (Windows) or `Cmd+Shift+R` (Mac)
 - Safari: Hold Shift and click Reload
 
+If Crow still stalls after a hard refresh, clear site data for the node as well; stale site data can break the WebSocket on older builds. If the browser console reports `Could not decode a text frame as UTF-8`, update Crow to a build that sanitizes outbound websocket payloads.
+
 ### Step 5: Check Network
 
 Verify you can reach the AREDN node:

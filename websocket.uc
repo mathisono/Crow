@@ -2,6 +2,7 @@ import * as socket from "socket";
 import * as struct from "struct";
 import * as timers from "timers";
 import * as crypto from "crypto.crypto";
+import * as utils from "utils";
 
 const PORT = 4404;
 
@@ -263,6 +264,7 @@ export function recv(handle)
 
 export function send(to, msg)
 {
+    msg = utils.utf8validCopy(msg);
     const hdr = encodeHeader(msg);
     let targets;
     if (to) {

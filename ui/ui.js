@@ -14,6 +14,7 @@ let replyid;
 let activeFilter;
 let winlink = null;
 let aprsBackends = [];
+let meshcoreBackends = [];
 let activityTimeout;
 let catchupTimeout;
 let focusid = null;
@@ -425,15 +426,34 @@ function htmlCommand(reply)
 
 function backendOptions(selected)
 {
-    if (!aprsBackends || aprsBackends.length === 0) {
+    const backends = [];
+    const seen = {};
+    const addBackend = entry => {
+        if (!entry) {
+            return;
+        }
+        const key = String(entry.key || entry || "");
+        if (!key || seen[key]) {
+            return;
+        }
+        seen[key] = true;
+        backends.push({ key: key, label: String(entry.label || entry || "") });
+    };
+    for (let i = 0; i < aprsBackends.length; i++) {
+        addBackend(aprsBackends[i]);
+    }
+    for (let i = 0; i < meshcoreBackends.length; i++) {
+        addBackend(meshcoreBackends[i]);
+    }
+    if (backends.length === 0) {
         return '';
     }
     selected = String(selected ?? "");
     let opts = `<option value=""${!selected ? ' selected' : ''}>(default)</option>`;
-    for (let i = 0; i < aprsBackends.length; i++) {
-        const b = aprsBackends[i];
-        const key = String(b.key || b || "");
-        const label = String(b.label || b || "");
+    for (let i = 0; i < backends.length; i++) {
+        const b = backends[i];
+        const key = b.key;
+        const label = b.label;
         opts += `<option value="${attr(key)}"${selected === key ? ' selected' : ''}>${esc(label)}</option>`;
     }
     return opts;
@@ -441,7 +461,7 @@ function backendOptions(selected)
 
 function htmlChannelConfig()
 {
-    const hasBackends = aprsBackends && aprsBackends.length > 0;
+    const hasBackends = backendOptions("").length > 0;
     const body = echannels.map((e, i) => {
         const channelName = e.meshtastic ? "Meshtastic" : e.name;
         const channelKey = e.meshtastic ? e.name : toDisplayKey(e.key);
@@ -626,6 +646,9 @@ function updateChannels(msg)
         channels = msg.channels;
         if (msg.aprs_backends) {
             aprsBackends = msg.aprs_backends;
+        }
+        if (msg.meshcore_backends) {
+            meshcoreBackends = msg.meshcore_backends;
         }
     }
     I("channels").innerHTML = channels.map(c => htmlChannel(c)).join("");
