@@ -1,3 +1,40 @@
+# Crow v0.0.2-r20389266 — pre-release candidate
+
+Commit: `421aa78`
+Status: **hardware validation pending**
+
+This candidate contains the first committed MeshCore Companion TCP and USB
+serial backend implementation. RF group receive/send remains intentionally
+gated until an exact group channel is configured in both Crow and the radio.
+See [DEVELOPMENT_PLAN.md](docs/DEVELOPMENT_PLAN.md).
+
+## New in this candidate
+
+- MeshCore Companion TCP backend with bounded message-waiting queue drain.
+- MeshCore Companion USB serial backend using the same binary protocol.
+- Direct and channel receive for legacy and v3 response formats.
+- Direct replies using learned MeshCore public-key prefixes.
+- Channel discovery, runtime notifications, telemetry, and backpressure.
+- Backend selection tests and direct-identity regression coverage.
+- Vendored APK builder support for current AREDN packaging.
+
+## Validation
+
+- 104 Node regression tests passed.
+- UI and shell syntax checks passed.
+- IPK/APK package build passed.
+- Canonical `ucode` tests were not run on the build host because `ucode` is not installed.
+- Live MeshCore TCP/USB and RF validation is pending hardware access/configuration.
+
+## Candidate artifacts
+
+```text
+a3b5a997d47a12a0456c424312a26a34b3577116aa6fd616cf6d3b941389caa7  crow_alpha.ipk
+113274efa9a9ea49ec8ad355bc694d8edbe1780cd5ebf5b054016fc7786ce76a  crow-alpha.apk
+```
+
+---
+
 # Crow v0.0.2-r20118884
 
 ## Highlights

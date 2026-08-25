@@ -222,13 +222,19 @@ The tests cover:
 
 ## Remaining work
 
-Before using this as the production MeshCore path:
+The backend implementation is complete for the current experimental scope.
+The remaining work is validation and identity hardening, not outbound-send
+implementation:
 
-1. Test against real MeshCore TCP/Wi-Fi or USB serial frames.
-2. Add captured-frame regression tests.
+1. Test against real MeshCore TCP/Wi-Fi and USB serial hardware.
+2. Add captured-frame regression tests from the real device.
 3. Confirm whether v3 `0x10` / `0x11` payloads match the current envelope.
-4. Implement outbound text send for the TCP API backend.
-5. Confirm discovery timing with real hardware.
+4. Confirm self-info, channel discovery timing, reconnect, and queue
+   backpressure on hardware.
+5. Determine whether modern Companion direct frames expose a destination ID;
+   retain the queue-origin fallback until that is verified.
+6. Keep RF group receive/send behind the matching Crow/radio group-channel gate
+   in [DEVELOPMENT_PLAN.md](DEVELOPMENT_PLAN.md).
 
 ## Wiring up
 

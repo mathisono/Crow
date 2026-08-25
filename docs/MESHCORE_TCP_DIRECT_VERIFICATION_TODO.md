@@ -1,9 +1,9 @@
 # MeshCore TCP Direct-Message Verification TODO
 
-Status: partially implemented for legacy direct frames in `meshcore_tcp_api.uc`
-and enforced by `router.uc`; modern Companion direct frames still need hardware
-validation because the current parser does not expose an explicit destination id
-for that format.
+Status: **v1 implemented and locally verified in commit `421aa78`; v2 hardware
+validation pending.** Legacy direct frames are enforced by `router.uc`. Modern
+Companion direct frames still need hardware validation because the current
+parser does not expose an explicit destination id for that format.
 
 Legacy MeshCore TCP direct-message destinations are already verified when the
 connected radio/device identity is known from self-info.
@@ -32,7 +32,17 @@ self-info. Frames without an exposed destination keep the existing queue-origin
 fallback for bring-up.
 ```
 
-## Desired improvement
+## V1 verification result
+
+The current regression matrix verifies that:
+
+- a legacy direct destination matching the connected radio identity is accepted;
+- a verified destination mismatch is not local and is dropped by router scope;
+- modern direct frames without an exposed destination remain explicitly
+  unverified queue-origin ingress;
+- direct replies fail safely until a sender public-key prefix is learned.
+
+## V2 desired improvement
 
 Improve the backend so it verifies direct-message destination against the connected MeshCore radio/device identity.
 
@@ -48,7 +58,7 @@ Target design:
 
 ## Validation target
 
-After this follow-up is implemented:
+After hardware exposes and Crow verifies the destination for modern frames:
 
 ```text
 Direct MeshCore TCP message where msg.to == connected radio/device id -> accepted

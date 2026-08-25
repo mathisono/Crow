@@ -1,7 +1,11 @@
 # MeshCore TCP Direct-Message Verification Notes
 
-Status: current validation notes for the partially implemented direct-message
-verification path in `meshcore_tcp_api.uc`, `router.uc`, and `nodedb.uc`.
+Status: current validation notes for the direct-message verification path in
+`meshcore_tcp_api.uc`, `router.uc`, and `nodedb.uc`.
+
+The first committed implementation was verified locally in `421aa78` on
+2026-08-25. Live hardware verification of modern Companion destination fields
+is still pending.
 
 Crow receives direct frames from the connected MeshCore Companion queue as
 local direct messages. Legacy direct frames carry a destination id; when Crow
