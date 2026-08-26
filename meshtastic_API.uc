@@ -60,6 +60,7 @@ let stats = {
     config_requests: 0,
     config_complete: 0,
     channels_discovered: 0,
+    channels_updated: 0,
     sends_ok: 0,
     sends_failed: 0
 };
@@ -149,6 +150,30 @@ function log1(fmt, ...args)
 function log2(fmt, ...args)
 {
     DEBUG2("meshtastic_API: " + fmt, ...args);
+}
+
+function notifyOperator(lines, mergekey)
+{
+    try {
+        if (global.event?.queue) {
+            global.event.queue({ cmd: "/reply", reply: lines });
+        }
+        if (global.event?.notify) {
+            global.event.notify({ cmd: "channels" }, mergekey ?? "channels");
+        }
+    }
+    catch (_) {
+    }
+}
+
+function notifyChannelDiscovered(ch, action)
+{
+    const verb = action === "updated" ? "updated" : "discovered";
+    notifyOperator([
+        `<b>Meshtastic TCP API</b> ${verb} channel`,
+        `Index ${ch.index}: ${ch.name}`,
+        `Runtime only; not saved to Crow config.`
+    ], `meshtastic-api-channel-${ch.index}`);
 }
 
 function getSharedKey(priv, pub)
@@ -541,12 +566,13 @@ function updateDiscoveredChannel(ch)
         discoveredChannels[key] = ch;
         stats.channels_discovered++;
         log1("channel discovered index=%d name=%s pskfp=%s\n", ch.index, ch.name, fp);
-        // TODO: If Crow grows a safe incremental runtime remote-channel helper,
-        // register ch.namekey there. Do not mutate config.channels or write files here.
+        notifyChannelDiscovered(ch, "discovered");
     }
     else if (old.name !== ch.name || old.psk_b64 !== ch.psk_b64) {
         discoveredChannels[key] = ch;
+        stats.channels_updated++;
         log1("channel updated index=%d name=%s pskfp=%s\n", ch.index, ch.name, fp);
+        notifyChannelDiscovered(ch, "updated");
     }
 }
 
@@ -563,6 +589,24 @@ function processDiscoveredChannels(buf)
     }
     return length(chans) > 0 || complete !== null;
 }
+
+export function _test_reset_discovery()
+{
+    discoveredChannels = {};
+    stats.channels_discovered = 0;
+    stats.channels_updated = 0;
+    stats.config_complete = 0;
+};
+
+export function _test_process_discovered_channels(buf)
+{
+    return processDiscoveredChannels(buf ?? "");
+};
+
+export function _test_stats()
+{
+    return stats;
+};
 
 function buildWantConfigId(id)
 {
@@ -1021,6 +1065,7 @@ export function status()
         config_requests: stats.config_requests,
         config_complete: stats.config_complete,
         channels_discovered: stats.channels_discovered,
+        channels_updated: stats.channels_updated,
         sends_ok: stats.sends_ok,
         sends_failed: stats.sends_failed,
         channel_discovery: channelDiscovery,

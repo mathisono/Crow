@@ -1,16 +1,17 @@
 # MeshCore TCP Direct-Message Verification TODO
 
-Status: **v1 implemented and locally verified in the current release-prep commit; v2 hardware
-validation pending.** Legacy direct frames are enforced by `router.uc`. Modern
-Companion direct frames still need hardware validation because the current
-parser does not expose an explicit destination id for that format.
+Status: **v1 implemented and locally verified; protocol-limited v2 policy is
+implemented, while destination-bearing modern hardware validation remains
+pending.** Legacy direct frames are enforced by `router.uc`.
 
 Legacy MeshCore TCP direct-message destinations are already verified when the
 connected radio/device identity is known from self-info.
 
-Modern Companion direct frames are still accepted as local direct messages
-because they are surfaced by the connected Companion API device queue and this
-Crow-side parser currently only sees the sender prefix, not a destination id.
+Modern Companion direct frames are accepted as explicitly unverified local
+direct messages in compatibility mode because they are surfaced by the
+connected Companion API device queue and the parser only sees the sender
+prefix, not a destination id. Strict verified mode is available for
+deployments that prefer to drop those frames.
 
 ## Current behavior
 
@@ -28,8 +29,9 @@ Reason:
 ```text
 Legacy direct frames carry `to`, so Crow compares that destination against the
 id derived from the connected radio/device public-key prefix learned from
-self-info. Frames without an exposed destination keep the existing queue-origin
-fallback for bring-up.
+self-info. Frames without an exposed destination use the queue-origin fallback
+only when `direct_identity_mode` is `"compatibility"`; verified mode drops
+them.
 ```
 
 ## V1 verification result
@@ -42,9 +44,10 @@ The current regression matrix verifies that:
   unverified queue-origin ingress;
 - direct replies fail safely until a sender public-key prefix is learned.
 
-## V2 desired improvement
+## V2 hardware follow-up
 
-Improve the backend so it verifies direct-message destination against the connected MeshCore radio/device identity.
+Confirm whether modern hardware exposes a destination-bearing format and wire
+it into the already available strict policy.
 
 Target design:
 

@@ -1,12 +1,16 @@
-# Crow v0.0.2-r20391386 — pre-release candidate
+# Crow v0.0.2-r20525998 — release candidate
 
-Commit: local release-prep commit
-Status: **hardware validation pending**
+Status: **release candidate; selected hardware gates remain open**
 
-This candidate contains the first committed MeshCore Companion TCP and USB
-serial backend implementation. The backends may remain enabled; RF group
-receive/send activates only when radio discovery verifies an exact channel
-name/key/slot match with Crow. Live RF validation remains pending.
+This candidate contains the release-hardening pass for the MeshCore Companion
+TCP and USB serial backends. RF group receive/send activates only when radio
+discovery verifies an exact channel name/key/slot match with Crow.
+
+The supervised BB5MC TCP/bridge path and fresh GUI-to-GUI tests are proven in
+both directions. One tagged A2B air message was observed through Crow. The
+reverse tagged air direction, native direct USB receive, and Meshtastic TCP
+hardware validation remain separate open gates; this note does not claim them
+proven.
 See [DEVELOPMENT_PLAN.md](docs/DEVELOPMENT_PLAN.md).
 
 ## New in this candidate
@@ -17,23 +21,28 @@ See [DEVELOPMENT_PLAN.md](docs/DEVELOPMENT_PLAN.md).
 - Direct replies using learned MeshCore public-key prefixes.
 - Channel discovery, runtime notifications, telemetry, and backpressure.
 - Exact-match RF group receive/send gate with negative key/slot coverage.
-- Backend selection tests and direct-identity regression coverage.
+- Bounded opt-in `0x1B` channel-datagram text routing for both transports.
+- Compatibility/strict policy for modern direct frames without a destination ID.
+- Meshtastic discovery notification parity without persistence or raw PSK output.
+- Backend selection, direct identity, parser, and target-`ucode` regression coverage.
+- Reproducible IPK/APK builds with `SOURCE_DATE_EPOCH` support.
 - Vendored APK builder support for current AREDN packaging.
 
 ## Validation
 
-- 113 Node regression tests passed.
+- 209 Node regression tests passed.
+- 133 canonical `.uc` checks passed on BB5MC's AREDN `ucode` runtime.
 - UI and shell syntax checks passed.
-- IPK/APK package build passed.
-- Canonical native `.uc` regression tests passed with a locally built upstream
-  `ucode` interpreter; the target AREDN hardware still needs live validation.
-- Live MeshCore TCP/USB and RF validation is pending hardware access/configuration.
+- IPK/APK package build and package-content inspection passed.
+- Fixed-epoch rebuilds produced identical IPK/APK bytes.
+- Native direct USB was tested and safely reverted to the proven supervised
+  bridge configuration after no self-info/RF frame was observed through Crow.
 
 ## Candidate artifacts
 
 ```text
-751959542fd11d32031c22e9acc9935605caaaeedaf5bba126b411cee463ec41  crow_alpha.ipk
-aac549131ff346736566b272e8f59db74bce2fbbf021196b633549a88b716abb  crow-alpha.apk
+a1887274d2f5ba5c8b1db571c64b6cc35303596482897d8e1cfe3eb6b26d6b10  crow_alpha.ipk
+878d25e87f6aa977f089634062a0944231682b36bcdc8e23d146ec48de242ef7  crow-alpha.apk
 ```
 
 ---

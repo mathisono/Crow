@@ -183,8 +183,32 @@ Legacy direct frames carry a destination id. When self-info has provided the
 connected radio public-key prefix, Crow verifies that destination and sets
 `direct_identity_verified = true`; verified mismatches are dropped by
 `router.uc`. Modern Companion direct frames in this parser do not expose a
-destination id, so they keep the queue-origin `local_direct` fallback until
-hardware validation identifies a destination-bearing format or command.
+destination id, so compatibility mode keeps the queue-origin `local_direct`
+fallback. Set `direct_identity_mode: "verified"` (or
+`strict_direct_identity: true`) to drop modern direct frames until a
+destination-bearing format is available. The status counters distinguish
+accepted unverified frames from strict-mode drops.
+
+## Channel datagrams (`0x1B`)
+
+Companion channel-data receive frames are binary application datagrams, not
+ordinary text messages. Crow validates the slot, data length (maximum 163
+bytes), and frame bounds, then drops them by default. To intentionally expose
+a known printable application payload as a Crow channel message, configure its
+numeric data type explicitly:
+
+```json
+{
+  "meshcore_tcp_api": {
+    "channel_data_text_types": [65535]
+  }
+}
+```
+
+The exact discovered radio/Crow channel name/key/slot gate still applies.
+Unknown, binary, or unmatched datagrams remain unrouted and are counted in
+`channel_data_unrouted`; no raw application payload or PSK is emitted as an
+operator notification.
 
 Group message example (after the exact-match gate passes):
 
@@ -231,6 +255,8 @@ The tests cover:
 - direct response decode `0x07`
 - group response decode `0x08`
 - v3 response decode acceptance `0x10` / `0x11`
+- bounded `0x1B` channel datagrams with opt-in printable data types
+- strict/compatibility direct-identity policy
 - channel-info response cache `0x12`
 - resync after garbage
 - back-to-back frames

@@ -31,6 +31,7 @@ function checkTrue(name, got)
 
 global.DEBUG0 = function (...args) {};
 global.DEBUG1 = function (...args) {};
+global.DEBUG2 = function (...args) {};
 
 const STRICT_ON  = { isEnabled: () => true };
 const STRICT_OFF = { isEnabled: () => false };
@@ -42,6 +43,7 @@ const RESP_CHANNEL_MSG_RECV    = 0x08;
 const RESP_DIRECT_MSG_RECV_V3  = 0x10;
 const RESP_CHANNEL_MSG_RECV_V3 = 0x11;
 const RESP_CHANNEL_INFO        = 0x12;
+const RESP_CHANNEL_DATA_RECV   = 0x1B;
 const CMD_ENCRYPTED_DM         = 0x90;
 const CMD_UNKNOWN              = 0x77;
 
@@ -62,9 +64,21 @@ function directPayload(from, to, text)
     return u32le(from) + u32le(to) + chr(length(text)) + text;
 }
 
+function modernDirectPayload(prefix, text)
+{
+    return prefix + chr(0xff) + chr(0x00) + chr(0x44) + chr(0x33) +
+        chr(0x22) + chr(0x11) + text;
+}
+
 function groupPayload(from, slot, text)
 {
     return u32le(from) + chr(slot) + text;
+}
+
+function channelDataPayload(slot, dataType, text, snr)
+{
+    return chr(snr ?? 0) + chr(0) + chr(0) + chr(slot) + chr(0) +
+        chr(dataType & 0xFF) + chr((dataType >> 8) & 0xFF) + chr(length(text)) + text;
 }
 
 // ---- 1. Single complete direct response frame decodes through accumulator
@@ -286,6 +300,38 @@ api._test_reset();
     const g = api._test_decode(RESP_CHANNEL_MSG_RECV_V3, groupPayload(3, 2, "v3g"));
     check("decode v3 direct: text", d?.data?.text_message, "v3d");
     check("decode v3 group: text", g?.data?.text_message, "v3g");
+}
+
+// ---- 15b. Companion channel datagrams are bounded and opt-in text
+api._test_reset();
+{
+    api._test_set_local_channels([{ namekey: "Data AQ==" }]);
+    api._test_set_discovered_channel(3, "Data AQ==");
+    const datagram = channelDataPayload(3, 0xFFFF, "payload", 8);
+    check("channel data disabled is unrouted", api._test_decode(RESP_CHANNEL_DATA_RECV, datagram), null);
+    check("channel data disabled counted", api._test_stats().channel_data_received, 1);
+    check("channel data disabled unrouted stat", api._test_stats().channel_data_unrouted, 1);
+    api._test_set_channel_data_text_types([0xFFFF]);
+    const msg = api._test_decode(RESP_CHANNEL_DATA_RECV, datagram);
+    check("channel data enabled routes", msg?.data?.text_message, "payload");
+    check("channel data enabled slot", msg?.channel_index, 3);
+    check("channel data enabled key", msg?.namekey, "Data AQ==");
+    check("channel data metadata type", msg?.metadata?.channel_data_type, 0xFFFF);
+    check("channel data routed stat", api._test_stats().channel_data_routed, 1);
+    check("channel data oversized rejected",
+        api._test_decode(RESP_CHANNEL_DATA_RECV, channelDataPayload(3, 0xFFFF, fillBytes(0x78, 164))), null);
+    check("channel data malformed stat", api._test_stats().early_drop_malformed_text, 1);
+}
+
+// ---- 15c. Strict identity mode rejects modern frames without destination ID
+api._test_reset();
+{
+    api._test_set_strict_direct_identity(true);
+    const modern = modernDirectPayload("ABCDEF", "no destination");
+    check("strict direct identity drops modern frame",
+        api._test_decode(RESP_DIRECT_MSG_RECV, modern), null);
+    check("strict direct identity drop counted", api._test_stats().direct_identity_dropped, 1);
+    check("strict direct identity unverified counted", api._test_stats().direct_identity_unverified, 1);
 }
 
 // ---- 16. Channel info response is cached for discovery/control

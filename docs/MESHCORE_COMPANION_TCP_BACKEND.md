@@ -317,6 +317,11 @@ channels_updated
 direct_identity_verified
 direct_identity_mismatch
 direct_identity_unverified
+direct_identity_dropped
+direct_identity_mode
+channel_data_received
+channel_data_routed
+channel_data_unrouted
 ```
 
 ## Future command/status API

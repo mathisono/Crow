@@ -19,20 +19,19 @@ This page clarifies how far along Meshtastic TCP Port-API channel discovery is c
   - `config_requests`
   - `config_complete`
   - `channels_discovered`
+  - `channels_updated`
   - `pending_rx`
   - `frames_in`
   - `frames_decoded`
 
 ## Current limits
 
-Meshtastic API discovery is **not yet equivalent** to MeshCore TCP discovery notifications.
+Meshtastic API discovery now has runtime notification parity with MeshCore TCP,
+but remains **unverified until hardware validation**.
 
 Current missing pieces:
 
 - no hardware validation against a Meshtastic node yet;
-- no operator notification when a channel is discovered;
-- no `channels_updated` counter yet;
-- no UI command-reply notification like MeshCore TCP now has;
 - no persistent config write, by design;
 - no automatic channel routing enablement, by design;
 - no radio write-back, by design.
@@ -50,25 +49,26 @@ operator notification through event queue
 channels refresh notification
 ```
 
-Meshtastic API currently has the parser and runtime map, but still needs the same operator-notification layer.
+Meshtastic API has the parser, runtime map, telemetry, and operator-notification
+layer. The notification is deliberately runtime-only and does not enable or
+persist a channel.
 
-## Required next step
+## Completed parity work
 
-Add Meshtastic API discovery notification parity with MeshCore TCP:
+The notification parity implementation:
 
-1. Add a `notifyOperator()` helper in `meshtastic_API.uc` using the existing event path:
+1. Uses a `notifyOperator()` helper in `meshtastic_API.uc` using the existing event path:
 
    ```ucode
    global.event.queue({ cmd: "/reply", reply: lines });
    global.event.notify({ cmd: "channels" }, mergekey);
    ```
 
-2. Add `notifyChannelDiscovered(ch, action)`.
-3. Call it from `updateDiscoveredChannel()` on new or changed channels.
-4. Add `channels_updated` telemetry.
-5. Do not print raw PSKs.
-6. Do not write `config.channels` or persistent Crow config.
-7. Keep notifications clearly marked as runtime-only and unverified until hardware validation passes.
+2. Calls `notifyChannelDiscovered(ch, action)` on new or changed channels.
+3. Reports `channels_updated` telemetry.
+4. Does not print raw PSKs.
+5. Does not write `config.channels` or persistent Crow config.
+6. Keeps notifications clearly marked as runtime-only and unverified until hardware validation passes.
 
 Suggested notification text:
 

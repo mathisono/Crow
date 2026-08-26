@@ -36,6 +36,8 @@ const RESYNC_BUFFER_CAP        = 4096;
 const REOPEN_INTERVAL          = 5;
 const SERIAL_POLL_INTERVAL     = 1;
 const SERIAL_STARTUP_SETTLE    = 2;
+const SERIAL_HANDSHAKE_RETRY   = 5;
+const SERIAL_HANDSHAKE_ATTEMPTS = 3;
 const DEFAULT_QUEUE_POLL       = 5;
 const DEFAULT_MAX_PENDING_RX   = 4;
 const HARD_MAX_PENDING_RX      = 32;
@@ -58,12 +60,14 @@ const RESP_NO_MORE_MESSAGES    = 0x0a;
 const RESP_DIRECT_MSG_RECV_V3  = 0x10;
 const RESP_CHANNEL_MSG_RECV_V3 = 0x11;
 const RESP_CHANNEL_INFO        = 0x12;
+const RESP_CHANNEL_DATA_RECV   = 0x1b;
 const PUSH_SEND_CONFIRMED      = 0x82;
 const PUSH_MSG_WAITING         = 0x83;
 const CMD_ENCRYPTED_DM         = 0x90;
 const CMD_ENCRYPTED_BIN        = 0x91;
 
 const TXT_TYPE_PLAIN           = 0x00;
+const MAX_CHANNEL_DATA_LENGTH  = 163;
 
 const PART97_BLOCKED_COMMANDS = {
     [CMD_ENCRYPTED_DM]: true,
@@ -80,6 +84,8 @@ let serialBaud = 115200;
 let serialState = "not-configured";
 let nextOpenTime = 0;
 let handshakeDue = 0;
+let handshakeAttempts = 0;
+let companionReady = false;
 let lastError = null;
 let framebuf = "";
 let pendingSkip = 0;
@@ -97,6 +103,8 @@ let nextQueuePollTime = 0;
 let configuredChannelNamekey = null;
 let outboundChannelIndex = 0;
 let strictHook = null;
+let strictDirectIdentity = false;
+let channelDataTextTypes = {};
 let callsign = null;
 let deviceName = null;
 let msgSeq = 0;
@@ -122,7 +130,12 @@ let stats = {
     channel_info_responses: 0,
     channels_discovered: 0,
     channels_updated: 0,
+    direct_identity_unverified: 0,
+    direct_identity_dropped: 0,
     group_receive_unverified: 0,
+    channel_data_received: 0,
+    channel_data_routed: 0,
+    channel_data_unrouted: 0,
     outbound_group_sent: 0,
     outbound_group_rejected: 0,
     outbound_confirmed: 0,
@@ -228,6 +241,34 @@ function validDevicePath(device)
             match(device, /^\/dev\/ttyUSB[0-9]+$/) !== null);
 }
 
+function channelDataTextTypeEnabled(dataType)
+{
+    return channelDataTextTypes[`${dataType}`] === true;
+}
+
+function validChannelDataPayload(payload)
+{
+    if (!payload || length(payload) < 9) return false;
+    const index = ord(payload, 3);
+    const dataLen = ord(payload, 7);
+    return index <= 7 && dataLen <= MAX_CHANNEL_DATA_LENGTH &&
+        8 + dataLen <= length(payload);
+}
+
+function isMostlyPrintable(value)
+{
+    if (!value || length(value) === 0) return false;
+    let printable = 0;
+    for (let i = 0; i < length(value); i++) {
+        const byte = ord(value, i);
+        if (byte === 9 || byte === 10 || byte === 13 ||
+            (byte >= 0x20 && byte <= 0x7e) || byte >= 0x80) {
+            printable++;
+        }
+    }
+    return printable >= length(value) * 0.75;
+}
+
 function resetWireState()
 {
     framebuf = "";
@@ -237,6 +278,8 @@ function resetWireState()
     syncPausedBackpressure = false;
     nextQueuePollTime = time() + queuePollSeconds;
     handshakeDue = 0;
+    handshakeAttempts = 0;
+    companionReady = false;
 }
 
 function closeSerial(reason)
@@ -459,6 +502,8 @@ function sendBootHandshake()
     const ok = sendCommand(CMD_APP_START, appStartPayload());
     if (ok) {
         stats.handshakes_sent++;
+        handshakeAttempts++;
+        handshakeDue = time() + SERIAL_HANDSHAKE_RETRY;
         log0("handshake sent (CMD_APP_START); waiting for self-info/queue push\n");
         // Wait for self-info or a queue push before issuing 0x0a. Some
         // Companion builds treat an immediate sync request as a pre-handshake
@@ -641,6 +686,69 @@ function processChannelInfo(framePayload)
     mapConfiguredChannels();
 }
 
+function parseChannelData(payload)
+{
+    // Companion 0x1b receive payload:
+    // [snr][reserved:2][slot][path_len][data_type:2 LE][data_len][data].
+    if (!validChannelDataPayload(payload)) return null;
+    const rawSnr = ord(payload, 0);
+    const snr = (rawSnr > 127 ? rawSnr - 256 : rawSnr) / 4.0;
+    const slot = ord(payload, 3);
+    const pathLen = ord(payload, 4);
+    const dataType = le16(payload, 5);
+    const dataLen = ord(payload, 7);
+    stats.channel_data_received++;
+    if (!channelDataTextTypeEnabled(dataType)) {
+        stats.channel_data_unrouted++;
+        log1("drop channel datagram type=0x%04x slot=%d len=%d (type not enabled)\n",
+            dataType, slot, dataLen);
+        return null;
+    }
+
+    const text = cstr(substr(payload, 8, dataLen));
+    if (!isMostlyPrintable(text)) {
+        stats.channel_data_unrouted++;
+        log1("drop channel datagram type=0x%04x slot=%d (not printable text)\n",
+            dataType, slot);
+        return null;
+    }
+    const mapped = channel.getChannelByMeshcoreSlot(slot);
+    if (!mapped || !verifiedLocalChannelForSlot(slot, mapped.namekey)) {
+        stats.channel_data_unrouted++;
+        stats.group_receive_unverified++;
+        log1("drop channel datagram slot=%d until radio/Crow channel namekey matches\n", slot);
+        return null;
+    }
+
+    msgSeq = (msgSeq + 1) & 0xffffffff;
+    stats.channel_data_routed++;
+    return {
+        id: msgSeq,
+        group_slot: slot,
+        channel_index: slot,
+        namekey: mapped.namekey,
+        rx_time: time(),
+        hop_limit: 1,
+        transport: "meshcore",
+        backend: "serial_api",
+        originating_callsign: callsign,
+        data: { text_message: text },
+        metadata: {
+            is_group_message: true,
+            group_slot: slot,
+            channel_index: slot,
+            text_type: TXT_TYPE_PLAIN,
+            path_length: pathLen,
+            rx_snr: snr,
+            identity_strength: "weak",
+            symmetric_key: true,
+            requires_slot_lookup: true,
+            channel_data: true,
+            channel_data_type: dataType
+        }
+    };
+}
+
 function advanceOversize(payloadBytes)
 {
     const total = HEADER_BYTES + payloadBytes;
@@ -708,6 +816,9 @@ function smartAccumulate(data)
 
         if (cmd === PUSH_MSG_WAITING) {
             stats.message_waiting++;
+            companionReady = true;
+            handshakeDue = 0;
+            handshakeAttempts = 0;
             syncingMessages = true;
             maybeRequestNext("push 0x83");
             continue;
@@ -738,6 +849,9 @@ function smartAccumulate(data)
         }
         if (cmd === RESP_SELF_INFO) {
             stats.self_info++;
+            companionReady = true;
+            handshakeDue = 0;
+            handshakeAttempts = 0;
             syncRequestInFlight = false;
             syncingMessages = true;
             deviceName = parseSelfInfo(framePayload) ?? deviceName;
@@ -752,10 +866,24 @@ function smartAccumulate(data)
             processChannelInfo(framePayload);
             continue;
         }
+        if (cmd === RESP_CHANNEL_DATA_RECV) {
+            syncRequestInFlight = false;
+            if (validChannelDataPayload(payload)) {
+                push(frames, { cmd: cmd, payload: payload });
+            }
+            else {
+                stats.early_drop_malformed_text++;
+                log1("drop malformed channel datagram len=%d\n", length(payload));
+            }
+            if (companionReady) maybeRequestNext("channel data");
+            continue;
+        }
         if (!isDirectFrame(cmd) && !isGroupFrame(cmd)) {
             stats.early_drop_unknown_cmd++;
             syncRequestInFlight = false;
-            maybeRequestNext("drop unknown");
+            if (companionReady) {
+                maybeRequestNext("drop unknown");
+            }
             continue;
         }
 
@@ -789,10 +917,23 @@ function smartAccumulate(data)
 
 function decodeTextFrame(cmd, payload)
 {
+    if (cmd === RESP_CHANNEL_DATA_RECV) {
+        if (!validChannelDataPayload(payload)) {
+            stats.early_drop_malformed_text++;
+            return null;
+        }
+        return parseChannelData(payload);
+    }
     if (isDirectFrame(cmd)) {
         const off = incomingPrefixBytes(cmd);
         const text = cstr(substr(payload, off + 12));
         if (!text) return null;
+        stats.direct_identity_unverified++;
+        if (strictDirectIdentity) {
+            stats.direct_identity_dropped++;
+            log1("drop modern direct frame: destination identity unavailable\n");
+            return null;
+        }
         msgSeq = (msgSeq + 1) & 0xffffffff;
         return {
             id: msgSeq,
@@ -808,7 +949,12 @@ function decodeTextFrame(cmd, payload)
             backend: "serial_api",
             originating_callsign: callsign,
             data: { text_message: text },
-            metadata: { is_group_message: false, identity_strength: "prefix", local_direct: true }
+            metadata: {
+                is_group_message: false,
+                identity_strength: "prefix",
+                local_direct: true,
+                direct_identity_verified: false
+            }
         };
     }
     if (isGroupFrame(cmd)) {
@@ -906,6 +1052,17 @@ export function setup(config)
     serialBaud = cfg.baud ?? 115200;
     serialState = cfg.enabled === true ? "opening" : "not-configured";
     channelDiscovery = cfg.channel_discovery === true;
+    strictDirectIdentity = cfg.strict_direct_identity === true || cfg.direct_identity_mode === "verified";
+    channelDataTextTypes = {};
+    const textTypes = cfg.channel_data_text_types;
+    if (textTypes && type(textTypes) === "array") {
+        for (let i = 0; i < length(textTypes); i++) {
+            const dataType = int(textTypes[i]);
+            if (dataType >= 1 && dataType <= 0xffff) {
+                channelDataTextTypes[`${dataType}`] = true;
+            }
+        }
+    }
     channelRefreshSeconds = cfg.channel_refresh_seconds ?? DEFAULT_CHANNEL_REFRESH;
     queuePollSeconds = cfg.queue_poll_seconds ?? DEFAULT_QUEUE_POLL;
     if (queuePollSeconds < 1) queuePollSeconds = 1;
@@ -1051,17 +1208,22 @@ export function tick()
         nextOpenTime = time() + REOPEN_INTERVAL;
         openSerial();
     }
-    if (serialTx && handshakeDue > 0 && time() >= handshakeDue) {
-        handshakeDue = 0;
-        sendBootHandshake();
+    if (serialTx && !companionReady && handshakeDue > 0 && time() >= handshakeDue) {
+        if (handshakeAttempts >= SERIAL_HANDSHAKE_ATTEMPTS) {
+            log0("Companion handshake timed out after %d attempts\n", handshakeAttempts);
+            closeSerial("handshake timeout");
+        }
+        else {
+            sendBootHandshake();
+        }
     }
     if (serialRx && timers.tick("meshcore_serial_api.poll")) {
         pumpSerial("serial timer");
     }
-    if (serialTx && syncingMessages && !syncRequestInFlight && !pendingFull()) {
+    if (serialTx && companionReady && syncingMessages && !syncRequestInFlight && !pendingFull()) {
         maybeRequestNext(syncPausedBackpressure ? "resume after backpressure" : "tick resume");
     }
-    if (serialTx && !syncRequestInFlight && !pendingFull() && time() >= nextQueuePollTime) {
+    if (serialTx && companionReady && !syncRequestInFlight && !pendingFull() && time() >= nextQueuePollTime) {
         syncingMessages = true;
         maybeRequestNext("periodic queue poll");
     }
@@ -1108,6 +1270,8 @@ export function status()
         opens: stats.opens,
         closes: stats.closes,
         handshakes_sent: stats.handshakes_sent,
+        handshake_attempts: handshakeAttempts,
+        handshake_ready: companionReady,
         bytes_rx: stats.bytes_rx,
         bytes_tx: stats.bytes_tx,
         frames_in: stats.frames_in,
@@ -1122,7 +1286,14 @@ export function status()
         channel_info_responses: stats.channel_info_responses,
         channels_discovered: stats.channels_discovered,
         channels_updated: stats.channels_updated,
+        direct_identity_unverified: stats.direct_identity_unverified,
+        direct_identity_dropped: stats.direct_identity_dropped,
+        direct_identity_mode: strictDirectIdentity ? "verified" : "compatibility",
         group_receive_unverified: stats.group_receive_unverified,
+        channel_data_received: stats.channel_data_received,
+        channel_data_routed: stats.channel_data_routed,
+        channel_data_unrouted: stats.channel_data_unrouted,
+        channel_data_text_types: keys(channelDataTextTypes),
         outbound_group_sent: stats.outbound_group_sent,
         outbound_group_rejected: stats.outbound_group_rejected,
         outbound_confirmed: stats.outbound_confirmed,
@@ -1147,6 +1318,8 @@ export function _test_reset()
     responses = [];
     discoveredChannels = {};
     channel.clearMeshcoreSlotChannels();
+    channelDataTextTypes = {};
+    strictDirectIdentity = false;
     msgSeq = 0;
     for (let key in stats) stats[key] = 0;
 };
@@ -1162,6 +1335,22 @@ export function _test_inject(data, gatekeeperShim)
 export function _test_decode(cmd, payload)
 {
     return decodeTextFrame(cmd, payload);
+};
+
+export function _test_set_channel_data_text_types(types)
+{
+    channelDataTextTypes = {};
+    for (let i = 0; i < length(types ?? []); i++) {
+        const dataType = int(types[i]);
+        if (dataType >= 1 && dataType <= 0xffff) {
+            channelDataTextTypes[`${dataType}`] = true;
+        }
+    }
+};
+
+export function _test_set_strict_direct_identity(enabledMode)
+{
+    strictDirectIdentity = enabledMode === true;
 };
 
 export function _test_build_frame(cmd, payload)

@@ -1,19 +1,25 @@
 # Crow Development Plan
 
-Status: **2026-08-25**  
-Current source revision: local release-prep commit — exact-match RF group gate
+Status: **2026-08-26**
+Current source revision: release-hardening work — exact-match RF gate, bounded
+channel datagrams, direct-identity policy, and GUI transport validation
 
 This is the current development and validation plan. Historical Raven migration notes remain in `CROW_MIGRATION_PLAN.md`; they are not the active feature plan.
 
 ## Release posture
 
-The current revision is suitable for an experimental pre-release after the package is rebuilt. The MeshCore TCP and USB Companion paths are implemented and covered by local regression tests. Live RF transmit is working through the GUI, but reliable inbound public-channel traffic remains unvalidated.
+The current revision is suitable for a release candidate after the package is
+rebuilt and the remaining hardware gates are recorded. MeshCore TCP/bridge
+transport and GUI-to-GUI messaging are proven in both directions. One tagged
+air-to-Crow receive path has also been observed on BB5MC; the complete
+bidirectional RF acceptance record and native direct-USB path remain open.
 
-Do not describe the MeshCore TCP/USB paths as production-ready until the hardware gates below pass.
+Do not describe native direct USB or full bidirectional RF as production-ready
+until the hardware gates below pass.
 
 ## Workstreams
 
-### 1. MeshCore TCP and USB hardware validation — pending
+### 1. MeshCore transport hardware validation — split status
 
 Validate both transports against real Companion hardware:
 
@@ -25,7 +31,11 @@ Validate both transports against real Companion hardware:
 6. Confirm v3 payload layouts and discovery timing on the real device.
 7. Repeat the transport checks over USB serial.
 
-Current evidence (2026-08-25): MSE-88 routes to Hub5, the Hub5 TCP backend connects to Companion endpoint `10.245.94.47:4403`, self-info and public-channel discovery succeed, and the GUI can submit public-channel transmissions. Inbound public-channel traffic from the air is still intermittent or absent. USB serial RF validation remains pending. This workstream therefore remains **hardware validation pending**.
+Current evidence (2026-08-26): the supervised BB5MC TCP/serial bridge path
+connects, discovers the exact public-channel tuple, and carries the tested
+GUI-to-GUI flow. The final tagged A2B air message was observed through Crow on
+BB5MC. The bridge path is therefore **validated for the recorded test scope**;
+native direct USB remains **hardware validation pending**.
 
 Second-node update (2026-08-25/26): `KJ6DZB-BB5MC` (`10.52.8.205`, Basbox5)
 now has the AREDN USB-serial kernel modules installed and exposes the attached
@@ -45,10 +55,14 @@ which made app-start, channel-query, and queue-sync probes appear silent. An
 independent MIPS probe then returned `RESP_SELF_INFO (0x05)` and all eight
 channel records after a two-second USB settle. Crow `0.0.2-r20512923` now uses
 that settle window and live BB5MC logs show the connected device, `Public`
-channel discovery, and queue polling. A controlled, tagged Crow-to-Crow RF
-message in both directions is still required before this workstream can close.
+channel discovery, and queue polling. The independent native direct-USB
+attempt is retained as a release blocker: the device opened and accepted
+writes, but no self-info or RF frame was observed through Crow after bounded
+handshake retries. The node was restored to the proven supervised bridge
+configuration. Do not claim direct USB from the open device or handshake
+counters alone.
 
-### 2. MeshCore public-channel inbound receive path — pending controlled RF test
+### 2. MeshCore public-channel inbound receive path — A2B observed; B2A closeout pending
 
 The public channel is present in Crow with the exact discovered radio tuple, but
 live receive needs a controlled sender/receiver test. A second AREDN node is
@@ -78,13 +92,13 @@ backend exposes enough counters/logging to distinguish RF loss from Companion
 queue or parser loss. Until this test is available and passes, inbound RF
 validation remains **pending**.
 
-Current blocker: live inbound RF through Crow is still not proven. The official
-Companion layout for `RESP_CHANNEL_DATA_RECV (0x1B)` is now documented, but it
-is a binary channel-data datagram rather than a text message and remains
-intentionally excluded from text routing. The final two-way test must capture
-the actual public-channel response (`0x08`/`0x11` or a queued `0x1B`) and show
-that Crow delivers it to the exact mapped channel. Do not mark live RF
-validation complete from handshake or raw hardware reception alone.
+Current evidence: tagged `RF-AIR-A2B-20260826T195700` was decoded from a real
+Companion `0x08` frame and delivered through Crow on BB5MC. This closes the
+one-direction receive observation, but the full RF gate remains open until the
+reverse tagged direction is recorded as well. The official Companion layout
+for `RESP_CHANNEL_DATA_RECV (0x1B)` is implemented as bounded, opt-in
+application text; it is not used as proof unless the configured data type is
+known and the exact channel tuple passes.
 
 #### Final tagged air test
 
@@ -101,7 +115,7 @@ message or UI event. A pass requires both unique tokens to appear through
 Crow, with no delivery to an unmapped slot. If strict gatekeeper is enabled,
 the embedded sender callsign must also pass its callsign/allow-list checks.
 
-### 3. MeshCore direct identity — v1 verified, v2 pending
+### 3. MeshCore direct identity — compatibility and strict policy implemented
 
 The first committed version is verified in the local test matrix:
 
@@ -110,20 +124,30 @@ The first committed version is verified in the local test matrix:
 - modern Companion direct frames without an exposed destination remain explicitly unverified queue-origin ingress;
 - direct replies require a learned sender public-key prefix.
 
-The follow-up is to determine whether modern Companion hardware exposes a destination ID. If it does, pass it through the parser and remove the queue-origin fallback only after positive and negative RF tests pass. Do not change firmware as part of this Crow-side task.
+Modern Companion frames still expose no destination ID in the documented
+shape. Compatibility mode preserves queue-origin behavior for bring-up;
+`direct_identity_mode: "verified"` / `strict_direct_identity: true` now drops
+modern frames that cannot be destination-verified. Hardware discovery of a
+destination-bearing format remains a follow-up; no firmware change is needed.
 
-### 4. Meshtastic TCP discovery — unchanged and experimental
+### 4. Meshtastic TCP discovery — notification parity complete; hardware pending
 
-Leave the existing read-only, runtime-only Meshtastic discovery implementation as-is. Its hardware validation and notification-parity work remain tracked in `MESHTASTIC_API_DISCOVERY_STATUS.md`.
+The read-only runtime parser now has operator notification parity and
+`channels_updated` telemetry. Hardware validation remains pending and the
+feature stays experimental.
 
 Do not add persistent channel writes, radio write-back, or automatic routing enablement in this release.
 
-### 5. Documentation and packaging — active cleanup
+### 5. Documentation and packaging — active release cleanup
 
 - Keep this file as the current plan.
 - Keep MeshCore backend docs aligned with the implemented send path.
 - Mark older validation reports as historical.
 - Run UI/static checks, shell syntax checks, all Node regression tests, and the package build before cutting a release.
+- Build and inspect both IPK and APK outputs, with recorded SHA256 values.
+- Keep native USB status and RF acceptance evidence separate in release notes.
+- Keep the current AREDN package-manager deployment path compatible with APK
+  while documenting IPK output for older images.
 - Confirm generated packages contain the current UI, runtime modules, migration scripts, and generic Crow sysupgrade configuration.
 
 The SudoRoom MeshCore reference page was reviewed as a side test. It publishes

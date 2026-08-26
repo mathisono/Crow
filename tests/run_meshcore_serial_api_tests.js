@@ -166,9 +166,15 @@ ok('parses self-info from its printable trailing name', SOURCE.includes('functio
 ok('does not map a configured TX slot before discovery', !SOURCE.includes('channel.setMeshcoreSlotChannel(outboundChannelIndex, configured)'));
 ok('requires exact tuple proof before serial send', SOURCE.includes('verifiedLocalChannelForSlot(outboundChannelIndex, configuredChannelNamekey)'));
 ok('normalizes Companion Public to Crow public namekey', SOURCE.includes('name === "Public"') && SOURCE.includes('channel.meshcorePublicChannelNamekey()'));
-ok('waits for self-info before queue sync', SOURCE.includes('Wait for self-info or a queue push') && SOURCE.includes('syncingMessages = true;') && SOURCE.includes('if (cmd === RESP_SELF_INFO)'));
+ok('waits for self-info before queue sync', SOURCE.includes('Wait for self-info or a queue push') && SOURCE.includes('companionReady && syncingMessages') && SOURCE.includes('if (cmd === RESP_SELF_INFO)'));
+ok('retries and reconnects after a lost serial handshake', SOURCE.includes('SERIAL_HANDSHAKE_ATTEMPTS') && SOURCE.includes('handshakeAttempts >= SERIAL_HANDSHAKE_ATTEMPTS') && SOURCE.includes('closeSerial("handshake timeout")'));
+ok('exposes serial handshake readiness', SOURCE.includes('handshake_ready: companionReady') && SOURCE.includes('handshake_attempts: handshakeAttempts'));
 ok('drops unverified serial group receive', SOURCE.includes('group_receive_unverified') && SOURCE.includes('until radio/Crow channel namekey matches'));
 ok('clears serial slot authority on reconnect', SOURCE.includes('channel.clearMeshcoreSlotChannels()') && SOURCE.includes('discoveredChannels = {}'));
+ok('keeps Companion channel datagrams opt-in', SOURCE.includes('channel_data_text_types') && SOURCE.includes('channel_data_unrouted'));
+ok('bounds Companion channel datagrams', SOURCE.includes('MAX_CHANNEL_DATA_LENGTH') && SOURCE.includes('validChannelDataPayload') && SOURCE.includes('dataLen <= MAX_CHANNEL_DATA_LENGTH'));
+ok('reports modern direct identity as unverified', SOURCE.includes('direct_identity_verified: false') && SOURCE.includes('direct_identity_unverified++'));
+ok('supports strict modern direct identity mode', SOURCE.includes('direct_identity_mode === "verified"') && SOURCE.includes('direct_identity_dropped'));
 
 // ucode module exports are declarations terminated with `};`.  Node's wire
 // contract tests do not parse ucode, so keep this target-runtime requirement
@@ -179,7 +185,8 @@ for (const name of [
   'process', 'pending', 'takeResponse', 'status', '_test_reset',
   '_test_inject', '_test_decode', '_test_build_frame', '_test_build_command',
   '_test_build_group_send', '_test_app_start_payload', '_test_decode_channel_info',
-  '_test_stats'
+  '_test_stats', '_test_set_channel_data_text_types',
+  '_test_set_strict_direct_identity'
 ]) {
   const expression = new RegExp(`export function ${name}\\([^]*?\\n};`);
   ok(`ucode export ${name} has a declaration terminator`, expression.test(SOURCE));

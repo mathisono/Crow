@@ -3,9 +3,9 @@
 Status: current validation notes for the direct-message verification path in
 `meshcore_tcp_api.uc`, `router.uc`, and `nodedb.uc`.
 
-The current release-prep implementation was verified locally on 2026-08-25.
-Live hardware verification of modern Companion destination fields is still
-pending.
+The current implementation was verified locally. Live hardware verification
+of modern Companion destination fields is still pending; the protocol
+currently exposes only the sender prefix for the modern frame shape.
 
 Crow receives direct frames from the connected MeshCore Companion queue as
 local direct messages. Legacy direct frames carry a destination id; when Crow
@@ -23,8 +23,9 @@ Direct receive and reply behavior:
 2. Mark legacy direct messages with `metadata.direct_identity_verified = true`
    when a destination id can be compared against the connected radio identity.
 3. Keep accepting unverified queue-origin modern direct frames with
-   `metadata.local_direct = true` so `textmessage.uc` creates direct-message
-   threads during bring-up.
+   `metadata.local_direct = true` in compatibility mode so `textmessage.uc`
+   creates direct-message threads during bring-up. Strict verified mode drops
+   modern frames that lack a destination.
 4. Remember the sender MeshCore public-key prefix when a modern direct frame provides it.
 5. Send direct replies with `CMD_SEND_DIRECT_MESSAGE` only when a destination public-key prefix has been learned.
 6. Fail direct sends safely and increment `direct_sends_failed` when the prefix is missing.
@@ -35,6 +36,7 @@ Status counters exposed by `meshcore_tcp_api.status()`:
 direct_identity_verified    legacy direct frames checked against self identity
 direct_identity_mismatch    checked legacy direct frames that did not target self
 direct_identity_unverified  direct frames accepted through queue-origin fallback
+direct_identity_dropped     modern frames dropped by strict verified mode
 ```
 
 ## Validation result

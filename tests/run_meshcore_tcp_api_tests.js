@@ -21,6 +21,8 @@ const RESP_CHANNEL_MSG_RECV = 0x08;
 const RESP_DIRECT_MSG_RECV_V3 = 0x10;
 const RESP_CHANNEL_MSG_RECV_V3 = 0x11;
 const RESP_CHANNEL_INFO = 0x12;
+const RESP_CHANNEL_DATA_RECV = 0x1B;
+const MAX_CHANNEL_DATA_LENGTH = 163;
 const CMD_ENCRYPTED_DM = 0x90;
 const CMD_ENCRYPTED_BIN = 0x91;
 const CMD_UNKNOWN = 0x77;
@@ -28,6 +30,8 @@ const CMD_UNKNOWN = 0x77;
 const PART97_BLOCKED_COMMANDS = new Set([CMD_ENCRYPTED_DM, CMD_ENCRYPTED_BIN]);
 let meshcoreSelfId = null;
 const directIdentityStats = { verified: 0, mismatch: 0, unverified: 0 };
+const channelDataStats = { received: 0, routed: 0, unrouted: 0 };
+const channelDataTextTypes = new Set();
 const localGroupChannels = new Set();
 const discoveredGroupChannels = new Map();
 const mappedGroupChannels = new Map();
@@ -54,6 +58,9 @@ class SmartAccumulator {
             early_drop_encrypted: 0,
             early_drop_unknown_cmd: 0,
             early_drop_malformed_text: 0,
+            channel_data_received: 0,
+            channel_data_routed: 0,
+            channel_data_unrouted: 0,
             resync_skips: 0
         };
     }
@@ -149,6 +156,11 @@ class SmartAccumulator {
                 frames.push({ cmd: code, payload });
                 continue;
             }
+            if (code === RESP_CHANNEL_DATA_RECV) {
+                if (!validChannelDataPayload(payload)) this.stats.early_drop_malformed_text++;
+                else frames.push({ cmd: code, payload });
+                continue;
+            }
             if (code === 0x82 || code === 0x84 || code === 0x8A || code === 0x88 ||
                 code === 0x89 || code === 0x8B || code === 0x8C || code === 0x8E || code === 0x90) {
                 continue;
@@ -172,7 +184,52 @@ function validTextPayload(code, payload) {
     return false;
 }
 
+function validChannelDataPayload(payload) {
+    if (payload.length < 9) return false;
+    const slot = payload[3];
+    const dataLength = payload[7];
+    return slot <= 15 && dataLength <= MAX_CHANNEL_DATA_LENGTH && 8 + dataLength <= payload.length;
+}
+
+function channelDataPayload(slot, dataType, text, snr = 0) {
+    const textBytes = Buffer.from(text, 'utf8');
+    return Buffer.concat([
+        Buffer.from([snr & 0xff, 0, 0, slot & 0xff, 0, dataType & 0xff, (dataType >> 8) & 0xff, textBytes.length]),
+        textBytes
+    ]);
+}
+
 function decodeTextFrame(cmd, payload) {
+    if (cmd === RESP_CHANNEL_DATA_RECV) {
+        if (!validChannelDataPayload(payload)) return null;
+        channelDataStats.received++;
+        const slot = payload[3];
+        const dataType = payload.readUInt16LE(5);
+        if (!channelDataTextTypes.has(dataType)) {
+            channelDataStats.unrouted++;
+            return null;
+        }
+        const text = payload.subarray(8, 8 + payload[7]).toString('utf8').replace(/\0+$/, '');
+        const namekey = mappedGroupChannels.get(slot);
+        if (!text.length || !namekey || !localGroupChannels.has(namekey) || discoveredGroupChannels.get(slot) !== namekey) {
+            channelDataStats.unrouted++;
+            return null;
+        }
+        channelDataStats.routed++;
+        return {
+            group_slot: slot,
+            channel_index: slot,
+            namekey,
+            transport: 'meshcore',
+            backend: 'tcp_api',
+            data: { text_message: text },
+            metadata: {
+                is_group_message: true,
+                channel_data: true,
+                channel_data_type: dataType
+            }
+        };
+    }
     if (isDirect(cmd)) {
         const fromId = payload.readUInt32LE(0);
         const toId = payload.readUInt32LE(4);
@@ -422,6 +479,28 @@ const STRICT_OFF = { isEnabled: () => false };
     const g = decodeTextFrame(RESP_CHANNEL_MSG_RECV_V3, groupPayload(3, 2, 'v3g'));
     check('decode v3 direct', d?.data?.text_message, 'v3d');
     check('decode v3 group', g?.data?.text_message, 'v3g');
+}
+{
+    clearGroupChannels();
+    channelDataTextTypes.clear();
+    channelDataStats.received = 0;
+    channelDataStats.routed = 0;
+    channelDataStats.unrouted = 0;
+    localGroupChannels.add('Data AQ==');
+    configureGroupChannel(3, 'Data AQ==');
+    check('channel data malformed rejected', decodeTextFrame(RESP_CHANNEL_DATA_RECV, Buffer.alloc(8)), null);
+    const datagram = channelDataPayload(3, 0xFFFF, 'payload');
+    check('channel data disabled is unrouted', decodeTextFrame(RESP_CHANNEL_DATA_RECV, datagram), null);
+    check('channel data disabled counted', channelDataStats.received, 1);
+    channelDataTextTypes.add(0xFFFF);
+    const msg = decodeTextFrame(RESP_CHANNEL_DATA_RECV, datagram);
+    check('channel data enabled routes', msg?.data?.text_message, 'payload');
+    check('channel data enabled slot', msg?.channel_index, 3);
+    check('channel data enabled key', msg?.namekey, 'Data AQ==');
+    check('channel data metadata type', msg?.metadata?.channel_data_type, 0xFFFF);
+    check('channel data routed counted', channelDataStats.routed, 1);
+    const tooLong = channelDataPayload(3, 0xFFFF, 'x'.repeat(MAX_CHANNEL_DATA_LENGTH + 1));
+    check('channel data oversized rejected', decodeTextFrame(RESP_CHANNEL_DATA_RECV, tooLong), null);
 }
 {
     clearGroupChannels();

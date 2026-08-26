@@ -99,6 +99,7 @@ const UNKNOWN_LOG_INTERVAL     = 64;
 const TEXT_TYPE_PLAIN          = 0x00;
 const TEXT_TYPE_CLI_DATA       = 0x01;
 const TEXT_TYPE_SIGNED         = 0x02;
+const MAX_CHANNEL_DATA_LENGTH  = 163;
 
 function isDirectFrame(cmd)
 {
@@ -158,6 +159,8 @@ let discoveredChannels = {};
 let unknownFrameCounts = {};
 let meshcoreSelfPublicKey = null;
 let meshcoreSelfPublicKeyPrefix = null;
+let channelDataTextTypes = {};
+let strictDirectIdentity = false;
 
 let channelScanActive = false;
 let channelScanNext = 0;
@@ -195,11 +198,15 @@ let stats            = {
     direct_identity_verified: 0,
     direct_identity_mismatch: 0,
     direct_identity_unverified: 0,
+    direct_identity_dropped: 0,
     log_data_frames: 0,
     trace_data_frames: 0,
     telemetry_response_frames: 0,
     binary_response_frames: 0,
     control_data_frames: 0,
+    channel_data_received: 0,
+    channel_data_routed: 0,
+    channel_data_unrouted: 0,
     message_sent_frames: 0,
     ack_frames: 0,
     unknown_frames: 0,
@@ -983,6 +990,25 @@ function directMsg(fromId, prefix, text, textType, timestamp, snr, pathLen, stro
         return null;
     }
 
+    const directMatch = directDestinationMatchesSelf(toId);
+    if (directMatch === null) {
+        stats.direct_identity_unverified++;
+        // Modern Companion direct receive frames carry the sender prefix but
+        // no destination ID. Keep compatibility mode by default, while
+        // allowing release deployments to require an explicit destination.
+        if (strictDirectIdentity && toId === null) {
+            stats.direct_identity_dropped++;
+            log1("drop modern direct frame: destination identity unavailable\n");
+            return null;
+        }
+    }
+    else {
+        stats.direct_identity_verified++;
+        if (!directMatch) {
+            stats.direct_identity_mismatch++;
+        }
+    }
+
     if (prefix && length(prefix) >= 6) {
         rememberDirectPrefix(fromId, prefix);
     }
@@ -992,16 +1018,6 @@ function directMsg(fromId, prefix, text, textType, timestamp, snr, pathLen, stro
 
     msgSeq = (msgSeq + 1) & 0xFFFFFFFF;
     const namekey = nodedb.namekey(fromId);
-    const directMatch = directDestinationMatchesSelf(toId);
-    if (directMatch === null) {
-        stats.direct_identity_unverified++;
-    }
-    else {
-        stats.direct_identity_verified++;
-        if (!directMatch) {
-            stats.direct_identity_mismatch++;
-        }
-    }
     return {
         id:                   msgSeq,
         from:                 fromId,
@@ -1067,6 +1083,56 @@ function channelMsg(index, text, textType, timestamp, snr, pathLen)
             requires_slot_lookup: index !== 0
         }
     };
+}
+
+function channelDataTextTypeEnabled(dataType)
+{
+    return channelDataTextTypes[`${dataType}`] === true;
+}
+
+function validChannelDataPayload(payload)
+{
+    if (!payload || length(payload) < 9) return false;
+    const index = ord(payload, 3);
+    const dataLen = ord(payload, 7);
+    return index <= MAX_CHANNEL_INDEX && dataLen <= MAX_CHANNEL_DATA_LENGTH &&
+        8 + dataLen <= length(payload);
+}
+
+function parseChannelData(payload)
+{
+    // RESP_CHANNEL_DATA_RECV payload:
+    // [snr][reserved:2][slot][path_len][data_type:2 LE][data_len][data].
+    if (!validChannelDataPayload(payload)) return null;
+    const rawSnr = ord(payload, 0);
+    const snr = (rawSnr > 127 ? rawSnr - 256 : rawSnr) / 4.0;
+    const index = ord(payload, 3);
+    const pathLen = ord(payload, 4);
+    const dataType = ord(payload, 5) | (ord(payload, 6) << 8);
+    const dataLen = ord(payload, 7);
+    stats.channel_data_received++;
+    if (!channelDataTextTypeEnabled(dataType)) {
+        stats.channel_data_unrouted++;
+        log2("drop channel datagram type=0x%04x slot=%d len=%d (type not enabled)\n",
+            dataType, index, dataLen);
+        return null;
+    }
+    const text = textClean(substr(payload, 8, dataLen));
+    if (!text || !isMostlyPrintable(text)) {
+        stats.channel_data_unrouted++;
+        log1("drop channel datagram type=0x%04x slot=%d (not printable text)\n",
+            dataType, index);
+        return null;
+    }
+    const msg = channelMsg(index, text, TEXT_TYPE_PLAIN, time(), snr, pathLen);
+    if (!msg) {
+        stats.channel_data_unrouted++;
+        return null;
+    }
+    msg.metadata.channel_data = true;
+    msg.metadata.channel_data_type = dataType;
+    stats.channel_data_routed++;
+    return msg;
 }
 
 function parseDirectModern(payload, version)
@@ -1156,6 +1222,16 @@ function decodeTextFrame(cmd, payload)
     }
     else if (cmd === RESP_CHANNEL_MSG_RECV) {
         msg = parseChannelModern(payload, 1) ?? parseChannelLegacy(payload);
+    }
+    else if (cmd === RESP_CHANNEL_DATA_RECV) {
+        if (!validChannelDataPayload(payload)) {
+            stats.early_drop_malformed_text++;
+            log1("decode: malformed channel datagram len=%d\n", length(payload));
+            return null;
+        }
+        // A valid but unconfigured data type/slot is intentionally unrouted,
+        // not malformed. The parser updates the dedicated datagram counters.
+        return parseChannelData(payload);
     }
 
     if (msg) {
@@ -1368,8 +1444,14 @@ function smartAccumulate(data)
 
         if (cmd === RESP_CHANNEL_DATA_RECV) {
             syncRequestInFlight = false;
-            log2("drop channel datagram len=%d\n", length(payload));
-            maybeRequestNext("drop channel data");
+            if (validChannelDataPayload(payload)) {
+                push(frames, { cmd: cmd, payload: payload });
+            }
+            else {
+                stats.early_drop_malformed_text++;
+                log1("drop malformed channel datagram len=%d\n", length(payload));
+            }
+            maybeRequestNext("channel data");
             continue;
         }
 
@@ -1431,6 +1513,17 @@ function setupTransport(config, kind)
         serialProfile = "crow_zeros";
     }
     channelDiscovery = !!cfg.channel_discovery;
+    channelDataTextTypes = {};
+    const textTypes = cfg.channel_data_text_types;
+    if (textTypes && type(textTypes) === "array") {
+        for (let i = 0; i < length(textTypes); i++) {
+            const dataType = int(textTypes[i]);
+            if (dataType >= 1 && dataType <= 0xFFFF) {
+                channelDataTextTypes[`${dataType}`] = true;
+            }
+        }
+    }
+    strictDirectIdentity = cfg.strict_direct_identity === true || cfg.direct_identity_mode === "verified";
     channelRefreshSeconds = cfg.channel_refresh_seconds ?? DEFAULT_CHANNEL_REFRESH;
     channelDiscoveryWindow = cfg.channel_discovery_window ?? DEFAULT_DISCOVERY_WINDOW;
     if (channelDiscoveryWindow < 1) channelDiscoveryWindow = 1;
@@ -1663,11 +1756,17 @@ export function status()
         direct_identity_verified: stats.direct_identity_verified,
         direct_identity_mismatch: stats.direct_identity_mismatch,
         direct_identity_unverified: stats.direct_identity_unverified,
+        direct_identity_dropped: stats.direct_identity_dropped,
+        direct_identity_mode: strictDirectIdentity ? "verified" : "compatibility",
         log_data_frames: stats.log_data_frames,
         trace_data_frames: stats.trace_data_frames,
         telemetry_response_frames: stats.telemetry_response_frames,
         binary_response_frames: stats.binary_response_frames,
         control_data_frames: stats.control_data_frames,
+        channel_data_received: stats.channel_data_received,
+        channel_data_routed: stats.channel_data_routed,
+        channel_data_unrouted: stats.channel_data_unrouted,
+        channel_data_text_types: keys(channelDataTextTypes),
         message_sent_frames: stats.message_sent_frames,
         ack_frames: stats.ack_frames,
         unknown_frames: stats.unknown_frames,
@@ -1698,6 +1797,22 @@ export function _test_decode(cmd, payload)
     return decodeTextFrame(cmd, payload);
 };
 
+export function _test_set_channel_data_text_types(types)
+{
+    channelDataTextTypes = {};
+    for (let i = 0; i < length(types ?? []); i++) {
+        const dataType = int(types[i]);
+        if (dataType >= 1 && dataType <= 0xFFFF) {
+            channelDataTextTypes[`${dataType}`] = true;
+        }
+    }
+};
+
+export function _test_set_strict_direct_identity(enabledMode)
+{
+    strictDirectIdentity = enabledMode === true;
+};
+
 export function _test_reset()
 {
     resetState();
@@ -1709,6 +1824,8 @@ export function _test_reset()
     unknownFrameCounts = {};
     meshcoreSelfPublicKey = null;
     meshcoreSelfPublicKeyPrefix = null;
+    channelDataTextTypes = {};
+    strictDirectIdentity = false;
     for (let k in stats) stats[k] = 0;
 };
 

@@ -361,7 +361,9 @@ Transport type for MeshCore.
     "port": 4403,
     "max_pending_rx": 4,
     "channel_discovery": true,
-    "channel_refresh_seconds": 600
+    "channel_refresh_seconds": 600,
+    "channel_data_text_types": [],
+    "direct_identity_mode": "compatibility"
   }
 }
 ```
@@ -373,12 +375,22 @@ Transport type for MeshCore.
 - `max_pending_rx`: `4`
 - `channel_discovery`: `false`
 - `channel_refresh_seconds`: `600`
+- `channel_data_text_types`: `[]` (disabled by default)
+- `direct_identity_mode`: `"compatibility"`
 
 **Notes:**
 - This uses the MeshCore Companion binary API over TCP, not a line-oriented
   command/status API.
 - Direct-message destinations are verified when Companion frames expose a
   destination id and self-info has provided the connected device identity.
+- Modern Companion direct frames do not expose a destination id. The default
+  compatibility mode accepts them as explicitly unverified queue-origin
+  ingress; set `direct_identity_mode: "verified"` (or
+  `strict_direct_identity: true`) to drop those frames.
+- Companion channel datagrams (`0x1B`) are never treated as Crow text by
+  default. Add numeric application data types such as `65535` to
+  `channel_data_text_types` only when that application payload is known to be
+  printable text.
 - Channel discovery is read-only and runtime-only. It does not write Crow
   config or auto-map an unmatched MeshCore group slot.
 - RF group receive/send is enabled per channel only after the discovered radio
@@ -397,7 +409,9 @@ Transport type for MeshCore.
     "baud": 115200,
     "app_start_profile": "crow_zeros",
     "max_pending_rx": 4,
-    "channel_discovery": true
+    "channel_discovery": true,
+    "channel_data_text_types": [],
+    "direct_identity_mode": "compatibility"
   }
 }
 ```
@@ -406,6 +420,12 @@ This is the same framed Companion protocol used by the TCP API, carried over
 the local USB serial device. It includes both receive queue draining and
 direct/channel transmit. Use `meshcore.backend: "serial"` to force it when
 TCP is also configured.
+
+The serial backend uses the same safety defaults as TCP: exact discovered
+channel tuple proof, opt-in `0x1B` text routing, and compatibility-mode
+handling for modern direct frames whose destination is not present on the
+wire. Native USB handshake readiness is exposed in backend status; it is not
+RF receive proof.
 
 ---
 

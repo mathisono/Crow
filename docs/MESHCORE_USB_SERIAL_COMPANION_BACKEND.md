@@ -82,6 +82,8 @@ group (0–7).
     "max_pending_rx": 4,
     "channel_discovery": true,
     "channel_refresh_seconds": 600,
+    "channel_data_text_types": [],
+    "direct_identity_mode": "compatibility",
     "channel_namekey": "TacNet AAECAwQFBgcICQoLDA0ODw==",
     "tx_channel_index": 0
   },
@@ -104,6 +106,13 @@ normal channel setup phase.
 `app_start_profile` can be `meshcore_cli` (the default) or `crow_zeros`; both
 send `CMD_APP_START` followed by seven reserved bytes and `Crow`. MeshCore
 firmware currently ignores the reserved bytes.
+
+Native serial uses the same direct-identity and channel-datagram policy as the
+TCP backend. Modern direct frames have no destination ID in the documented
+shape, so compatibility mode accepts them as unverified queue-origin input;
+`direct_identity_mode: "verified"` drops them. `0x1B` channel datagrams are
+bounded and dropped unless their numeric application type is listed in
+`channel_data_text_types`.
 
 ## Before enabling Crow
 
@@ -149,6 +158,9 @@ meshcore_serial_api: connected Companion device: <radio name>
    `sync_requests`.
 4. Disconnect/reconnect USB once. Crow should report a close and reopen after
    a five-second retry interval, then send a fresh handshake.
+5. If using an explicitly enabled `0x1B` text type, verify the resulting
+   message still resolves through the exact discovered radio/Crow channel
+   name/key/slot tuple. Unknown or binary datagrams must remain unrouted.
 
 The final RF acceptance test is separate from this transport checklist. Use
 two independent radios and exchange uniquely tagged bodies such as
