@@ -263,6 +263,20 @@ api._test_reset();
     check("group mismatch: send wrong slot blocked", api._test_channel_send_allowed(5, "TacNet AQ=="), false);
 }
 
+// ---- 14c. Discovery can precede channel.setup(); tick-time remap recovers it
+api._test_reset();
+{
+    check("startup ordering: discovery before local channel is not mapped",
+        api._test_set_discovered_channel(6, "Late AQ=="), false);
+    api._test_set_local_channels([{ namekey: "Late AQ==" }]);
+    api._test_map_discovered_channels();
+    check("startup ordering: exact tuple maps after local setup",
+        api._test_channel_send_allowed(6, "Late AQ=="), true);
+    check("startup ordering: receive allowed after remap",
+        api._test_decode(RESP_CHANNEL_MSG_RECV, groupPayload(1, 6, "after setup"))?.namekey,
+        "Late AQ==");
+}
+
 // ---- 15. Decoder: v3 direct and group response codes are accepted
 api._test_reset();
 {

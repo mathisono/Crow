@@ -6,7 +6,7 @@ RAK3401 BLE/USB Companion build. It opens the radio's CDC serial device at
 parse `meshcore-cli`.
 
 This is a real USB serial transport, not a `ser2net` or TCP bridge. It opens
-separate read/write device handles and drains the CDC port through a one-second
+single bidirectional device handle and drains the CDC port through a one-second
 nonblocking timer; this avoids an AREDN `socket.poll()` hang on raw TTY handles.
 After validating the device path, it configures the port with fixed command
 components: `stty` when present, or Crow's bundled static `crow-rawtty` helper
@@ -14,14 +14,20 @@ on minimal AREDN images that omit `stty`. The helper uses a direct termios
 `ioctl`, so its raw-mode setting persists after it exits. Only
 `/dev/ttyACM<N>` and `/dev/ttyUSB<N>` paths and 115200 baud are accepted.
 
+RAK CDC ACM boards can reset when the port is opened. Crow keeps the stream
+open for a two-second startup settle period before sending `CMD_APP_START`;
+sending it immediately can lose the complete self-info reply.
+
 ### AREDN package prerequisite
 
 The AREDN package build cross-compiles `tools/crow-rawtty/main.go` as a static
-ARMv7 helper and installs it at `/usr/local/crow/crow-rawtty`. Build with Go
+helper and installs it at `/usr/local/crow/crow-rawtty`. The default target is
+MIPS soft-float for ath79/BaseBox5 nodes; set `CROW_GOARCH` and the matching Go
+architecture variables when building for another AREDN target. Build with Go
 available in `PATH`, or set `GO_BIN` to its path:
 
 ```sh
-GO_BIN=/path/to/go ./platforms/aredn/build.sh
+GO_BIN=/path/to/go CROW_GOARCH=mips CROW_GOMIPS=softfloat sh platforms/aredn/build.sh
 ```
 
 ## Supported Companion features
@@ -56,9 +62,11 @@ operation; `raw` is rejected rather than silently emitting unusable bytes.
 
 ## Configuration
 
-The `channel_namekey` must be the exact group channel name and Base64 key
-already configured in the radio. It must also appear in Crow's `channels`
-list. `tx_channel_index` is the radio memory slot for that group (0–7).
+For a custom group, `channel_namekey` must be the exact group channel name and
+Base64 key already configured in the radio. It must also appear in Crow's
+`channels` list. If omitted, only the standard MeshCore public channel is used
+as the implicit target. `tx_channel_index` is the radio memory slot for that
+group (0–7).
 
 ```json
 {
@@ -104,19 +112,24 @@ the radio is the expected one:
 
 ```sh
 ls -l /dev/ttyACM* /dev/ttyUSB* 2>/dev/null
-python3 tools/test_meshcore_serial_companion.py /dev/ttyACM0 --mode framed --profile meshcore_cli
+GOOS=linux GOARCH=mips GOMIPS=softfloat CGO_ENABLED=0 \
+  go build -o /tmp/crow-serial-probe ./tools/crow-serial-probe
+# Copy the target-architecture probe to the node, stop Crow, then run:
+/tmp/crow-serial-probe --device /dev/ttyACM0 --profile zeros --seconds 5
 ```
 
-The probe needs `pyserial`; it only sends the handshake and waits for
-`RESP_SELF_INFO` (`0x05`). A successful probe does not transmit a LoRa text
-message.
+The independent probe waits two seconds after opening the port, sends only the
+handshake, and prints the returned Companion frames. It should show
+`RESP_SELF_INFO` (`0x05`) and channel records (`0x12`). A successful probe does
+not transmit a LoRa text message. Crow must be stopped while the probe owns the
+device.
 
 Then enable the configuration and restart Crow. The expected log sequence is
 similar to:
 
 ```text
 meshcore_backend: selected serial backend
-meshcore_serial_api: opened USB Companion serial /dev/ttyACM0 at 115200
+meshcore_serial_api: opened USB Companion serial /dev/ttyACM0 at 115200; handshake in 2 seconds
 meshcore_serial_api: handshake sent (CMD_APP_START); waiting for self-info/queue push
 meshcore_serial_api: connected Companion device: <radio name>
 ```
@@ -136,6 +149,14 @@ meshcore_serial_api: connected Companion device: <radio name>
    `sync_requests`.
 4. Disconnect/reconnect USB once. Crow should report a close and reopen after
    a five-second retry interval, then send a fresh handshake.
+
+The final RF acceptance test is separate from this transport checklist. Use
+two independent radios and exchange uniquely tagged bodies such as
+`KJ6DZB@MCGW> RF-AIR-A2B-<timestamp>` and
+`KN6PLV@MCGW> RF-AIR-B2A-<timestamp>`. Each token must be observed in the
+other node's Crow channel, with the Companion frame and Crow counters
+recorded. Handshake, channel discovery, queue drain, or a successful command
+acknowledgement alone does not prove inbound RF.
 
 ## Test coverage and limits
 

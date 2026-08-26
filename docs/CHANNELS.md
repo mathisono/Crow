@@ -105,7 +105,9 @@ ssh root@10.local.mesh
 
 ## Adding New Channels
 
-Channels are managed on your **Meshtastic device**, not in Crow.
+Channels are managed on your **radio**, not created automatically by Crow.
+Meshtastic and MeshCore Companion radios differ in how Crow maps the channel,
+so use the appropriate procedure below.
 
 ### Via Meshtastic Mobile App
 
@@ -141,6 +143,75 @@ Then restart Crow to sync:
 ```bash
 /etc/init.d/crow restart
 ```
+
+## Adding a MeshCore Companion channel
+
+The SudoRoom MeshCore page currently publishes repeater, room-server, and
+companion **contact URLs**. A `meshcore://` contact URL is not a channel
+credential, and that page does not publish a channel's 16-byte PSK. Do not
+paste a contact URL into `namekey`. To add the SudoRoom channel, obtain its
+exact channel name and 16-byte key from the channel owner or a MeshCore export.
+
+Crow expects the exact MeshCore `namekey` in this form:
+
+```text
+<channel-name> <Base64 encoding of the 16-byte channel key>
+```
+
+The channel must already exist in the radio's channel slot. On each Crow node,
+add the same channel entry and point the active Companion backend at that slot.
+For the USB-attached BB5MC node:
+
+```json
+{
+  "meshcore": { "enabled": true, "backend": "serial" },
+  "meshcore_serial_api": {
+    "enabled": true,
+    "device": "/dev/ttyACM0",
+    "baud": 115200,
+    "channel_discovery": true,
+    "channel_namekey": "SudoRoom <Base64-16-byte-key>",
+    "tx_channel_index": 1
+  },
+  "channels": [
+    {
+      "namekey": "SudoRoom <Base64-16-byte-key>",
+      "backend": "meshcore.serial"
+    }
+  ]
+}
+```
+
+Use the actual radio slot instead of `1`; slot `0` is normally the public
+channel. For the TCP-attached Hub5 node, use the same `channels` entry and
+replace the serial block with:
+
+```json
+{
+  "meshcore": { "enabled": true, "backend": "tcp" },
+  "meshcore_tcp_api": {
+    "enabled": true,
+    "host": "<MeshCore-companion-IP>",
+    "port": 4403,
+    "channel_discovery": true,
+    "channel_namekey": "SudoRoom <Base64-16-byte-key>",
+    "tx_channel_index": 1
+  }
+}
+```
+
+Merge these fields into the existing node configuration; do not replace
+unrelated channels or backend settings. Restart Crow after saving:
+
+```sh
+/etc/init.d/crow restart
+logread | grep -Ei 'meshcore.*(discovered|connected|channel)'
+```
+
+Crow enables receive/send only for an exact name, key, and radio-slot match.
+Discovery is read-only: it verifies the radio and does not create or write a
+channel back to it. Never put a real PSK in logs, issue reports, or source
+control.
 
 ---
 

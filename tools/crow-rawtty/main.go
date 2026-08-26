@@ -25,7 +25,6 @@ func ioctl(fd int, request uintptr, value unsafe.Pointer) error {
 	}
 	return nil
 }
-
 func main() {
 	if len(os.Args) != 2 {
 		fmt.Fprintln(os.Stderr, "usage: crow-rawtty /dev/ttyACM<N>|/dev/ttyUSB<N>")

@@ -7,7 +7,7 @@ This is the current development and validation plan. Historical Raven migration 
 
 ## Release posture
 
-The current revision is suitable for an experimental pre-release after the package is rebuilt. The MeshCore TCP and USB Companion paths are implemented and covered by local regression tests, but live RF validation remains pending.
+The current revision is suitable for an experimental pre-release after the package is rebuilt. The MeshCore TCP and USB Companion paths are implemented and covered by local regression tests. Live RF transmit is working through the GUI, but reliable inbound public-channel traffic remains unvalidated.
 
 Do not describe the MeshCore TCP/USB paths as production-ready until the hardware gates below pass.
 
@@ -25,9 +25,83 @@ Validate both transports against real Companion hardware:
 6. Confirm v3 payload layouts and discovery timing on the real device.
 7. Repeat the transport checks over USB serial.
 
-Current evidence: MSE-88 is reachable and can route to the AREDN test-node ports, but Hub5 currently rejects the available SSH credentials and the recorded MeshCore endpoint `10.245.94.47:4403` is unavailable. This workstream therefore remains **hardware validation pending**.
+Current evidence (2026-08-25): MSE-88 routes to Hub5, the Hub5 TCP backend connects to Companion endpoint `10.245.94.47:4403`, self-info and public-channel discovery succeed, and the GUI can submit public-channel transmissions. Inbound public-channel traffic from the air is still intermittent or absent. USB serial RF validation remains pending. This workstream therefore remains **hardware validation pending**.
 
-### 2. MeshCore direct identity — v1 verified, v2 pending
+Second-node update (2026-08-25/26): `KJ6DZB-BB5MC` (`10.52.8.205`, Basbox5)
+now has the AREDN USB-serial kernel modules installed and exposes the attached
+RAK4631 as `/dev/ttyACM1` after USB re-enumeration. Its slot-0 `Public` channel
+matches Crow's configured public-channel tuple (the key is intentionally not
+recorded here). Raw Companion
+capture has produced a channel receive frame (`0x08`) and queue-empty replies
+(`0x0A`), proving that the radio can receive and drain public-channel traffic.
+Crow package `0.0.2-r20512923` is deployed with a dedicated USB serial module:
+one update-stream descriptor, timer-driven bounded one-byte drains, bounded
+frame deferral, startup/periodic queue polling, a character-device guard, and
+the MIPS `crow-rawtty` ioctl helper
+required by the minimal AREDN image. The service remains running and the
+GUI/event loop remains responsive.
+The initial Crow startup sent `CMD_APP_START` during the RAK CDC reset window,
+which made app-start, channel-query, and queue-sync probes appear silent. An
+independent MIPS probe then returned `RESP_SELF_INFO (0x05)` and all eight
+channel records after a two-second USB settle. Crow `0.0.2-r20512923` now uses
+that settle window and live BB5MC logs show the connected device, `Public`
+channel discovery, and queue polling. A controlled, tagged Crow-to-Crow RF
+message in both directions is still required before this workstream can close.
+
+### 2. MeshCore public-channel inbound receive path — pending controlled RF test
+
+The public channel is present in Crow with the exact discovered radio tuple, but
+live receive needs a controlled sender/receiver test. A second AREDN node is
+preferred when available, provided it has an independent MeshCore radio or
+Companion endpoint; two Crow instances connected to the same radio do not test
+RF receive.
+
+Validation plan:
+
+1. Configure Node A and Node B with separate MeshCore radios, distinct device
+   identities, and the same public channel.
+2. Send timestamped messages A → B and B → A repeatedly, recording whether each
+   message appears in Crow.
+3. Capture the raw Companion frames on both nodes, including channel text
+   frames (`0x08`/`0x11`), channel datagrams (`0x1B`), message-waiting pushes
+   (`0x83`), and queue-empty responses (`0x0A`).
+4. Verify that Crow performs a bounded queue poll after connection and handles
+   inbound traffic when no `0x83` push is emitted.
+5. If public traffic arrives as `0x1B`, implement and test its decoder and map
+   the decoded slot only through the exact discovered name/key/slot tuple.
+6. Replay captured frames through the regression harness and repeat the
+   bidirectional RF test.
+
+Acceptance: repeated bidirectional public-channel messages are received by the
+intended Crow channel, no messages appear on an unintended channel, and the
+backend exposes enough counters/logging to distinguish RF loss from Companion
+queue or parser loss. Until this test is available and passes, inbound RF
+validation remains **pending**.
+
+Current blocker: live inbound RF through Crow is still not proven. The official
+Companion layout for `RESP_CHANNEL_DATA_RECV (0x1B)` is now documented, but it
+is a binary channel-data datagram rather than a text message and remains
+intentionally excluded from text routing. The final two-way test must capture
+the actual public-channel response (`0x08`/`0x11` or a queued `0x1B`) and show
+that Crow delivers it to the exact mapped channel. Do not mark live RF
+validation complete from handshake or raw hardware reception alone.
+
+#### Final tagged air test
+
+Use two independent radios, both on the exact discovered public-channel
+tuple. From Node A send a short body containing the sender identity and a
+unique token, for example `KJ6DZB@MCGW> RF-AIR-A2B-<timestamp>`. From Node B
+send `KN6PLV@MCGW> RF-AIR-B2A-<timestamp>`. The tags are test payload content;
+the Companion transport itself is not considered RF evidence until each body
+is visible in the other node's Crow channel.
+
+For each direction, record the radio's Companion frame code, Crow's
+`frames_in`/`frames_decoded` counters, the exact mapped channel, and the stored
+message or UI event. A pass requires both unique tokens to appear through
+Crow, with no delivery to an unmapped slot. If strict gatekeeper is enabled,
+the embedded sender callsign must also pass its callsign/allow-list checks.
+
+### 3. MeshCore direct identity — v1 verified, v2 pending
 
 The first committed version is verified in the local test matrix:
 
@@ -38,13 +112,13 @@ The first committed version is verified in the local test matrix:
 
 The follow-up is to determine whether modern Companion hardware exposes a destination ID. If it does, pass it through the parser and remove the queue-origin fallback only after positive and negative RF tests pass. Do not change firmware as part of this Crow-side task.
 
-### 3. Meshtastic TCP discovery — unchanged and experimental
+### 4. Meshtastic TCP discovery — unchanged and experimental
 
 Leave the existing read-only, runtime-only Meshtastic discovery implementation as-is. Its hardware validation and notification-parity work remain tracked in `MESHTASTIC_API_DISCOVERY_STATUS.md`.
 
 Do not add persistent channel writes, radio write-back, or automatic routing enablement in this release.
 
-### 4. Documentation and packaging — active cleanup
+### 5. Documentation and packaging — active cleanup
 
 - Keep this file as the current plan.
 - Keep MeshCore backend docs aligned with the implemented send path.
@@ -52,7 +126,13 @@ Do not add persistent channel writes, radio write-back, or automatic routing ena
 - Run UI/static checks, shell syntax checks, all Node regression tests, and the package build before cutting a release.
 - Confirm generated packages contain the current UI, runtime modules, migration scripts, and generic Crow sysupgrade configuration.
 
-### 5. GitHub issue cleanup — retired
+The SudoRoom MeshCore reference page was reviewed as a side test. It publishes
+MeshCore contact URLs for a repeater, room server, and companion device, but no
+channel name/key pair. Adding those contacts is a separate Companion feature;
+adding a channel requires the exact channel name, 16-byte PSK, and radio slot.
+The operator procedure and this distinction are documented in `CHANNELS.md`.
+
+### 6. GitHub issue cleanup — retired
 
 Issue #1 about the custom firmware link is no longer an active Crow development task. The Crow backend uses the Companion binary API and does not require a firmware change for this implementation. Any firmware-specific compatibility question belongs in the hardware validation record.
 

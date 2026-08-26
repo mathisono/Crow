@@ -148,9 +148,11 @@ class Accumulator {
 // handles, fixed serial setup components and strict device validation—not a
 // TCP bridge. A bundled ioctl helper provides raw termios setup on stripped
 // AREDN images that omit stty.
-ok('opens direct USB device through fs.open()', SOURCE.includes('fs.open(serialDevice, "r")'));
+ok('uses one bidirectional direct USB handle', SOURCE.includes('const serial = fs.open(serialDevice, "r+")') && SOURCE.includes('serialRx = serial') && SOURCE.includes('serialTx = serial'));
+ok('rejects missing or non-device USB paths before opening', SOURCE.includes('deviceStat.type !== "char"'));
 ok('avoids handing a raw TTY to socket.poll()', SOURCE.includes('return null;') && SOURCE.includes('meshcore_serial_api.poll'));
 ok('drains serial through a nonblocking timer', SOURCE.includes('function pumpSerial(reason)') && SOURCE.includes('timers.setInterval("meshcore_serial_api.poll", SERIAL_POLL_INTERVAL)'));
+ok('defaults only the standard public channel as the safe TX target', SOURCE.includes('cfg.channel_namekey ?? channel.meshcorePublicChannelNamekey()') && SOURCE.includes('verifiedLocalChannelForSlot(outboundChannelIndex, configuredChannelNamekey)'));
 ok('uses fixed serial configuration after strict path validation', SOURCE.includes('fs.popen(command, "r")') && SOURCE.includes('if (!validDevicePath(serialDevice))'));
 ok('validates only ttyACM/ttyUSB paths', SOURCE.includes('/^\\/dev\\/ttyACM[0-9]+$/') && SOURCE.includes('/^\\/dev\\/ttyUSB[0-9]+$/'));
 ok('does not use a serial TCP bridge', !SOURCE.includes('ser2net') && !SOURCE.includes('TCP:') && !SOURCE.includes('TCP-LISTEN:'));
@@ -161,6 +163,12 @@ ok('handles the real v3 queued-message prefix', SOURCE.includes('function incomi
 ok('rejects direct outbound messages', SOURCE.includes('channel.isDirect(msg.namekey)'));
 ok('uses real MeshCore group send command', SOURCE.includes('CMD_SEND_CHANNEL_TXT_MSG = 0x03'));
 ok('parses self-info from its printable trailing name', SOURCE.includes('function _test_parse_self_info(payload)') && SOURCE.includes('while (start > 0)'));
+ok('does not map a configured TX slot before discovery', !SOURCE.includes('channel.setMeshcoreSlotChannel(outboundChannelIndex, configured)'));
+ok('requires exact tuple proof before serial send', SOURCE.includes('verifiedLocalChannelForSlot(outboundChannelIndex, configuredChannelNamekey)'));
+ok('normalizes Companion Public to Crow public namekey', SOURCE.includes('name === "Public"') && SOURCE.includes('channel.meshcorePublicChannelNamekey()'));
+ok('waits for self-info before queue sync', SOURCE.includes('Wait for self-info or a queue push') && SOURCE.includes('syncingMessages = true;') && SOURCE.includes('if (cmd === RESP_SELF_INFO)'));
+ok('drops unverified serial group receive', SOURCE.includes('group_receive_unverified') && SOURCE.includes('until radio/Crow channel namekey matches'));
+ok('clears serial slot authority on reconnect', SOURCE.includes('channel.clearMeshcoreSlotChannels()') && SOURCE.includes('discoveredChannels = {}'));
 
 // ucode module exports are declarations terminated with `};`.  Node's wire
 // contract tests do not parse ucode, so keep this target-runtime requirement
@@ -170,7 +178,8 @@ for (const name of [
   'sendCommand', 'setup', 'shutdown', 'handle', 'recv', 'send', 'tick',
   'process', 'pending', 'takeResponse', 'status', '_test_reset',
   '_test_inject', '_test_decode', '_test_build_frame', '_test_build_command',
-  '_test_build_group_send', '_test_app_start_payload', '_test_stats'
+  '_test_build_group_send', '_test_app_start_payload', '_test_decode_channel_info',
+  '_test_stats'
 ]) {
   const expression = new RegExp(`export function ${name}\\([^]*?\\n};`);
   ok(`ucode export ${name} has a declaration terminator`, expression.test(SOURCE));
@@ -236,6 +245,29 @@ for (const name of [
   const a = new Accumulator();
   a.inject(radioFrame(PUSH_WAITING));
   eq('0x83 produces CMD_SYNC_NEXT_MESSAGE', a.syncCommands[0][3], CMD_SYNC_NEXT);
+}
+
+// Mirror the serial backend's exact name/key/slot gate. A configured slot by
+// itself must never authorize RF receive or send.
+{
+  const local = new Set(['TacNet AQ==']);
+  const discovered = new Map();
+  const mapped = new Map();
+  const configure = (slot, namekey) => {
+    discovered.set(slot, namekey);
+    if (local.has(namekey)) mapped.set(slot, namekey);
+    else mapped.delete(slot);
+  };
+  const allowed = (slot, namekey) => local.has(namekey) &&
+    discovered.get(slot) === namekey && mapped.get(slot) === namekey;
+
+  eq('serial gate: configured slot alone is blocked', allowed(5, 'TacNet AQ=='), false);
+  configure(5, 'TacNet Ag==');
+  eq('serial gate: wrong key is blocked', allowed(5, 'TacNet AQ=='), false);
+  configure(4, 'TacNet AQ==');
+  eq('serial gate: exact tuple on wrong slot is blocked', allowed(5, 'TacNet AQ=='), false);
+  configure(5, 'TacNet AQ==');
+  eq('serial gate: exact discovered tuple is allowed', allowed(5, 'TacNet AQ=='), true);
 }
 
 // Run canonical ucode hooks when a target interpreter is available.  This is

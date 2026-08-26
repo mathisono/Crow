@@ -1,12 +1,15 @@
 #! /bin/sh
+set -e
 
 VER=0.0.2
 REL=r$(($(date +%s) - $(date -d "2026-01-01 00:00:00" +%s)))
 VERSION=${VER}-${REL}
 
 ROOT=/tmp/crow-build-$$
-SRC=$(dirname $0)/../..
+SRC=$(CDPATH= cd -- "$(dirname "$0")/../.." && pwd)
 GO_BIN=${GO_BIN:-go}
+CROW_GOARCH=${CROW_GOARCH:-mips}
+CROW_GOMIPS=${CROW_GOMIPS:-softfloat}
 if command -v mkapk.py >/dev/null 2>&1; then
     MKAPK=$(command -v mkapk.py)
 else
@@ -36,10 +39,10 @@ if ! command -v "$GO_BIN" >/dev/null 2>&1; then
     echo "Go is required to build the AREDN crow-rawtty helper (set GO_BIN or install go)." >&2
     exit 1
 fi
-GO111MODULE=off GOOS=linux GOARCH=arm GOARM=7 CGO_ENABLED=0 "$GO_BIN" build \
+(cd "$SRC" && GO111MODULE=off GOOS=linux GOARCH="$CROW_GOARCH" GOMIPS="$CROW_GOMIPS" CGO_ENABLED=0 "$GO_BIN" build \
     -trimpath -ldflags='-s -w' \
     -o "$ROOT/data/usr/local/crow/crow-rawtty" \
-    "$SRC/tools/crow-rawtty"
+    ./tools/crow-rawtty)
 chmod 755 "$ROOT/data/usr/local/crow/crow-rawtty"
 echo "export const version = '${VERSION}';" > $ROOT/data/usr/local/crow/version.uc
 

@@ -397,6 +397,16 @@ function mapDiscoveredChannelIfLocal(ch)
     return false;
 }
 
+function mapDiscoveredChannels()
+{
+    // Discovery may finish before channel.setup() has populated Crow's local
+    // channel table. Re-apply the verified mappings on each backend tick so
+    // that startup ordering cannot strand an otherwise exact tuple.
+    for (let index in discoveredChannels) {
+        mapDiscoveredChannelIfLocal(discoveredChannels[index]);
+    }
+}
+
 function verifiedLocalChannelForSlot(slot, namekey)
 {
     if (slot === null || slot < 0 || slot > MAX_CHANNEL_INDEX || !namekey) {
@@ -461,6 +471,15 @@ function cstr(s)
     let n = length(s);
     while (n > 0 && ord(s, n - 1) === 0) n--;
     return substr(s, 0, n);
+}
+
+function fieldCString(s)
+{
+    if (!s) return "";
+    for (let i = 0; i < length(s); i++) {
+        if (ord(s, i) === 0) return substr(s, 0, i);
+    }
+    return s;
 }
 
 function textClean(s)
@@ -645,6 +664,14 @@ function configureSerial()
 
     // USB CDC devices generally ignore baud, while USB UART bridges use it.
     // Keep the setup here so both classes receive the same raw 8N1 settings.
+    if (!fs.access("/bin/stty")) {
+        // Minimal AREDN images may omit stty.  CDC ACM devices use their
+        // firmware defaults, so the absence of this optional helper must not
+        // prevent opening the serial Companion device.
+        log0("serial stty unavailable; using device defaults %s baud=%d\n",
+            serialDevice, serialBaud);
+        return true;
+    }
     const rc = system(`/bin/stty -F ${serialDevice} ${serialBaud} raw -echo -ixon -ixoff cs8 -cstopb -parenb`);
     if (rc !== 0) {
         log0("serial stty failed device=%s baud=%d rc=%d\n", serialDevice, serialBaud, rc);
@@ -743,6 +770,10 @@ function writeTransport(frame)
         sent += n;
         remaining = substr(remaining, n);
     }
+    // fs.open() returns a stdio-backed file handle for serial devices.  The
+    // write is buffered unless explicitly flushed, so without this the radio
+    // never sees the handshake or subsequent Companion commands.
+    if (s.flush) s.flush();
     return sent;
 }
 
@@ -1144,18 +1175,28 @@ function decodeChannelInfo(framePayload)
         return null;
     }
     const index = ord(framePayload, 1);
-    const name = cstr(substr(framePayload, 2, 32));
+    const name = fieldCString(substr(framePayload, 2, 32));
     const secret = substr(framePayload, 34, 16);
     if (!name || length(name) === 0 || !secret || length(secret) === 0) {
         return null;
     }
     const secret_b64 = b64enc(secret);
+    // Companion reports the built-in RF group as `Public`, while Crow uses
+    // its canonical MeshCore public namekey. Normalize only the fixed public
+    // key; custom channels retain their radio-reported name.
+    const publicNamekey = channel.meshcorePublicChannelNamekey();
+    const publicParts = split(publicNamekey, " ");
+    // Compare the decoded fixed key as bytes. This avoids making the alias
+    // decision dependent on base64 formatting/padding from the device.
+    const isBuiltInPublic = name === "Public" && length(publicParts) === 2 &&
+        secret === b64dec(publicParts[1]);
+    const namekey = isBuiltInPublic ? publicNamekey : `${name} ${secret_b64}`;
     return {
         index: index,
         name: name,
         secret: secret,
         secret_b64: secret_b64,
-        namekey: `${name} ${secret_b64}`
+        namekey: namekey
     };
 }
 
@@ -1435,7 +1476,13 @@ function readSocket()
 {
     if (!s) return null;
     try {
-        const data = serialMode ? s.read(SOCKET_READ_CHUNK) : s.recv(SOCKET_READ_CHUNK);
+        // The ucode fs handle used for USB CDC serial is stdio-backed.  A
+        // large read can block waiting for the full requested size even
+        // after router.socket.poll() woke us for a few available bytes.  In
+        // turn that stalls the whole Crow event loop, including the GUI.
+        // Consume one byte per poll wakeup; the accumulator preserves frame
+        // reassembly and the next router tick continues draining safely.
+        const data = serialMode ? s.read(1) : s.recv(SOCKET_READ_CHUNK);
         if (!data || length(data) === 0) {
             closeSocket("peer closed");
             return null;
@@ -1552,6 +1599,7 @@ export function tick()
             stats.unknown_frames++;
         }
     }
+    mapDiscoveredChannels();
     if (enabled && !s && time() >= nextReconnectTime) {
         nextReconnectTime = time() + RECONNECT_INTERVAL;
         s = openTransport();
@@ -1682,9 +1730,19 @@ export function _test_set_discovered_channel(index, namekey)
     return mapDiscoveredChannelIfLocal(discoveredChannels[`${index}`]);
 };
 
+export function _test_decode_channel_info(framePayload)
+{
+    return decodeChannelInfo(framePayload);
+};
+
 export function _test_channel_send_allowed(index, namekey)
 {
     return verifiedLocalChannelForSlot(index, namekey) !== null;
+};
+
+export function _test_map_discovered_channels()
+{
+    mapDiscoveredChannels();
 };
 
 export function _test_set_self_public_key_prefix(prefix)

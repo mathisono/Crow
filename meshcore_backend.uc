@@ -1,11 +1,11 @@
 import * as udp from "meshcore";
 import * as api from "meshcore_tcp_api";
+import * as serialApi from "meshcore_serial_api";
 import * as channel from "channel";
 
 let active = null;
 let activeName = null;
 let lastConfig = null;
-let serial = null;
 export let enabled = false;
 
 function log0(fmt, ...args)
@@ -141,7 +141,6 @@ function candidateStatus(key, label, transport, configured, isActive, host, port
         direct_sends_failed: detail.direct_sends_failed,
         channel_sends_ok: detail.channel_sends_ok,
         channel_sends_failed: detail.channel_sends_failed,
-        group_receive_unverified: detail.group_receive_unverified,
         responses_cached: detail.responses_cached,
         channel_discovery: detail.channel_discovery,
         channel_scans: detail.channel_scans,
@@ -150,6 +149,7 @@ function candidateStatus(key, label, transport, configured, isActive, host, port
         channel_discovery_timeouts: detail.channel_discovery_timeouts,
         channels_discovered: detail.channels_discovered,
         channels_updated: detail.channels_updated,
+        group_receive_unverified: detail.group_receive_unverified,
         log_data_frames: detail.log_data_frames,
         trace_data_frames: detail.trace_data_frames,
         telemetry_response_frames: detail.telemetry_response_frames,
@@ -169,7 +169,6 @@ export function setup(config)
     lastConfig = config;
     active = null;
     activeName = null;
-    serial = null;
     enabled = false;
 
     if (wantsSerial(config)) {
@@ -177,8 +176,7 @@ export function setup(config)
         // Load the serial wrapper only when selected.  Keeping this import
         // lazy avoids the config -> commands -> discovery -> TCP module cycle
         // on ucode versions that reject parallel module initialization.
-        serial = require("meshcore_serial_api");
-        active = serial;
+        active = serialApi;
         activeName = "serial";
     }
     else if (wantsApi(config)) {

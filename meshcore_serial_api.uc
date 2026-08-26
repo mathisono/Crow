@@ -16,9 +16,10 @@
 //
 // The AREDN socket.poll implementation can hang on a raw TTY file descriptor,
 // so serial receive is drained by a short nonblocking timer rather than being
-// registered with the socket poll loop. The device is opened as separate
-// read/write handles to avoid stdio update-stream direction rules. After
-// validating the only supported USB CDC paths and 115200 baud, fixed serial setup is applied.
+// registered with the socket poll loop. The device is opened as one
+// bidirectional stream for this AREDN image; bounded one-byte reads and
+// explicit flushes keep direction changes safe. After validating the only
+// supported USB CDC paths and 115200 baud, fixed serial setup is applied.
 // Stripped-down AREDN images use Crow's bundled rawtty helper. The only
 // interpolated value is the strict-whitelisted device path.
 
@@ -34,6 +35,8 @@ const SMART_MAX_PAYLOAD        = 256;
 const RESYNC_BUFFER_CAP        = 4096;
 const REOPEN_INTERVAL          = 5;
 const SERIAL_POLL_INTERVAL     = 1;
+const SERIAL_STARTUP_SETTLE    = 2;
+const DEFAULT_QUEUE_POLL       = 5;
 const DEFAULT_MAX_PENDING_RX   = 4;
 const HARD_MAX_PENDING_RX      = 32;
 const DEFAULT_CHANNEL_REFRESH  = 600;
@@ -76,6 +79,7 @@ let serialDevice = "/dev/ttyACM0";
 let serialBaud = 115200;
 let serialState = "not-configured";
 let nextOpenTime = 0;
+let handshakeDue = 0;
 let lastError = null;
 let framebuf = "";
 let pendingSkip = 0;
@@ -88,6 +92,8 @@ let syncRequestInFlight = false;
 let syncPausedBackpressure = false;
 let channelDiscovery = false;
 let channelRefreshSeconds = DEFAULT_CHANNEL_REFRESH;
+let queuePollSeconds = DEFAULT_QUEUE_POLL;
+let nextQueuePollTime = 0;
 let configuredChannelNamekey = null;
 let outboundChannelIndex = 0;
 let strictHook = null;
@@ -116,6 +122,7 @@ let stats = {
     channel_info_responses: 0,
     channels_discovered: 0,
     channels_updated: 0,
+    group_receive_unverified: 0,
     outbound_group_sent: 0,
     outbound_group_rejected: 0,
     outbound_confirmed: 0,
@@ -187,6 +194,15 @@ function cstr(value)
     return substr(value, 0, n);
 }
 
+function fieldCString(value)
+{
+    if (!value) return "";
+    for (let i = 0; i < length(value); i++) {
+        if (ord(value, i) === 0) return substr(value, 0, i);
+    }
+    return value;
+}
+
 function maxPendingRx()
 {
     let n = cfg?.max_pending_rx ?? DEFAULT_MAX_PENDING_RX;
@@ -219,6 +235,8 @@ function resetWireState()
     syncingMessages = false;
     syncRequestInFlight = false;
     syncPausedBackpressure = false;
+    nextQueuePollTime = time() + queuePollSeconds;
+    handshakeDue = 0;
 }
 
 function closeSerial(reason)
@@ -227,12 +245,17 @@ function closeSerial(reason)
     if (serialRx) {
         try { serialRx.close(); } catch (_) {}
     }
-    if (serialTx) {
+    if (serialTx && serialTx !== serialRx) {
         try { serialTx.close(); } catch (_) {}
     }
     serialRx = null;
     serialTx = null;
     resetWireState();
+    // A reconnect may be a different radio or a changed slot assignment. Do
+    // not retain RF receive/send authority from the previous USB session;
+    // discovery must prove the exact tuple again.
+    discoveredChannels = {};
+    channel.clearMeshcoreSlotChannels();
 
     if (wasOpen) {
         stats.closes++;
@@ -312,32 +335,53 @@ function openSerial()
         log0("%s\n", lastError);
         return false;
     }
-    if (!configureSerialPort()) {
-        serialState = "configure-failed";
-        log0("unable to configure %s: %s\n", serialDevice, lastError ?? "unknown error");
+    // Open the device only after confirming it is a character device.  In
+    // particular, fs.open(path, "w") can create a plain file when a USB ACM
+    // device has re-enumerated under a different number.
+    const deviceStat = fs.stat(serialDevice);
+    if (!deviceStat || deviceStat.type !== "char") {
+        serialState = "missing-device";
+        lastError = "device path is not a character device";
         nextOpenTime = time() + REOPEN_INTERVAL;
+        log0("%s: %s\n", lastError, serialDevice);
         return false;
     }
-
     try {
-        // Separate descriptors are deliberately used.  A single `r+` stdio
-        // stream has undefined read/write direction transitions on a TTY.
-        const rx = fs.open(serialDevice, "r");
-        const tx = fs.open(serialDevice, "w");
-        if (!rx || !tx) {
-            try { rx?.close(); } catch (_) {}
-            try { tx?.close(); } catch (_) {}
+        // AREDN's fs.open() exposes the tty as a stdio-backed handle. Use one
+        // read/write stream here: on this image separately opened read/write
+        // streams can leave the Companion response on the other tty state.
+        // Keep socket.poll() out of this path and use explicit one-byte reads
+        // below, so each timer tick remains bounded.
+        const serial = fs.open(serialDevice, "r+");
+        if (!serial) {
+            try { serial?.close(); } catch (_) {}
             lastError = fs.error() ?? "open failed";
             serialState = "open-failed";
             nextOpenTime = time() + REOPEN_INTERVAL;
             return false;
         }
-        serialRx = rx;
-        serialTx = tx;
+        serialRx = serial;
+        serialTx = serial;
+        // Configure after the descriptors are open. USB CDC implementations
+        // may restore tty defaults when the last descriptor closes, which
+        // makes a setup helper run before fs.open() ineffective.
+        if (!configureSerialPort()) {
+            closeSerial("configure failed");
+            serialState = "configure-failed";
+            log0("unable to configure %s: %s\n", serialDevice, lastError ?? "unknown error");
+            nextOpenTime = time() + REOPEN_INTERVAL;
+            return false;
+        }
         serialState = "connected";
         lastError = null;
         stats.opens++;
-        log0("opened USB Companion serial %s at 115200\n", serialDevice);
+        // Opening a RAK CDC ACM port can reset the companion firmware.  Sending
+        // APP_START immediately races that reset and loses the entire reply.
+        // Keep the handles open, allow the USB device to settle, then send the
+        // first command from tick().
+        handshakeDue = time() + SERIAL_STARTUP_SETTLE;
+        log0("opened USB Companion serial %s at 115200; handshake in %d seconds\n",
+            serialDevice, SERIAL_STARTUP_SETTLE);
         return true;
     }
     catch (e) {
@@ -416,6 +460,9 @@ function sendBootHandshake()
     if (ok) {
         stats.handshakes_sent++;
         log0("handshake sent (CMD_APP_START); waiting for self-info/queue push\n");
+        // Wait for self-info or a queue push before issuing 0x0a. Some
+        // Companion builds treat an immediate sync request as a pre-handshake
+        // command and then never return self-info to the host.
     }
     return ok;
 }
@@ -499,43 +546,86 @@ function decodeChannelInfo(framePayload)
     }
     const index = ord(framePayload, 1);
     if (index > MAX_CHANNEL_INDEX) return null;
-    const name = cstr(substr(framePayload, 2, 32));
+    const name = fieldCString(substr(framePayload, 2, 32));
     const secret = substr(framePayload, 34, 16);
     if (!name || !secret || length(secret) !== 16) return null;
+    const secret_b64 = b64enc(secret);
+    // MeshCore's built-in RF public channel is reported by Companion as
+    // `Public <fixed-key>`, while Crow's canonical local namekey is
+    // `MeshCore <same-fixed-key>`. Normalize that one known alias so the
+    // discovered radio slot can prove the existing Crow public channel.
+    const publicNamekey = channel.meshcorePublicChannelNamekey();
+    const publicParts = split(publicNamekey, " ");
+    // Compare the decoded fixed key as bytes. This avoids making the alias
+    // decision dependent on base64 formatting/padding from the device.
+    const isBuiltInPublic = name === "Public" && length(publicParts) === 2 &&
+        secret === b64dec(publicParts[1]);
+    const namekey = isBuiltInPublic ? publicNamekey : `${name} ${secret_b64}`;
     return {
         index: index,
         name: name,
         secret: secret,
-        secret_b64: b64enc(secret),
-        namekey: `${name} ${b64enc(secret)}`
+        secret_b64: secret_b64,
+        namekey: namekey
     };
 }
 
 function mapConfiguredChannels()
 {
     // channel.setup() runs after meshcore.setup(), so map on each tick once
-    // Crow's configured channel table is available.  We never auto-persist a
-    // radio secret into Crow config; an operator must explicitly configure it.
-    if (configuredChannelNamekey) {
-        const configured = channel.getLocalChannelByNameKey(configuredChannelNamekey);
-        if (configured) {
-            channel.setMeshcoreSlotChannel(outboundChannelIndex, configured);
-        }
-    }
+    // Crow's configured channel table is available.  Discovery is the sole
+    // source of RF authority: a configured TX slot alone is not proof that
+    // this radio owns the same name/key tuple.
     for (let index in discoveredChannels) {
         const found = discoveredChannels[index];
         const local = channel.getLocalChannelByNameKey(found.namekey);
+        const mapped = channel.getChannelByMeshcoreSlot(found.index);
         if (local) {
             channel.setMeshcoreSlotChannel(found.index, local);
         }
+        else if (mapped) {
+            // The local channel may have been removed or its key changed.
+            // Remove stale receive authority immediately.
+            channel.clearMeshcoreSlotChannel(found.index);
+        }
     }
+}
+
+function verifiedLocalChannelForSlot(slot, namekey)
+{
+    if (slot === null || slot < 0 || slot > MAX_CHANNEL_INDEX || !namekey) {
+        return null;
+    }
+    const discovered = discoveredChannels[`${slot}`];
+    if (!discovered || discovered.namekey !== namekey) {
+        return null;
+    }
+    const local = channel.getLocalChannelByNameKey(namekey);
+    const mapped = channel.getChannelByMeshcoreSlot(slot);
+    if (!local || !mapped || mapped.namekey !== namekey) {
+        return null;
+    }
+    return local;
 }
 
 function processChannelInfo(framePayload)
 {
     stats.channel_info_responses++;
     const found = decodeChannelInfo(framePayload);
-    if (!found) return;
+    if (!found) {
+        // An empty but otherwise valid slot is a negative discovery result.
+        // Forget any prior mapping so a removed/replaced RF channel cannot
+        // continue to route under the old tuple.
+        if (framePayload && length(framePayload) >= 50 &&
+            ord(framePayload, 0) === RESP_CHANNEL_INFO &&
+            ord(framePayload, 1) <= MAX_CHANNEL_INDEX &&
+            !cstr(substr(framePayload, 2, 32))) {
+            const emptyIndex = ord(framePayload, 1);
+            delete discoveredChannels[`${emptyIndex}`];
+            channel.clearMeshcoreSlotChannel(emptyIndex);
+        }
+        return;
+    }
     const key = `${found.index}`;
     const old = discoveredChannels[key];
     if (!old) {
@@ -627,6 +717,7 @@ function smartAccumulate(data)
             syncingMessages = false;
             syncRequestInFlight = false;
             syncPausedBackpressure = false;
+            nextQueuePollTime = time() + queuePollSeconds;
             continue;
         }
         if (cmd === PUSH_SEND_CONFIRMED || cmd === RESP_OK) {
@@ -648,6 +739,7 @@ function smartAccumulate(data)
         if (cmd === RESP_SELF_INFO) {
             stats.self_info++;
             syncRequestInFlight = false;
+            syncingMessages = true;
             deviceName = parseSelfInfo(framePayload) ?? deviceName;
             if (deviceName) log0("connected Companion device: %s\n", deviceName);
             if (channelDiscovery) requestAllChannels("self-info");
@@ -724,10 +816,17 @@ function decodeTextFrame(cmd, payload)
         const text = cstr(substr(payload, off + 7));
         if (!text) return null;
         const slot = ord(payload, off);
+        const mapped = channel.getChannelByMeshcoreSlot(slot);
+        if (!mapped || !verifiedLocalChannelForSlot(slot, mapped.namekey)) {
+            stats.group_receive_unverified++;
+            log1("drop MeshCore group slot=%d until radio/Crow channel namekey matches\n", slot);
+            return null;
+        }
         msgSeq = (msgSeq + 1) & 0xffffffff;
         return {
             id: msgSeq,
             group_slot: slot,
+            namekey: mapped.namekey,
             sender_timestamp: u32le(payload, off + 3),
             rx_time: time(),
             hop_limit: 1,
@@ -808,7 +907,14 @@ export function setup(config)
     serialState = cfg.enabled === true ? "opening" : "not-configured";
     channelDiscovery = cfg.channel_discovery === true;
     channelRefreshSeconds = cfg.channel_refresh_seconds ?? DEFAULT_CHANNEL_REFRESH;
-    configuredChannelNamekey = cfg.channel_namekey ?? null;
+    queuePollSeconds = cfg.queue_poll_seconds ?? DEFAULT_QUEUE_POLL;
+    if (queuePollSeconds < 1) queuePollSeconds = 1;
+    if (queuePollSeconds > 60) queuePollSeconds = 60;
+    // The standard MeshCore public channel is the only safe implicit TX
+    // target. Custom channels still require an explicit channel_namekey;
+    // verifiedLocalChannelForSlot() continues to require the exact radio
+    // discovery tuple before any send is allowed.
+    configuredChannelNamekey = cfg.channel_namekey ?? channel.meshcorePublicChannelNamekey();
     outboundChannelIndex = cfg.tx_channel_index ?? cfg.channel_index ?? 0;
     if (outboundChannelIndex < 0 || outboundChannelIndex > MAX_CHANNEL_INDEX) {
         log0("invalid tx_channel_index=%s; using slot 0\n", outboundChannelIndex);
@@ -821,7 +927,7 @@ export function setup(config)
         ? function () { return gk.isEnabled() === true; } : null;
 
     // Physical ArduinoSerialInterface is always framed.  Do not send a raw
-    // stream to a Companion radio; it would be ignored and look like a send.
+// stream to a Companion radio; it would be ignored and look like a send.
     if (cfg.enabled !== true) return;
     if (cfg.frame_mode && cfg.frame_mode !== "framed" && cfg.frame_mode !== "auto") {
         serialState = "unsupported-frame-mode";
@@ -831,9 +937,7 @@ export function setup(config)
     }
     enabled = true;
     nextOpenTime = 0;
-    if (openSerial()) {
-        sendBootHandshake();
-    }
+    openSerial();
     timers.setInterval("meshcore_serial_api.poll", SERIAL_POLL_INTERVAL);
     if (channelDiscovery) {
         timers.setInterval("meshcore_serial_api.channel_refresh", channelRefreshSeconds);
@@ -859,11 +963,20 @@ function readSerial()
 {
     if (!serialRx) return null;
     try {
-        const data = serialRx.read(SERIAL_READ_CHUNK);
-        if (data === null) {
-            lastError = fs.error() ?? "serial read failed";
-            closeSerial("read failed");
-            return null;
+        // ucode's buffered file reader may wait for the requested size even
+        // when the underlying tty has VMIN=0. Read one byte at a time and
+        // stop on the first empty result; the hard bound keeps one timer tick
+        // from allocating or processing an unbounded CDC burst.
+        let data = "";
+        for (let i = 0; i < SERIAL_READ_CHUNK; i++) {
+            const byte = serialRx.read(1);
+            if (byte === null) {
+                lastError = fs.error() ?? "serial read failed";
+                closeSerial("read failed");
+                return null;
+            }
+            if (length(byte) === 0) break;
+            data += byte;
         }
         if (length(data) > 0) {
             stats.bytes_rx += length(data);
@@ -909,9 +1022,10 @@ export function send(msg)
     // Group-only is intentional: direct Companion sends need the six-byte
     // contact public-key prefix and a valid radio-owned path/contact record.
     if (!configuredChannelNamekey || !msg?.namekey || channel.isDirect(msg.namekey) ||
-        msg.namekey !== configuredChannelNamekey) {
+        msg.namekey !== configuredChannelNamekey ||
+        !verifiedLocalChannelForSlot(outboundChannelIndex, configuredChannelNamekey)) {
         stats.outbound_group_rejected++;
-        log1("reject outbound message id=%s (configure matching channel_namekey for group text)\n", msg?.id);
+        log1("reject outbound message id=%s (unverified radio/Crow channel tuple)\n", msg?.id);
         return false;
     }
     const frame = buildGroupTextCommand(msg, outboundChannelIndex);
@@ -935,13 +1049,21 @@ export function tick()
     mapConfiguredChannels();
     if (!serialRx && time() >= nextOpenTime) {
         nextOpenTime = time() + REOPEN_INTERVAL;
-        if (openSerial()) sendBootHandshake();
+        openSerial();
+    }
+    if (serialTx && handshakeDue > 0 && time() >= handshakeDue) {
+        handshakeDue = 0;
+        sendBootHandshake();
     }
     if (serialRx && timers.tick("meshcore_serial_api.poll")) {
         pumpSerial("serial timer");
     }
     if (serialTx && syncingMessages && !syncRequestInFlight && !pendingFull()) {
         maybeRequestNext(syncPausedBackpressure ? "resume after backpressure" : "tick resume");
+    }
+    if (serialTx && !syncRequestInFlight && !pendingFull() && time() >= nextQueuePollTime) {
+        syncingMessages = true;
+        maybeRequestNext("periodic queue poll");
     }
     if (serialTx && channelDiscovery && timers.tick("meshcore_serial_api.channel_refresh")) {
         requestAllChannels("refresh");
@@ -982,6 +1104,7 @@ export function status()
         delivery_pending: length(pendingRx),
         deferred_frames: length(deferredFrames),
         max_pending_rx: maxPendingRx(),
+        queue_poll_seconds: queuePollSeconds,
         opens: stats.opens,
         closes: stats.closes,
         handshakes_sent: stats.handshakes_sent,
@@ -999,6 +1122,7 @@ export function status()
         channel_info_responses: stats.channel_info_responses,
         channels_discovered: stats.channels_discovered,
         channels_updated: stats.channels_updated,
+        group_receive_unverified: stats.group_receive_unverified,
         outbound_group_sent: stats.outbound_group_sent,
         outbound_group_rejected: stats.outbound_group_rejected,
         outbound_confirmed: stats.outbound_confirmed,
@@ -1022,6 +1146,7 @@ export function _test_reset()
     deferredFrames = [];
     responses = [];
     discoveredChannels = {};
+    channel.clearMeshcoreSlotChannels();
     msgSeq = 0;
     for (let key in stats) stats[key] = 0;
 };
@@ -1062,6 +1187,35 @@ export function _test_app_start_payload()
 export function _test_parse_self_info(payload)
 {
     return parseSelfInfo(payload);
+};
+
+export function _test_set_local_channels(configs)
+{
+    return channel.setLocalChannels(configs ?? []);
+};
+
+export function _test_set_discovered_channel(index, namekey)
+{
+    const parts = split(namekey ?? "", " ");
+    if (length(parts) !== 2 || index < 0 || index > MAX_CHANNEL_INDEX) return false;
+    discoveredChannels[`${index}`] = {
+        index: index,
+        name: parts[0],
+        secret_b64: parts[1],
+        namekey: namekey
+    };
+    mapConfiguredChannels();
+    return verifiedLocalChannelForSlot(index, namekey) !== null;
+};
+
+export function _test_decode_channel_info(framePayload)
+{
+    return decodeChannelInfo(framePayload);
+};
+
+export function _test_channel_receive_allowed(index, namekey)
+{
+    return verifiedLocalChannelForSlot(index, namekey) !== null;
 };
 
 export function _test_stats()

@@ -1,0 +1,18 @@
+#!/bin/sh /etc/rc.common
+
+# BB5MC deployment helper: expose the USB Companion as a local TCP stream.
+# The Crow package remains generic; this service is intentionally node-local.
+
+START=97
+STOP=10
+USE_PROCD=1
+
+start_service()
+{
+    procd_open_instance
+    procd_set_param command /usr/bin/socat -d -d \
+        FILE:/dev/ttyACM1,raw,nonblock,echo=0 \
+        TCP-LISTEN:4405,bind=127.0.0.1,reuseaddr
+    procd_set_param respawn 3600 5 5
+    procd_close_instance
+}

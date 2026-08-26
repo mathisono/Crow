@@ -11,6 +11,8 @@ Lightweight regression tests for Crow modules. No test framework dependency.
 | `test_meshcore_tcp_api.uc` | `ucode` | Canonical tests for `meshcore_tcp_api.uc` Smart Accumulator: fragmentation, oversize kill switch, encrypted/unknown-cmd early-drop, resync. |
 | `run_meshcore_tcp_api_tests.js` | `node` | Node mirror with a JS port of the accumulator. Same logical cases, runnable without ucode; auto-invokes `.uc` tests when `ucode` is on PATH. |
 | `run_meshcore_backend_selector.js` | `node` | Smoke tests for MeshCore backend public-channel selection, TCP/USB precedence, and label setup. |
+| `test_meshcore_serial_api.uc` | `ucode` | Canonical USB Companion framing and exact RF name/key/slot gate checks. |
+| `run_meshcore_serial_api_tests.js` | `node` | Node mirror for USB Companion framing, queue handling, and the exact RF gate. |
 | `run_router_gatekeeper_matrix.js` | `node` | Router/gatekeeper scope matrix, including MeshCore TCP local-direct handling, slot mapping, and strict callsign checks. |
 
 ## When to run

@@ -234,6 +234,13 @@ function configureGroupChannel(slot, namekey) {
     return false;
 }
 
+function remapDiscoveredGroupChannels() {
+    for (const [slot, namekey] of discoveredGroupChannels) {
+        if (localGroupChannels.has(namekey)) mappedGroupChannels.set(slot, namekey);
+        else mappedGroupChannels.delete(slot);
+    }
+}
+
 function clearGroupChannels() {
     localGroupChannels.clear();
     discoveredGroupChannels.clear();
@@ -415,6 +422,15 @@ const STRICT_OFF = { isEnabled: () => false };
     const g = decodeTextFrame(RESP_CHANNEL_MSG_RECV_V3, groupPayload(3, 2, 'v3g'));
     check('decode v3 direct', d?.data?.text_message, 'v3d');
     check('decode v3 group', g?.data?.text_message, 'v3g');
+}
+{
+    clearGroupChannels();
+    check('startup ordering: discovery before local channel is not mapped', configureGroupChannel(6, 'Late AQ=='), false);
+    localGroupChannels.add('Late AQ==');
+    remapDiscoveredGroupChannels();
+    check('startup ordering: exact tuple maps after local setup', channelSendAllowed(6, 'Late AQ=='), true);
+    const g = decodeTextFrame(RESP_CHANNEL_MSG_RECV, groupPayload(1, 6, 'after setup'));
+    check('startup ordering: receive allowed after remap', g?.namekey, 'Late AQ==');
 }
 {
     const a = new SmartAccumulator(STRICT_ON);
