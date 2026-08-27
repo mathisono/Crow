@@ -16,6 +16,9 @@ const RESYNC_BUFFER_CAP = 4096;
 
 const PUSH_CODE_MSG_WAITING = 0x83;
 const CMD_SYNC_NEXT_MESSAGE = 0x0A;
+const CMD_ADD_UPDATE_CONTACT = 0x09;
+const CMD_SET_CHANNEL = 0x20;
+const CMD_SEND_ANON_REQ = 0x39;
 const RESP_DIRECT_MSG_RECV = 0x07;
 const RESP_CHANNEL_MSG_RECV = 0x08;
 const RESP_DIRECT_MSG_RECV_V3 = 0x10;
@@ -188,7 +191,7 @@ function validChannelDataPayload(payload) {
     if (payload.length < 9) return false;
     const slot = payload[3];
     const dataLength = payload[7];
-    return slot <= 15 && dataLength <= MAX_CHANNEL_DATA_LENGTH && 8 + dataLength <= payload.length;
+    return slot <= 7 && dataLength <= MAX_CHANNEL_DATA_LENGTH && 8 + dataLength <= payload.length;
 }
 
 function channelDataPayload(slot, dataType, text, snr = 0) {
@@ -197,6 +200,25 @@ function channelDataPayload(slot, dataType, text, snr = 0) {
         Buffer.from([snr & 0xff, 0, 0, slot & 0xff, 0, dataType & 0xff, (dataType >> 8) & 0xff, textBytes.length]),
         textBytes
     ]);
+}
+
+function setChannelCommand(slot, name, secret) {
+    const padded = Buffer.concat([Buffer.from(name, 'utf8'), Buffer.alloc(32 - Buffer.byteLength(name))]);
+    return buildCommand(CMD_SET_CHANNEL, Buffer.concat([Buffer.from([slot]), padded, secret]));
+}
+
+function roomLoginCommand(publicKey, syncSince, password) {
+    const stamp = Buffer.alloc(8);
+    stamp.writeUInt32LE(Math.floor(Date.now() / 1000), 0);
+    stamp.writeUInt32LE(syncSince >>> 0, 4);
+    return buildCommand(CMD_SEND_ANON_REQ, Buffer.concat([publicKey, stamp, Buffer.from(password)]));
+}
+
+function roomContactCommand(publicKey, name) {
+    return buildCommand(CMD_ADD_UPDATE_CONTACT, Buffer.concat([
+        publicKey, Buffer.from([3, 0, 0xFF]), Buffer.alloc(64),
+        Buffer.from(name, 'utf8'), Buffer.alloc(32 - Buffer.byteLength(name)), Buffer.alloc(4)
+    ]));
 }
 
 function decodeTextFrame(cmd, payload) {
@@ -535,6 +557,24 @@ const STRICT_OFF = { isEnabled: () => false };
     check('channel tx text', channel.subarray(10).toString(), 'hello');
     check('USB crow profile', appStartPayload('crow_zeros').toString('hex'), '0000000000000043726f77');
     check('USB CLI profile', appStartPayload('meshcore_cli').toString('hex'), '0320202020202043726f77');
+}
+{
+    const secret = Buffer.alloc(16, 0xA5);
+    const set = setChannelCommand(1, 'CrowPriv', secret);
+    check('private channel command', set[3], CMD_SET_CHANNEL);
+    check('private channel slot', set[4], 1);
+    check('private channel payload length', set.readUInt16LE(1), 50);
+    check('private channel secret', set[37], 0xA5);
+
+    const key = Buffer.alloc(32, 0x5A);
+    const login = roomLoginCommand(key, 0, 'hello');
+    check('room login command', login[3], CMD_SEND_ANON_REQ);
+    check('room login full public key', login.subarray(4, 36).equals(key), true);
+    check('room login password', login.subarray(44).toString(), 'hello');
+    const contact = roomContactCommand(key, 'N9DK Room Server');
+    check('room contact command', contact[3], CMD_ADD_UPDATE_CONTACT);
+    check('room contact flood path', contact[38], 0xFF);
+    check('room contact frame length', contact.readUInt16LE(1), 136);
 }
 
 console.log(`\n${count - failures} passed, ${failures} failed`);

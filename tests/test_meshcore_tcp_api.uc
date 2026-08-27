@@ -373,7 +373,30 @@ api._test_reset();
     check("channel tx text", substr(channel, 10), "hello");
 }
 
-// ---- 19. USB app-start profiles use valid Companion command framing
+// ---- 19. Late-stage MeshCore provisioning commands use the documented wire format
+{
+    const secret = fillBytes(0xA5, 16);
+    const set = api._test_build_set_channel(1, "CrowPriv", secret);
+    check("private channel command", ord(set, 3), 0x20);
+    check("private channel slot", ord(set, 4), 1);
+    check("private channel name", substr(set, 5, 8), "CrowPriv");
+    check("private channel payload length", ord(set, 1) | (ord(set, 2) << 8), 50);
+    check("private channel secret", ord(set, 37), 0xA5);
+
+    const key = fillBytes(0x5A, 32);
+    const login = api._test_build_room_login(key, 0, "hello");
+    check("room login command", ord(login, 3), 0x39);
+    check("room login full public key", substr(login, 4, 32), key);
+    check("room login sync timestamp", ord(login, 40) | (ord(login, 41) << 8), 0);
+    check("room login password", substr(login, 44), "hello");
+    const contact = api._test_build_room_contact("N9DK Room Server", key);
+    check("room contact command", ord(contact, 3), 0x09);
+    check("room contact full public key", substr(contact, 4, 32), key);
+    check("room contact flood path", ord(contact, 38), 0xFF);
+    check("room contact frame length", ord(contact, 1) | (ord(contact, 2) << 8), 136);
+}
+
+// ---- 20. USB app-start profiles use valid Companion command framing
 {
     const zeros = api._test_app_start_payload_profile("crow_zeros");
     const cli = api._test_app_start_payload_profile("meshcore_cli");

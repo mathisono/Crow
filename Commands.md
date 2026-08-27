@@ -12,6 +12,9 @@ Crow exposes a set of slash commands for channel and network management. The tab
 | **/channels join <name> [key]** | – | Join a channel by name (or key). If you only give the name Crow will build the key; otherwise supply the key explicitly (`<name> <key>`). |
 | **/channels leave <name>** | – | Leave a local channel. |
 | **/backends / backend** | – | List all configured APRS back‑ends (label + key). Requires APRS to be enabled. |
+| **/cmd meshcore room add** | `name public-key-base64 [password]` | Register a MeshCore room server contact. The default guest password is used when omitted. |
+| **/cmd meshcore room login** | `name-or-id` | Send the MeshCore room-server login request. |
+| **/cmd meshcore private** | `slot name 16-byte-key-base64` | Provision and join an acknowledged MeshCore private radio channel. Repeat on the other radio with identical values. |
 | **/storage status** | – | Show the current storage state, root and image directories. |
 | **/storage usb scan** | – | Find removable USB devices that can be mounted for image storage. |
 | **/storage usb enable / mount** | – | Mount a detected USB device to activate external image storage. |

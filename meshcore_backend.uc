@@ -150,6 +150,11 @@ function candidateStatus(key, label, transport, configured, isActive, host, port
         channels_discovered: detail.channels_discovered,
         channels_updated: detail.channels_updated,
         group_receive_unverified: detail.group_receive_unverified,
+        channel_provisions_ok: detail.channel_provisions_ok,
+        channel_provisions_failed: detail.channel_provisions_failed,
+        room_servers_added: detail.room_servers_added,
+        room_logins_ok: detail.room_logins_ok,
+        room_logins_failed: detail.room_logins_failed,
         log_data_frames: detail.log_data_frames,
         trace_data_frames: detail.trace_data_frames,
         telemetry_response_frames: detail.telemetry_response_frames,
@@ -221,6 +226,24 @@ export function recv()
 export function send(msg)
 {
     if (active) return active.send(msg);
+};
+
+export function addRoomServer(name, publicKeyB64, password)
+{
+    if (active?.addRoomServer) return active.addRoomServer(name, publicKeyB64, password);
+    return false;
+};
+
+export function loginRoomServer(target)
+{
+    if (active?.loginRoomServer) return active.loginRoomServer(target);
+    return false;
+};
+
+export function provisionPrivateChannel(slot, name, keyB64)
+{
+    if (active?.provisionPrivateChannel) return active.provisionPrivateChannel(slot, name, keyB64);
+    return false;
 };
 
 export function tick()

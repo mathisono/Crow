@@ -363,7 +363,13 @@ Transport type for MeshCore.
     "channel_discovery": true,
     "channel_refresh_seconds": 600,
     "channel_data_text_types": [],
-    "direct_identity_mode": "compatibility"
+    "direct_identity_mode": "compatibility",
+    "room_servers": [
+      {
+        "name": "N9DK Room Server",
+        "public_key_b64": "<32-byte MeshCore Ed25519 public key>"
+      }
+    ]
   }
 }
 ```
@@ -377,6 +383,7 @@ Transport type for MeshCore.
 - `channel_refresh_seconds`: `600`
 - `channel_data_text_types`: `[]` (disabled by default)
 - `direct_identity_mode`: `"compatibility"`
+- `room_servers`: `[]`
 
 **Notes:**
 - This uses the MeshCore Companion binary API over TCP, not a line-oriented
@@ -398,6 +405,18 @@ Transport type for MeshCore.
 - Keep `channel_discovery: true` when using the TCP/serial group path; a
   configured namekey without a verified radio slot remains receive/send
   disabled.
+- `room_servers` is an optional list of known MeshCore room servers. Each
+  entry requires a display `name` and the full 32-byte Ed25519 public key in
+  base64. An omitted entry password uses MeshCore's documented default guest
+  password. Crow registers the server as a Room contact, so the normal direct
+  message view can be used after login.
+- Private radio channels are explicit administrative operations, not inferred
+  from a Crow channel name. Use `/cmd meshcore private <slot 1-7> <name>
+  <16-byte-key-base64>` on each radio with the same slot, name, and key. The
+  device must acknowledge `CMD_SET_CHANNEL` before Crow maps the local channel.
+- Use `/cmd meshcore room login <name-or-id>` to send the room-server login
+  request. A successful `0x85` login push is counted in `/backends`; regular
+  direct posts then use the existing direct-message path.
 
 ## MeshCore USB Serial API
 

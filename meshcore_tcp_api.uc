@@ -28,6 +28,7 @@ import * as timers from "timers";
 import * as channel from "channel";
 import * as nodedb from "nodedb";
 import * as fs from "fs";
+import * as struct from "struct";
 
 // ---------------------------------------------------------------------
 // Wire protocol constants
@@ -45,8 +46,11 @@ const MAX_TEXT_MESSAGE_LENGTH  = 200;
 const CMD_APP_START            = 0x01;
 const CMD_SEND_DIRECT_MESSAGE  = 0x02;
 const CMD_SEND_CHANNEL_MESSAGE = 0x03;
+const CMD_ADD_UPDATE_CONTACT   = 0x09;
 const CMD_SYNC_NEXT_MESSAGE    = 0x0A;
 const CMD_GET_CHANNEL          = 0x1F;
+const CMD_SET_CHANNEL          = 0x20;
+const CMD_SEND_ANON_REQ        = 0x39;
 
 // Message responses radio -> host.
 const RESP_MESSAGE_SENT        = 0x06;
@@ -57,6 +61,10 @@ const RESP_DIRECT_MSG_RECV_V3  = 0x10;
 const RESP_CHANNEL_MSG_RECV_V3 = 0x11;
 const RESP_CHANNEL_INFO        = 0x12;
 const RESP_CHANNEL_DATA_RECV   = 0x1B;
+const RESP_OK                  = 0x00;
+const RESP_ERROR               = 0x01;
+const PUSH_LOGIN_SUCCESS       = 0x85;
+const PUSH_LOGIN_FAIL          = 0x86;
 
 // Device/config responses.
 const RESP_SELF_INFO           = 0x05;
@@ -91,7 +99,7 @@ const SOCKET_READ_CHUNK        = 2048;
 const DEFAULT_MAX_PENDING_RX   = 4;
 const HARD_MAX_PENDING_RX      = 32;
 const DEFAULT_CHANNEL_REFRESH  = 600;
-const MAX_CHANNEL_INDEX        = 15;
+const MAX_CHANNEL_INDEX        = 7;
 const DEFAULT_DISCOVERY_WINDOW = 1;
 const CHANNEL_REQUEST_TIMEOUT  = 5;
 const UNKNOWN_LOG_INTERVAL     = 64;
@@ -161,6 +169,9 @@ let meshcoreSelfPublicKey = null;
 let meshcoreSelfPublicKeyPrefix = null;
 let channelDataTextTypes = {};
 let strictDirectIdentity = false;
+let roomServers = [];
+let pendingRoomLogins = {};
+let pendingChannelProvision = null;
 
 let channelScanActive = false;
 let channelScanNext = 0;
@@ -207,6 +218,11 @@ let stats            = {
     channel_data_received: 0,
     channel_data_routed: 0,
     channel_data_unrouted: 0,
+    channel_provisions_ok: 0,
+    channel_provisions_failed: 0,
+    room_servers_added: 0,
+    room_logins_ok: 0,
+    room_logins_failed: 0,
     message_sent_frames: 0,
     ack_frames: 0,
     unknown_frames: 0,
@@ -597,6 +613,152 @@ function rememberDirectPrefix(id, prefix)
     });
 }
 
+function roomServerId(publicKey)
+{
+    if (!publicKey || length(publicKey) !== 32) return null;
+    try {
+        return struct.unpack(">I", publicKey)[0];
+    }
+    catch (_) {
+        return null;
+    }
+}
+
+function roomServerByTarget(target)
+{
+    if (!target) return null;
+    const textTarget = `${target}`;
+    for (let i = 0; i < length(roomServers); i++) {
+        const server = roomServers[i];
+        if (server.name === target || server.name === textTarget ||
+            `${server.id}` === textTarget || server.short_name === target) {
+            return server;
+        }
+    }
+    return null;
+}
+
+function roomServerFromConfig(record)
+{
+    if (!record) return null;
+    const encoded = record.public_key_b64 ?? record.public_key;
+    if (!encoded) return null;
+
+    let publicKey;
+    try {
+        publicKey = b64dec(encoded);
+    }
+    catch (_) {
+        return null;
+    }
+    const id = roomServerId(publicKey);
+    if (id === null) return null;
+
+    const name = substr(record.name ?? "MeshCore Room Server", 0, 36);
+    const shortName = substr(record.short_name ?? name, 0, 4);
+    const server = {
+        id: id,
+        name: name,
+        short_name: shortName,
+        public_key: publicKey,
+        public_key_b64: b64enc(publicKey),
+        password: substr(record.password ?? "hello", 0, 15),
+        sync_since: record.sync_since ?? 0
+    };
+
+    nodedb.createNode(id);
+    nodedb.updateNodeinfo(id, {
+        id: sprintf("!%08x", id),
+        long_name: name,
+        short_name: shortName,
+        platform: "meshcore",
+        role: 32,
+        mc_public_key: publicKey
+    });
+    return server;
+}
+
+function loadRoomServers(config)
+{
+    roomServers = [];
+    const records = cfg?.room_servers ?? config.meshcore_room_servers ?? [];
+    if (type(records) !== "array") return;
+    for (let i = 0; i < length(records); i++) {
+        const server = roomServerFromConfig(records[i]);
+        if (server) push(roomServers, server);
+    }
+}
+
+function addLocalProvisionedChannel(provision)
+{
+    const namekey = `${provision.name} ${provision.key_b64}`;
+    const localChannels = channel.getAllLocalChannels();
+    let found = null;
+    for (let i = 0; i < length(localChannels); i++) {
+        if (localChannels[i].namekey === namekey) {
+            found = localChannels[i];
+            break;
+        }
+    }
+    if (!found) {
+        found = { namekey: namekey, label: `MeshCore~${provision.name}` };
+        push(localChannels, found);
+        channel.updateLocalChannels(localChannels);
+        rootConfig.update?.("channels");
+    }
+
+    const discovered = {
+        index: provision.slot,
+        name: provision.name,
+        secret: provision.secret,
+        secret_b64: provision.key_b64,
+        namekey: namekey
+    };
+    discoveredChannels[`${provision.slot}`] = discovered;
+    mapDiscoveredChannelIfLocal(discovered);
+}
+
+function completeChannelProvision(ok)
+{
+    if (!pendingChannelProvision) return;
+    const provision = pendingChannelProvision;
+    pendingChannelProvision = null;
+    if (!ok) {
+        stats.channel_provisions_failed++;
+        log0("private channel rejected slot=%d name=%s\n", provision.slot, provision.name);
+        return;
+    }
+    stats.channel_provisions_ok++;
+    addLocalProvisionedChannel(provision);
+    log0("private channel provisioned slot=%d name=%s\n", provision.slot, provision.name);
+}
+
+function processRoomLogin(framePayload, success)
+{
+    const payload = substr(framePayload, 1);
+    if (length(payload) < 8) return;
+    const prefix = substr(payload, 2, 6);
+    let server = null;
+    for (let i = 0; i < length(roomServers); i++) {
+        if (substr(roomServers[i].public_key, 0, 6) === prefix) {
+            server = roomServers[i];
+            break;
+        }
+    }
+    if (!server) return;
+
+    delete pendingRoomLogins[`${server.id}`];
+    if (success) {
+        stats.room_logins_ok++;
+        log0("room server login accepted name=%s\n", server.name);
+    }
+    else {
+        stats.room_logins_failed++;
+        log0("room server login rejected name=%s\n", server.name);
+    }
+    global.event?.notify?.({ cmd: "node", id: server.id }, `room-server-${server.id}`);
+}
+
 // ---------------------------------------------------------------------
 // Socket lifecycle
 // ---------------------------------------------------------------------
@@ -939,6 +1101,49 @@ function buildSendDirectPayload(prefix, text, attempt)
     text = substr(text ?? "", 0, MAX_TEXT_MESSAGE_LENGTH);
     attempt = attempt ?? 0;
     return chr(TEXT_TYPE_PLAIN) + chr(attempt & 0xff) + pack_le32(time()) + substr(prefix, 0, 6) + text;
+}
+
+function fillBytes(value, count)
+{
+    let out = "";
+    for (let i = 0; i < count; i++) out += chr(value);
+    return out;
+}
+
+function buildSetChannelPayload(slot, name, secret)
+{
+    name = substr(name ?? "", 0, 32);
+    let paddedName = name;
+    while (length(paddedName) < 32) paddedName += chr(0);
+    return chr(slot & 0xff) + paddedName + secret;
+}
+
+function buildRoomServerLoginPayload(publicKey, syncSince, password)
+{
+    password = substr(password ?? "hello", 0, 15);
+    return publicKey + pack_le32(time()) + pack_le32(syncSince ?? 0) + password;
+}
+
+function buildRoomServerContactPayload(server)
+{
+    let name = substr(server.name ?? "MeshCore Room Server", 0, 32);
+    while (length(name) < 32) name += chr(0);
+    // An unknown path is required here. It makes the first room login flood
+    // through the mesh instead of attempting a zero-hop direct send.
+    return server.public_key + chr(3) + chr(0) + chr(0xFF) +
+        fillBytes(0, 64) + name + pack_le32(0);
+}
+
+function sendRoomLoginRequest(server)
+{
+    const state = pendingRoomLogins[`${server.id}`];
+    if (!state || !s) return false;
+    const payload = buildRoomServerLoginPayload(server.public_key, server.sync_since, server.password);
+    if (!sendCommand(CMD_SEND_ANON_REQ, payload)) return false;
+    state.stage = "login";
+    state.sent_at = time();
+    log0("room server login sent name=%s\n", server.name);
+    return true;
 }
 
 // ---------------------------------------------------------------------
@@ -1430,6 +1635,40 @@ function smartAccumulate(data)
             continue;
         }
 
+        if (cmd === RESP_OK || cmd === RESP_ERROR) {
+            stats.responses_cached++;
+            push(responses, { cmd: cmd, payload: framePayload });
+            if (pendingChannelProvision) {
+                completeChannelProvision(cmd === RESP_OK);
+            }
+            else {
+                for (let id in pendingRoomLogins) {
+                    const state = pendingRoomLogins[id];
+                    if (state.stage === "contact") {
+                        if (cmd === RESP_OK) {
+                            if (!sendRoomLoginRequest(state.server)) {
+                                delete pendingRoomLogins[id];
+                                stats.room_logins_failed++;
+                            }
+                        }
+                        else {
+                            delete pendingRoomLogins[id];
+                            stats.room_logins_failed++;
+                            log0("room server contact add rejected name=%s error=%s\n",
+                                state.server.name, length(framePayload) > 1 ? ord(framePayload, 1) : "unknown");
+                        }
+                        break;
+                    }
+                }
+            }
+            continue;
+        }
+
+        if (cmd === PUSH_LOGIN_SUCCESS || cmd === PUSH_LOGIN_FAIL) {
+            processRoomLogin(framePayload, cmd === PUSH_LOGIN_SUCCESS);
+            continue;
+        }
+
         if (isDirectFrame(cmd) || isGroupFrame(cmd)) {
             syncRequestInFlight = false;
             if (!validTextPayload(cmd, payload)) {
@@ -1524,6 +1763,9 @@ function setupTransport(config, kind)
         }
     }
     strictDirectIdentity = cfg.strict_direct_identity === true || cfg.direct_identity_mode === "verified";
+    pendingRoomLogins = {};
+    pendingChannelProvision = null;
+    loadRoomServers(config);
     channelRefreshSeconds = cfg.channel_refresh_seconds ?? DEFAULT_CHANNEL_REFRESH;
     channelDiscoveryWindow = cfg.channel_discovery_window ?? DEFAULT_DISCOVERY_WINDOW;
     if (channelDiscoveryWindow < 1) channelDiscoveryWindow = 1;
@@ -1679,6 +1921,80 @@ export function send(msg)
         log1("send channel failed slot=%d msg.id=%s\n", idx, msg?.id);
     }
     return ok;
+};
+
+export function addRoomServer(name, publicKeyB64, password)
+{
+    if (!cfg || !publicKeyB64) return false;
+    let publicKey;
+    try {
+        publicKey = b64dec(publicKeyB64);
+    }
+    catch (_) {
+        return false;
+    }
+    const id = roomServerId(publicKey);
+    if (id === null) return false;
+
+    let record = { name: substr(name ?? "MeshCore Room Server", 0, 36), public_key_b64: b64enc(publicKey) };
+    if (password) record.password = substr(password, 0, 15);
+    if (!cfg.room_servers || type(cfg.room_servers) !== "array") cfg.room_servers = [];
+    let exists = false;
+    for (let i = 0; i < length(cfg.room_servers); i++) {
+        if (cfg.room_servers[i].public_key_b64 === record.public_key_b64) {
+            cfg.room_servers[i] = record;
+            exists = true;
+            break;
+        }
+    }
+    if (!exists) push(cfg.room_servers, record);
+
+    loadRoomServers(rootConfig);
+    rootConfig.update?.("meshcore_tcp_api");
+    stats.room_servers_added++;
+    return roomServerByTarget(record.name) !== null;
+};
+
+export function loginRoomServer(target)
+{
+    const server = roomServerByTarget(target);
+    if (!s || !server || pendingChannelProvision) return false;
+    const id = `${server.id}`;
+    if (pendingRoomLogins[id]) return false;
+    pendingRoomLogins[id] = { server: server, stage: "contact", sent_at: time() };
+    const ok = sendCommand(CMD_ADD_UPDATE_CONTACT, buildRoomServerContactPayload(server));
+    if (!ok) delete pendingRoomLogins[id];
+    return ok;
+};
+
+export function provisionPrivateChannel(slot, name, keyB64)
+{
+    slot = int(slot);
+    if (!s || slot < 1 || slot > MAX_CHANNEL_INDEX || !name || length(name) > 32 || !keyB64) {
+        return false;
+    }
+    let secret;
+    try {
+        secret = b64dec(keyB64);
+    }
+    catch (_) {
+        return false;
+    }
+    if (!secret || length(secret) !== 16 || pendingChannelProvision) return false;
+
+    const provision = {
+        slot: slot,
+        name: substr(name, 0, 32),
+        secret: secret,
+        key_b64: b64enc(secret)
+    };
+    pendingChannelProvision = provision;
+    if (!sendCommand(CMD_SET_CHANNEL, buildSetChannelPayload(slot, provision.name, secret))) {
+        pendingChannelProvision = null;
+        return false;
+    }
+    log0("private channel create sent slot=%d name=%s\n", slot, provision.name);
+    return true;
 };
 
 export function tick()
@@ -1924,4 +2240,19 @@ export function _test_build_direct_send(prefix, text, attempt)
 export function _test_build_channel_send(index, text)
 {
     return buildCommand(CMD_SEND_CHANNEL_MESSAGE, buildSendChannelPayload(index, text));
+};
+
+export function _test_build_set_channel(slot, name, secret)
+{
+    return buildCommand(CMD_SET_CHANNEL, buildSetChannelPayload(slot, name, secret));
+};
+
+export function _test_build_room_login(publicKey, syncSince, password)
+{
+    return buildCommand(CMD_SEND_ANON_REQ, buildRoomServerLoginPayload(publicKey, syncSince, password));
+};
+
+export function _test_build_room_contact(name, publicKey)
+{
+    return buildCommand(CMD_ADD_UPDATE_CONTACT, buildRoomServerContactPayload({ name: name, public_key: publicKey }));
 };

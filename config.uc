@@ -121,6 +121,18 @@ function update(option)
             write = true;
             break;
         }
+        case "meshcore_tcp_api":
+        {
+            const api = config.meshcore_tcp_api ?? {};
+            if (jsonEq(api, bconfig.meshcore_tcp_api)) {
+                delete override.meshcore_tcp_api;
+            }
+            else {
+                override.meshcore_tcp_api = api;
+            }
+            write = true;
+            break;
+        }
         default:
             break;
     }

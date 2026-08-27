@@ -437,6 +437,65 @@ export function post(cmd, id)
                     event.queue({ cmd: "/reply", reply: reply, socket: id });
                     break;
                 }
+                case "meshcore":
+                {
+                    switch (cmd[2] ?? "") {
+                        case "room":
+                        {
+                            switch (cmd[3] ?? "") {
+                                case "add":
+                                {
+                                    const name = cmd[4];
+                                    const publicKey = cmd[5];
+                                    const password = cmd[6];
+                                    const ok = name && publicKey && meshcore_backend.addRoomServer(name, publicKey, password);
+                                    event.queue({ cmd: "/reply", reply: [ ok
+                                        ? `MeshCore room server added: ${name}`
+                                        : "Unable to add room server. Use: /cmd meshcore room add <name> <public-key-base64> [password]" ], socket: id });
+                                    break;
+                                }
+                                case "login":
+                                {
+                                    const target = cmd[4];
+                                    const ok = target && meshcore_backend.loginRoomServer(target);
+                                    event.queue({ cmd: "/reply", reply: [ ok
+                                        ? `Room server login sent: ${target}`
+                                        : "Unable to send room-server login. Add the server first and use: /cmd meshcore room login <name-or-id>" ], socket: id });
+                                    break;
+                                }
+                                default:
+                                    event.queue({ cmd: "/reply", reply: [
+                                        "Usage:",
+                                        "/cmd meshcore room add <name> <public-key-base64> [password]",
+                                        "/cmd meshcore room login <name-or-id>",
+                                        "The default room guest password is used when [password] is omitted."
+                                    ], socket: id });
+                                    break;
+                            }
+                            break;
+                        }
+                        case "private":
+                        {
+                            const slot = cmd[3];
+                            const name = cmd[4];
+                            const key = cmd[5];
+                            const ok = slot && name && key && meshcore_backend.provisionPrivateChannel(slot, name, key);
+                            event.queue({ cmd: "/reply", reply: [ ok
+                                ? `MeshCore private channel create sent: slot ${slot}, ${name}`
+                                : "Unable to create private channel. Use: /cmd meshcore private <slot 1-7> <name> <16-byte-key-base64>" ], socket: id });
+                            break;
+                        }
+                        default:
+                            event.queue({ cmd: "/reply", reply: [
+                                "Usage:",
+                                "/cmd meshcore room add <name> <public-key-base64> [password]",
+                                "/cmd meshcore room login <name-or-id>",
+                                "/cmd meshcore private <slot 1-7> <name> <16-byte-key-base64>"
+                            ], socket: id });
+                            break;
+                    }
+                    break;
+                }
                 default:
                 {
                     event.queue({ cmd: "/reply", reply: [
@@ -444,7 +503,9 @@ export function post(cmd, id)
                         "/cmd discover — List all discovered channels",
                         "/cmd discover meshcore — MeshCore groups only",
                         "/cmd discover meshtastic — Meshtastic channels only",
-                        "/cmd info &lt;namekey&gt; — Channel details"
+                        "/cmd info &lt;namekey&gt; — Channel details",
+                        "/cmd meshcore room ... — Add/login to a MeshCore room server",
+                        "/cmd meshcore private ... — Provision a MeshCore private channel"
                     ], socket: id });
                     break;
                 }
@@ -639,6 +700,8 @@ export function post(cmd, id)
                 "<b>/leave</b> #name &mdash; leave channel and remove APRS group",
                 "<b>/groups</b> &mdash; list all APRS groups and members",
                 "<b>/backends</b> &mdash; show APRS, MeshCore, and Meshtastic backend status",
+                "<b>/cmd meshcore room ...</b> &mdash; add/login to a MeshCore room server",
+                "<b>/cmd meshcore private ...</b> &mdash; provision a MeshCore private channel",
                 "<b>/storage</b> status &mdash; show active storage state",
                 "<b>/channels</b> &mdash; list public channels on local network"
             ], socket: id });

@@ -261,11 +261,26 @@ The tests cover:
 - resync after garbage
 - back-to-back frames
 
+## Late-stage provisioning features
+
+The backend now includes explicit, opt-in MeshCore provisioning helpers:
+
+- Room servers can be registered with their full public key and contacted with
+  the standard anonymous login request. The guest password defaults to the
+  documented MeshCore default when an entry does not specify one.
+- Private radio channels can be written with `CMD_SET_CHANNEL` and are added
+  to Crow only after the radio returns `PACKET_OK`. The slot, name, and secret
+  must still be discovered as an exact tuple before normal group TX/RX is
+  allowed.
+
+These operations are exposed through `/cmd meshcore room ...` and `/cmd
+meshcore private ...`. They are deliberately not performed by ordinary
+channel discovery or by merely typing a channel name.
+
 ## Remaining work
 
 The backend implementation is complete for the current experimental scope.
-The remaining work is validation and identity hardening, not outbound-send
-implementation:
+The remaining work is validation and identity hardening:
 
 1. Test against real MeshCore TCP/Wi-Fi and USB serial hardware.
 2. Add captured-frame regression tests from the real device.
