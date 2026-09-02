@@ -4,7 +4,6 @@ import * as channel from "channel";
 import * as node from "node";
 import * as meship from "meship";
 import * as meshtastic from "meshtastic_backend";
-import * as meshtasticprotobufs from "meshtasticprotobufs";
 import * as meshcore from "meshcore_backend";
 import * as aprs from "aprs";
 import * as websocket from "websocket";
@@ -28,6 +27,18 @@ import * as gatekeeper from "gatekeeper";
 let bconfig;
 let config;
 let override;
+const HEARTBEAT_FILE = "/tmp/crow-heartbeat";
+let lastHeartbeat = 0;
+
+function updateHeartbeat()
+{
+    // /tmp is RAM-backed on AREDN; do not write the heartbeat to flash.
+    const now = time();
+    if (now - lastHeartbeat >= 60) {
+        fs.writefile(HEARTBEAT_FILE, sprintf("%d\n", now));
+        lastHeartbeat = now;
+    }
+}
 
 function localFile(name)
 {
@@ -205,6 +216,7 @@ export function setup()
     }
 
     DEBUG0("Starting up\nConfiguring\n");
+    updateHeartbeat();
 
     if (config.platform_debian) {
         global.platform = require(`platforms.debian.platform`);
@@ -306,6 +318,7 @@ export function setup()
 export function tick()
 {
     DEBUG1("Tick\n");
+    updateHeartbeat();
     router.tick();
     gc("collect");
 };

@@ -60,7 +60,7 @@ const PUSH_MSG_WAITING = 0x83;
 
 const PUBLIC_SECRET = "\x8b\x33\x87\xe9\xc5\xcd\xea\x6a\xc9\xe5\xed\xba\xa1\x15\xcd\x72";
 
-// A configured TX slot is not sufficient authority for either direction.
+// Explicitly configured slots authorize the matching Crow channel.
 api._test_reset();
 const publicInfo = api._test_decode_channel_info(channelInfoPayload(0, "Public", PUBLIC_SECRET));
 check("Companion Public maps to Crow public channel", publicInfo?.namekey, "MeshCore izOH6cXN6mrJ5e26oRXNcg==");
@@ -77,7 +77,7 @@ check("wrong key remains blocked", api._test_channel_receive_allowed(5, "TacNet 
 check("same tuple on wrong slot is recorded", api._test_set_discovered_channel(4, "TacNet AQ=="), true);
 check("wrong slot remains blocked", api._test_channel_receive_allowed(5, "TacNet AQ=="), false);
 
-// Only the exact discovered name/key/slot tuple enables routing.
+// Only the exact configured name/key/slot tuple enables routing.
 check("exact radio/Crow tuple is verified", api._test_set_discovered_channel(5, "TacNet AQ=="), true);
 const msg = api._test_decode(RESP_CHANNEL_MSG_RECV, groupPayload(5, "tagged RF"));
 check("verified group frame decodes", msg?.data?.text_message, "tagged RF");

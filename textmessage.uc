@@ -10,6 +10,13 @@ let enabled = false;
 
 const MAX_MESSAGES = 100;
 const SAVE_INTERVAL = 19 * 60;
+const APRS_RETRY_WINDOW_SECONDS = 5;
+
+// Small AREDN nodes cannot afford an unbounded in-memory copy of every
+// conversation.  This is a global upper bound; channel-specific settings may
+// still lower it.  MeshCore direct/group text remains available, but old
+// traffic is deliberately bounded.
+let configuredMaxMessages = MAX_MESSAGES;
 
 const channelmessages = {};
 const channelmessagesdirty = {};
@@ -18,8 +25,9 @@ const channelindex = {};
 function loadMessages(namekey)
 {
     if (!channelmessages[namekey]) {
+        let changed = false;
         channelmessages[namekey] = platform.load(`messages.${namekey}`) ?? {
-            max: MAX_MESSAGES,
+            max: configuredMaxMessages,
             count: 0,
             cursor: null,
             messages: [],
@@ -27,7 +35,17 @@ function loadMessages(namekey)
             images: true,
             winlink: channel.isDirect(namekey)
         };
+        if (channelmessages[namekey].max == null ||
+            channelmessages[namekey].max > configuredMaxMessages) {
+            channelmessages[namekey].max = configuredMaxMessages;
+            changed = true;
+        }
         const chanmessages = channelmessages[namekey].messages;
+        while (length(chanmessages) > channelmessages[namekey].max) {
+            shift(chanmessages);
+            changed = true;
+        }
+        if (changed) channelmessagesdirty[namekey] = true;
         const index = {};
         channelindex[namekey] = index;
         for (let i = 0; i < length(chanmessages); i++) {
@@ -65,17 +83,45 @@ export function saveMessages(namekey)
     platform.badge(`messages.${namekey}`, chanmessages.badge ? chanmessages.count : 0);
 };
 
+function isAprsRetryCopy(chanmessages, msg, text, textfrom)
+{
+    if (!textfrom) {
+        return false;
+    }
+    for (let i = length(chanmessages.messages) - 1; i >= 0; i--) {
+        const prior = chanmessages.messages[i];
+        const delta = msg.rx_time - prior.when;
+        if (delta > APRS_RETRY_WINDOW_SECONDS) {
+            break;
+        }
+        if (delta >= -APRS_RETRY_WINDOW_SECONDS &&
+            uc(trim(prior.textfrom ?? "")) === uc(trim(textfrom)) &&
+            prior.text === text) {
+            return true;
+        }
+    }
+    return false;
+}
+
 function addNamekeyMessage(namekey, msg)
 {
     const chanmessages = loadMessages(namekey);
     if (!channelindex[namekey][msg.id]) {
+        const text = utils.utf8validCopy(msg.data.text_message);
+        const textfrom = utils.utf8validCopy(msg.data.text_from);
+        if (isAprsRetryCopy(chanmessages, msg, text, textfrom)) {
+            // Remember the alternate gateway/text-store ID for this runtime so
+            // repeated sync responses do not need to scan the retained list.
+            channelindex[namekey][msg.id] = true;
+            return;
+        }
         channelindex[namekey][msg.id] = true;
         push(chanmessages.messages, {
             id: msg.id,
             from: msg.from,
             when: msg.rx_time,
-            text: utils.utf8validCopy(msg.data.text_message),
-            textfrom: utils.utf8validCopy(msg.data.text_from),
+            text: text,
+            textfrom: textfrom,
             structuredtext: msg.data.structured_text_message,
             replyid: msg.data.reply_id,
             checksum: msg.data.checksum
@@ -206,6 +252,13 @@ export function state(namekey)
 
 export function setup(config)
 {
+    configuredMaxMessages = MAX_MESSAGES;
+    const requestedMax = config.messages?.max;
+    if (requestedMax != null) {
+        configuredMaxMessages = int(requestedMax);
+        if (configuredMaxMessages < 1) configuredMaxMessages = 1;
+        if (configuredMaxMessages > MAX_MESSAGES) configuredMaxMessages = MAX_MESSAGES;
+    }
     if (config.messages) {
         enabled = true;
         timers.setInterval("textmessages", SAVE_INTERVAL);
@@ -285,7 +338,24 @@ export function process(msg)
         else if (channel.isDirect(msg.namekey) && node.fromMe(msg)) {
             addDirectMessage(msg, msg.namekey);
         }
-        nodedb.updateNode(nodedb.getNode(msg.from, false));
+        // Keep a minimal direct-thread anchor so retained direct messages are
+        // visible after restart. It contains no discovered name/position or
+        // contact directory data; discovery-only records are still purged.
+        if (msg.transport === "meshcore" && msg.metadata?.local_direct) {
+            nodedb.createNode(msg.from);
+            const thread = nodedb.getNode(msg.from, false);
+            thread.favorite = true;
+            const info = { platform: "meshcore-direct" };
+            const prefix = msg.metadata?.meshcore_sender_prefix;
+            if (prefix) {
+                info.mc_public_key_prefix_b64 = prefix;
+            }
+            nodedb.updateNodeinfo(msg.from, info);
+            nodedb.updateNode(thread);
+        }
+        else {
+            nodedb.updateNode(nodedb.getNode(msg.from, false));
+        }
     }
     else if (node.toMe(msg) && msg.data?.routing) {
         if (msg.data.routing.error_reason === 0) {

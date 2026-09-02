@@ -1,5 +1,6 @@
 import * as socket from "socket";
 import * as struct from "struct";
+import * as crypto from "crypto.crypto";
 import * as node from "node";
 import * as message from "message";
 import * as channel from "channel";
@@ -16,6 +17,8 @@ const DEST = "APZRVN";
 
 const RECONNECT_BASE_MS = 5000;
 const RECONNECT_MAX_MS = 300000;
+const INBOUND_DEDUPE_TTL_SECONDS = 1800;
+const INBOUND_DEDUPE_MAX = 64;
 
 const DEFAULT_CHANNEL_NAME = "APRS-IS-Feed";
 const DEFAULT_CHANNEL_KEY = "og==";
@@ -35,6 +38,8 @@ let defaultBackendName = null;
 // Channel → backend name mapping (namekey → backendName)
 const channelBackendMap = {};
 const lastChannelSender = {};
+const inboundDedupe = {};
+const inboundDedupeOrder = [];
 
 function closeBackendSocket(inst)
 {
@@ -59,6 +64,10 @@ function resetRuntimeState()
     }
     clearObject(channelBackendMap);
     clearObject(lastChannelSender);
+    clearObject(inboundDedupe);
+    while (length(inboundDedupeOrder) > 0) {
+        shift(inboundDedupeOrder);
+    }
     defaultBackendName = null;
 }
 
@@ -74,16 +83,18 @@ function backendTypeLabel(btype)
     }
 };
 
-function makeBackendDisplayName(name, bcfg)
+function makeBackendDisplayName(name, bcfg, callsign)
 {
-    return `${backendTypeLabel(bcfg?.type)}[${name}]`;
+    const backend = `${backendTypeLabel(bcfg?.type)}[${name}]`;
+    callsign = uc(trim(callsign ?? ""));
+    return callsign ? `${backend} ${callsign}` : backend;
 };
 
-function createBackendInstance(name, bcfg)
+function createBackendInstance(name, bcfg, callsign)
 {
     return {
         name: name,
-        displayName: makeBackendDisplayName(name, bcfg),
+        displayName: makeBackendDisplayName(name, bcfg, callsign),
         config: bcfg,
         socket: null,
         rxbuf: "",
@@ -91,6 +102,7 @@ function createBackendInstance(name, bcfg)
         reconnect_after: 0,
         reconnect_delay: RECONNECT_BASE_MS,
         pending_rx: [],
+        duplicates_dropped: 0,
         connecting: false,
         connect_deadline: 0
     };
@@ -497,17 +509,30 @@ function resolveInboundChannel(fromcall, backendName)
     return cfg.channel;
 }
 
-function ravenMsg(fromcall, text, backendName)
+function aprsCrowMessageId(fromcall, id)
+{
+    if (!id) {
+        return null;
+    }
+    return struct.unpack(">I", crypto.sha1hash(`aprs:${normcall(fromcall)}:${id}`))[0];
+}
+
+function ravenMsg(fromcall, text, backendName, aprsId)
 {
     const target = resolveInboundChannel(fromcall, backendName);
     if (fromcall) {
         lastChannelSender[target] = fromcall;
     }
-    const msg = message.createMessage(node.BROADCAST, node.UNKNOWN, target, "text_message", text, {
+    const extra = {
         transport: "aprs",
         originating_callsign: fromcall,
         data: { text_from: fromcall }
-    });
+    };
+    const stableId = aprsCrowMessageId(fromcall, aprsId);
+    if (stableId != null) {
+        extra.id = stableId;
+    }
+    const msg = message.createMessage(node.BROADCAST, node.UNKNOWN, target, "text_message", text, extra);
     msg.namekey = target;
     return msg;
 }
@@ -519,6 +544,40 @@ function sendAck(backendName, to, id)
     }
 }
 
+function inboundDuplicate(backendName, fromcall, id)
+{
+    if (!id) {
+        return false;
+    }
+
+    const t = now();
+    while (length(inboundDedupeOrder) > 0) {
+        const oldest = inboundDedupeOrder[0];
+        if (t - oldest.when < INBOUND_DEDUPE_TTL_SECONDS) {
+            break;
+        }
+        shift(inboundDedupeOrder);
+        if (inboundDedupe[oldest.key] === oldest.when) {
+            delete inboundDedupe[oldest.key];
+        }
+    }
+
+    const key = `${backendName ?? ""}:${normcall(fromcall)}:${id}`;
+    if (inboundDedupe[key] && t - inboundDedupe[key] < INBOUND_DEDUPE_TTL_SECONDS) {
+        return true;
+    }
+
+    inboundDedupe[key] = t;
+    push(inboundDedupeOrder, { key: key, when: t });
+    while (length(inboundDedupeOrder) > INBOUND_DEDUPE_MAX) {
+        const oldest = shift(inboundDedupeOrder);
+        if (inboundDedupe[oldest.key] === oldest.when) {
+            delete inboundDedupe[oldest.key];
+        }
+    }
+    return false;
+}
+
 function receiveLine(line, backendName)
 {
     const m = parseAprsMsg(line);
@@ -526,6 +585,14 @@ function receiveLine(line, backendName)
         return null;
     }
     sendAck(backendName, m.from, m.id);
+    if (inboundDuplicate(backendName, m.from, m.id)) {
+        const inst = getBackendInstance(backendName);
+        if (inst) {
+            inst.duplicates_dropped++;
+        }
+        DEBUG0("%s: dropped APRS retry from %s id %s\n", inst?.displayName ?? "aprs", m.from, m.id);
+        return null;
+    }
     const mgroups = memberOf(m.from);
     for (let i = 0; i < length(mgroups); i++) {
         const g = mgroups[i];
@@ -533,7 +600,7 @@ function receiveLine(line, backendName)
             sendGroup(g, `[${m.from}] ${m.text}`, m.from, null);
         }
     }
-    return ravenMsg(m.from, m.text, backendName);
+    return ravenMsg(m.from, m.text, backendName, m.id);
 }
 
 // --- Outbound text parsing ---
@@ -731,7 +798,7 @@ export function setup(config)
     // Pick the first backend as default
     let firstName = null;
     for (let name in backendsCfg) {
-        backends[name] = createBackendInstance(name, backendsCfg[name]);
+        backends[name] = createBackendInstance(name, backendsCfg[name], cfg.callsign);
         if (!firstName) {
             firstName = name;
         }
@@ -943,6 +1010,7 @@ export function getBackendStatus()
             port: port,
             socket: inst.socket !== null,
             pending_rx: length(inst.pending_rx),
+            duplicates_dropped: inst.duplicates_dropped,
             reconnect_in_seconds: max(0, int((inst.reconnect_after - t) / 1000)),
             reconnect_delay_seconds: int(inst.reconnect_delay / 1000)
         });

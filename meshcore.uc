@@ -26,12 +26,13 @@ import * as timers from "timers";
 const ADDRESS = "224.0.0.69";
 const PORT = 4402;
 
-const SAVE_INTERVAL = 19 * 60; // 19 minutes
 const ACK_INTERVAL = 60; // 1 minute
 
 const HW_MESHCORE = 253;
 
 const MAX_TEXT_MESSAGE_LENGTH = 150;
+const DISCOVERY_NOTICE_INTERVAL = 300;
+const MAX_PENDING_ACKS = 16;
 
 const ROUTE_TYPE_TRANSPORT_FLOOD = 0x00;
 const ROUTE_TYPE_FLOOD = 0x01;
@@ -83,74 +84,47 @@ let callsign = null;
 let router = null;
 let hashsize = 1;
 
-let sharedKeys = {};
-let xPriv = {};
-let xPub = {};
-const recentKeys = {};
 const pendingAcks = {};
-let dirty = false;
+const pendingAckOrder = [];
 export let enabled = false;
+let lastDiscoveryNotice = 0;
+
+function notifyIgnoredDiscovery()
+{
+    const now = time();
+    if (lastDiscoveryNotice && now - lastDiscoveryNotice < DISCOVERY_NOTICE_INTERVAL) {
+        return;
+    }
+    lastDiscoveryNotice = now;
+    try {
+        global.event?.queue?.({ cmd: "/reply", reply: [
+            "<b>MeshCore contact discovery ignored</b>",
+            "Contact adverts are not retained by Crow.",
+            "Direct and configured group messages are still kept."
+        ] });
+        global.event?.notify?.({ cmd: "channels" }, "meshcore-discovery-ignored");
+    }
+    catch (_) {}
+}
 
 function getSharedKey(priv, pub)
 {
-    const hkey = `${priv}${pub}`;
-    let sharedkey = sharedKeys[hkey];
-    if (!sharedkey) {
-        let xpriv = xPriv[priv];
-        if (!xpriv) {
-            xpriv = crypto.ed25519_privkey_to_x25519(priv);
-            xPriv[priv] = xpriv;
-        }
-        let xpub = xPub[pub];
-        if (!xpub) {
-            xpub = crypto.ed25519_pubkey_to_x25519(pub);
-            xPub[pub] = xpub;
-        }
-        sharedkey = struct.unpack("32B", crypto.getSharedKey(xpriv, xpub));
-        sharedKeys[hkey] = sharedkey;
-        dirty = true;
-    }
-    return sharedkey;
-}
-
-function loadSharedKeys()
-{
-    const data = platform.load("meshcore.sharedkeys");
-    if (data) {
-        sharedKeys = data.sharedKeys;
-        xPriv = data.xPriv;
-        xPub = data.xPub;
-    }
-}
-
-function saveSharedKeys()
-{
-    if (dirty) {
-        platform.store("meshcore.sharedkeys", {
-            sharedKeys: sharedKeys,
-            xPriv: xPriv,
-            xPub: xPub
-        });
-        dirty = false;
-    }
-}
-
-function getRecentKeys(fromhash, tohash)
-{
-    return recentKeys[`${fromhash}:${tohash}`]
-}
-
-function addRecentKey(fromhash, tohash, from, to, sharedkey)
-{
-    const hkey = `${fromhash}:${tohash}`;
-    const rkey = `${tohash}:${fromhash}`;
-    push(recentKeys[hkey] ?? (recentKeys[hkey] = []), { from: from, to: to, key: sharedkey });
-    push(recentKeys[rkey] ?? (recentKeys[rkey] = []), { from: to, to: from, key: sharedkey });
+    // Do not retain contact-derived peer keys. The local node key remains in
+    // node configuration and configured public/user-channel keys remain in
+    // channel configuration; direct peer keys are derived only on demand.
+    const xpriv = crypto.ed25519_privkey_to_x25519(priv);
+    const xpub = crypto.ed25519_pubkey_to_x25519(pub);
+    return struct.unpack("32B", crypto.getSharedKey(xpriv, xpub));
 }
 
 function addToAckQ(to, from, id, checksum)
 {
-    pendingAcks[struct.pack("4B", ...checksum)] = { to: to, from: from, id: id, checksum: checksum, when: time(), retry: 0 };
+    const key = struct.pack("4B", ...checksum);
+    if (!pendingAcks[key]) push(pendingAckOrder, key);
+    pendingAcks[key] = { to: to, from: from, id: id, checksum: checksum, when: time(), retry: 0 };
+    while (length(pendingAckOrder) > MAX_PENDING_ACKS) {
+        delete pendingAcks[shift(pendingAckOrder)];
+    }
 }
 
 function ackAck(checksum)
@@ -158,6 +132,12 @@ function ackAck(checksum)
     const ack = pendingAcks[checksum];
     if (ack) {
         delete pendingAcks[checksum];
+        for (let i = 0; i < length(pendingAckOrder); i++) {
+            if (pendingAckOrder[i] === checksum) {
+                splice(pendingAckOrder, i, 1);
+                break;
+            }
+        }
     }
     return ack;
 }
@@ -170,6 +150,12 @@ function processAcks()
         if (ack.when < when) {
             nodedb.updatePath(ack.to, null);
             delete pendingAcks[k];
+            for (let i = 0; i < length(pendingAckOrder); i++) {
+                if (pendingAckOrder[i] === k) {
+                    splice(pendingAckOrder, i, 1);
+                    break;
+                }
+            }
         }
     }
 }
@@ -219,15 +205,11 @@ export function setup(config)
     s.setopt(socket.IPPROTO_IP, socket.IP_MULTICAST_LOOP, 0);
     s.listen();
 
-    loadSharedKeys();
-
-    timers.setInterval("meshcore.save", SAVE_INTERVAL);
     timers.setInterval("meshcore.acks", ACK_INTERVAL);
 };
 
 export function shutdown()
 {
-    saveSharedKeys();
 };
 
 export function handle()
@@ -349,53 +331,35 @@ function decodePacket(pkt)
             let tnodeid = null;
             const me = node.getInfo();
 
-            const recents = getRecentKeys(fromhash, tohash);
-            if (recents) {
-                for (let i = 0; i < length(recents); i++) {
-                    const recent = recents[i];
-                    const hmac = crypto.sha256hmac(recent.key, encrypted);
-                    if (hmac[0] === mac[0] && hmac[1] === mac[1]) {
-                        secretkey = recent.key;
-                        fnodeid = recent.from;
-                        tnodeid = recent.to;
-                        break;
-                    }
-                }
+            const fromnodes = nodedb.getNodesByPublickeyHash(fromhash, false);
+            const tonodes = nodedb.getNodesByPublickeyHash(tohash, true);
+            if (!me.is_unmessagable && node.getMeshcoreHash(1) === tohash) {
+                push(tonodes, {
+                    me: true,
+                    id: node.id(),
+                    nodeinfo: me
+                });
             }
-            if (!secretkey) {
-                const fromnodes = nodedb.getNodesByPublickeyHash(fromhash, false);
-                const tonodes = nodedb.getNodesByPublickeyHash(tohash, true);
-                if (!me.is_unmessagable && node.getMeshcoreHash(1) === tohash) {
-                    push(tonodes, {
-                        me: true,
-                        id: node.id(),
-                        nodeinfo: me
-                    });
-                }
-                for (let i = 0; i < length(fromnodes) && !secretkey; i++) {
-                    const fnode = fromnodes[i];
-                    if (!fnode.nodeinfo.is_unmessagable) {
-                        const frompublic = fnode.nodeinfo.mc_public_key;
-                        for (let j = 0; j < length(tonodes); j++) {
-                            const tnode = tonodes[j];
-                            if (!tnode.nodeinfo.is_unmessagable) {
-                                const toprivate = tnode.me ? tnode.nodeinfo.private_key : platform.getTargetById(tnode.id)?.private_key;
-                                if (toprivate) {
-                                    const key = getSharedKey(toprivate, frompublic);
-                                    const hmac = crypto.sha256hmac(key, encrypted);
-                                    if (hmac[0] === mac[0] && hmac[1] === mac[1]) {
-                                        secretkey = key;
-                                        fnodeid = fnode.id;
-                                        tnodeid = tnode.id;
-                                        break;
-                                    }
+            for (let i = 0; i < length(fromnodes) && !secretkey; i++) {
+                const fnode = fromnodes[i];
+                if (!fnode.nodeinfo.is_unmessagable) {
+                    const frompublic = fnode.nodeinfo.mc_public_key;
+                    for (let j = 0; j < length(tonodes); j++) {
+                        const tnode = tonodes[j];
+                        if (!tnode.nodeinfo.is_unmessagable) {
+                            const toprivate = tnode.me ? tnode.nodeinfo.private_key : platform.getTargetById(tnode.id)?.private_key;
+                            if (toprivate) {
+                                const key = getSharedKey(toprivate, frompublic);
+                                const hmac = crypto.sha256hmac(key, encrypted);
+                                if (hmac[0] === mac[0] && hmac[1] === mac[1]) {
+                                    secretkey = key;
+                                    fnodeid = fnode.id;
+                                    tnodeid = tnode.id;
+                                    break;
                                 }
                             }
                         }
                     }
-                }
-                if (secretkey) {
-                    addRecentKey(fromhash, tohash, fnodeid, tnodeid, secretkey);
                 }
             }
             if (secretkey) {
@@ -514,8 +478,12 @@ function decodePacket(pkt)
             if (type & ADV_NAME_MASK) {
                 advert.name = substr(pkt, offset);
             }
+            // Keep only a bounded transient key entry so a later direct
+            // message can still be decrypted. Do not route the advert or add
+            // it to Crow's persistent contact directory.
             msg.from = nodedb.getNodeByMeshcorePublickey(advert.public_key).id;
-            return msg;
+            notifyIgnoredDiscovery();
+            return null;
         }
         case PAYLOAD_TYPE_GRP_TXT:
         {
@@ -610,19 +578,6 @@ function getDirectSendKey(msg)
         const tohash = ord(topublic);
         const fromhash = ord(frompublic);
         const sharedkey = getSharedKey(fromprivate, topublic);
-        const recents = getRecentKeys(fromhash, tohash);
-        if (recents) {
-            let found = false;
-            for (let i = 0; i < length(recents); i++) {
-                if (recents[i].key === sharedkey) {
-                    found = true;
-                    break;
-                }
-            }
-            if (!found) {
-                addRecentKey(fromhash, tohash, msg.from, msg.to, sharedkey);
-            }
-        }
         return {
             topublic: topublic,
             fromprivate: fromprivate,
@@ -820,9 +775,6 @@ export function send(msg)
 
 export function tick()
 {
-    if (timers.tick("meshcore.save")) {
-        saveSharedKeys();
-    }
     if (timers.tick("meshcore.acks")) {
         processAcks();
     }

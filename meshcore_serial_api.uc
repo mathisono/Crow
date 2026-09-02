@@ -9,8 +9,8 @@
 //   Crow -> Radio: '<' + uint16le(length) + command/payload
 //
 // The backend intentionally exposes cleartext text only.  It supports
-// CMD_APP_START, bounded queued-message draining (0x83 -> CMD 0x0a), optional
-// CMD_GET_CHANNEL discovery, and outbound *group* text.  Direct text needs a
+// CMD_APP_START, bounded queued-message draining (0x83 -> CMD 0x0a), and
+// outbound *group* text.  Direct text needs a
 // real MeshCore contact/path table, which Crow does not own yet, so it is
 // explicitly rejected rather than guessing a recipient prefix.
 //
@@ -41,15 +41,14 @@ const SERIAL_HANDSHAKE_ATTEMPTS = 3;
 const DEFAULT_QUEUE_POLL       = 5;
 const DEFAULT_MAX_PENDING_RX   = 4;
 const HARD_MAX_PENDING_RX      = 32;
-const DEFAULT_CHANNEL_REFRESH  = 600;
 const MAX_CHANNEL_INDEX        = 7;
 const MAX_GROUP_TEXT_LENGTH    = 160;
 const RAWTTY_HELPER            = "/usr/local/crow/crow-rawtty";
+const DISCOVERY_NOTICE_INTERVAL = 300;
 
 const CMD_APP_START            = 0x01;
 const CMD_SEND_CHANNEL_TXT_MSG = 0x03;
 const CMD_SYNC_NEXT_MESSAGE    = 0x0a;
-const CMD_GET_CHANNEL          = 0x1f;
 
 const RESP_OK                  = 0x00;
 const RESP_ERR                 = 0x01;
@@ -63,6 +62,8 @@ const RESP_CHANNEL_INFO        = 0x12;
 const RESP_CHANNEL_DATA_RECV   = 0x1b;
 const PUSH_SEND_CONFIRMED      = 0x82;
 const PUSH_MSG_WAITING         = 0x83;
+const PUSH_NEW_ADVERT           = 0x8a;
+const PUSH_CONTACTS_FULL        = 0x90;
 const CMD_ENCRYPTED_DM         = 0x90;
 const CMD_ENCRYPTED_BIN        = 0x91;
 
@@ -96,8 +97,6 @@ let discoveredChannels = {};
 let syncingMessages = false;
 let syncRequestInFlight = false;
 let syncPausedBackpressure = false;
-let channelDiscovery = false;
-let channelRefreshSeconds = DEFAULT_CHANNEL_REFRESH;
 let queuePollSeconds = DEFAULT_QUEUE_POLL;
 let nextQueuePollTime = 0;
 let configuredChannelNamekey = null;
@@ -110,6 +109,7 @@ let deviceName = null;
 let msgSeq = 0;
 let lastRxTime = null;
 let lastCmd = null;
+let lastDiscoveryNotice = 0;
 
 let stats = {
     opens: 0,
@@ -126,10 +126,6 @@ let stats = {
     sync_requests: 0,
     sync_backpressure: 0,
     responses_cached: 0,
-    channel_discovery_requests: 0,
-    channel_info_responses: 0,
-    channels_discovered: 0,
-    channels_updated: 0,
     direct_identity_unverified: 0,
     direct_identity_dropped: 0,
     group_receive_unverified: 0,
@@ -156,6 +152,24 @@ function log0(fmt, ...args)
 function log1(fmt, ...args)
 {
     DEBUG1("meshcore_serial_api: " + fmt, ...args);
+}
+
+function notifyIgnoredDiscovery(kind)
+{
+    const now = time();
+    if (lastDiscoveryNotice && now - lastDiscoveryNotice < DISCOVERY_NOTICE_INTERVAL) {
+        return;
+    }
+    lastDiscoveryNotice = now;
+    try {
+        global.event?.queue?.({ cmd: "/reply", reply: [
+            "<b>MeshCore discovery ignored</b>",
+            `${kind} discovery is not retained by Crow.`,
+            "Only direct messages and configured group-channel messages are kept."
+        ] });
+        global.event?.notify?.({ cmd: "channels" }, "meshcore-discovery-ignored");
+    }
+    catch (_) {}
 }
 
 function isDirectFrame(cmd)
@@ -205,15 +219,6 @@ function cstr(value)
     let n = length(value);
     while (n > 0 && ord(value, n - 1) === 0) n--;
     return substr(value, 0, n);
-}
-
-function fieldCString(value)
-{
-    if (!value) return "";
-    for (let i = 0; i < length(value); i++) {
-        if (ord(value, i) === 0) return substr(value, 0, i);
-    }
-    return value;
 }
 
 function maxPendingRx()
@@ -294,12 +299,6 @@ function closeSerial(reason)
     serialRx = null;
     serialTx = null;
     resetWireState();
-    // A reconnect may be a different radio or a changed slot assignment. Do
-    // not retain RF receive/send authority from the previous USB session;
-    // discovery must prove the exact tuple again.
-    discoveredChannels = {};
-    channel.clearMeshcoreSlotChannels();
-
     if (wasOpen) {
         stats.closes++;
         log0("serial closed (%s)\n", reason ?? "unknown");
@@ -547,24 +546,6 @@ function maybeRequestNext(reason)
     return sendSyncNextMessage(reason);
 }
 
-function requestChannelInfo(index, reason)
-{
-    if (!channelDiscovery || !serialTx || index < 0 || index > MAX_CHANNEL_INDEX) {
-        return false;
-    }
-    stats.channel_discovery_requests++;
-    log1("channel discovery slot=%d (%s)\n", index, reason ?? "unknown");
-    return sendCommand(CMD_GET_CHANNEL, chr(index));
-}
-
-function requestAllChannels(reason)
-{
-    if (!channelDiscovery || !serialTx) return;
-    for (let i = 0; i <= MAX_CHANNEL_INDEX; i++) {
-        requestChannelInfo(i, reason);
-    }
-}
-
 function parseSelfInfo(framePayload)
 {
     if (!framePayload || length(framePayload) < 36 || ord(framePayload, 0) !== RESP_SELF_INFO) {
@@ -584,43 +565,11 @@ function parseSelfInfo(framePayload)
     return start < end ? substr(framePayload, start, end - start) : null;
 }
 
-function decodeChannelInfo(framePayload)
-{
-    if (!framePayload || length(framePayload) < 50 || ord(framePayload, 0) !== RESP_CHANNEL_INFO) {
-        return null;
-    }
-    const index = ord(framePayload, 1);
-    if (index > MAX_CHANNEL_INDEX) return null;
-    const name = fieldCString(substr(framePayload, 2, 32));
-    const secret = substr(framePayload, 34, 16);
-    if (!name || !secret || length(secret) !== 16) return null;
-    const secret_b64 = b64enc(secret);
-    // MeshCore's built-in RF public channel is reported by Companion as
-    // `Public <fixed-key>`, while Crow's canonical local namekey is
-    // `MeshCore <same-fixed-key>`. Normalize that one known alias so the
-    // discovered radio slot can prove the existing Crow public channel.
-    const publicNamekey = channel.meshcorePublicChannelNamekey();
-    const publicParts = split(publicNamekey, " ");
-    // Compare the decoded fixed key as bytes. This avoids making the alias
-    // decision dependent on base64 formatting/padding from the device.
-    const isBuiltInPublic = name === "Public" && length(publicParts) === 2 &&
-        secret === b64dec(publicParts[1]);
-    const namekey = isBuiltInPublic ? publicNamekey : `${name} ${secret_b64}`;
-    return {
-        index: index,
-        name: name,
-        secret: secret,
-        secret_b64: secret_b64,
-        namekey: namekey
-    };
-}
-
 function mapConfiguredChannels()
 {
     // channel.setup() runs after meshcore.setup(), so map on each tick once
-    // Crow's configured channel table is available.  Discovery is the sole
-    // source of RF authority: a configured TX slot alone is not proof that
-    // this radio owns the same name/key tuple.
+    // Crow's configured channel table is available. Slots are explicitly
+    // configured; radio discovery is intentionally not retained.
     for (let index in discoveredChannels) {
         const found = discoveredChannels[index];
         const local = channel.getLocalChannelByNameKey(found.namekey);
@@ -634,6 +583,41 @@ function mapConfiguredChannels()
             channel.clearMeshcoreSlotChannel(found.index);
         }
     }
+}
+
+function registerConfiguredChannelSlots(config)
+{
+    const register = function (slot, namekey) {
+        slot = int(slot);
+        if (slot < 0 || slot > MAX_CHANNEL_INDEX || !namekey) return;
+        const parts = split(namekey, " ");
+        if (length(parts) !== 2) return;
+        discoveredChannels[`${slot}`] = {
+            index: slot,
+            name: parts[0],
+            secret_b64: parts[1],
+            namekey: namekey,
+            configured: true
+        };
+    };
+
+    register(outboundChannelIndex, configuredChannelNamekey);
+    const slots = cfg?.channel_slots;
+    if (type(slots) === "array") {
+        for (let i = 0; i < length(slots); i++) {
+            register(slots[i]?.slot, slots[i]?.namekey);
+        }
+    }
+    else if (slots && type(slots) === "object") {
+        for (let slot in slots) register(slot, slots[slot]);
+    }
+    const channels = config?.channels ?? [];
+    for (let i = 0; i < length(channels); i++) {
+        if (channels[i]?.meshcore_slot != null) {
+            register(channels[i].meshcore_slot, channels[i].namekey);
+        }
+    }
+    mapConfiguredChannels();
 }
 
 function verifiedLocalChannelForSlot(slot, namekey)
@@ -651,39 +635,6 @@ function verifiedLocalChannelForSlot(slot, namekey)
         return null;
     }
     return local;
-}
-
-function processChannelInfo(framePayload)
-{
-    stats.channel_info_responses++;
-    const found = decodeChannelInfo(framePayload);
-    if (!found) {
-        // An empty but otherwise valid slot is a negative discovery result.
-        // Forget any prior mapping so a removed/replaced RF channel cannot
-        // continue to route under the old tuple.
-        if (framePayload && length(framePayload) >= 50 &&
-            ord(framePayload, 0) === RESP_CHANNEL_INFO &&
-            ord(framePayload, 1) <= MAX_CHANNEL_INDEX &&
-            !cstr(substr(framePayload, 2, 32))) {
-            const emptyIndex = ord(framePayload, 1);
-            delete discoveredChannels[`${emptyIndex}`];
-            channel.clearMeshcoreSlotChannel(emptyIndex);
-        }
-        return;
-    }
-    const key = `${found.index}`;
-    const old = discoveredChannels[key];
-    if (!old) {
-        discoveredChannels[key] = found;
-        stats.channels_discovered++;
-        log0("discovered channel slot=%d name=%s\n", found.index, found.name);
-    }
-    else if (old.name !== found.name || old.secret_b64 !== found.secret_b64) {
-        discoveredChannels[key] = found;
-        stats.channels_updated++;
-        log0("updated channel slot=%d name=%s\n", found.index, found.name);
-    }
-    mapConfiguredChannels();
 }
 
 function parseChannelData(payload)
@@ -856,14 +807,12 @@ function smartAccumulate(data)
             syncingMessages = true;
             deviceName = parseSelfInfo(framePayload) ?? deviceName;
             if (deviceName) log0("connected Companion device: %s\n", deviceName);
-            if (channelDiscovery) requestAllChannels("self-info");
             continue;
         }
-        if (cmd === RESP_CHANNEL_INFO) {
-            stats.responses_cached++;
-            syncRequestInFlight = false;
-            push(responses, { cmd: cmd, payload: framePayload });
-            processChannelInfo(framePayload);
+if (cmd === RESP_CHANNEL_INFO) {
+    syncRequestInFlight = false;
+    notifyIgnoredDiscovery("Channel");
+            if (companionReady) maybeRequestNext("drop channel discovery");
             continue;
         }
         if (cmd === RESP_CHANNEL_DATA_RECV) {
@@ -876,6 +825,13 @@ function smartAccumulate(data)
                 log1("drop malformed channel datagram len=%d\n", length(payload));
             }
             if (companionReady) maybeRequestNext("channel data");
+            continue;
+        }
+        if (cmd === PUSH_NEW_ADVERT || cmd === PUSH_CONTACTS_FULL) {
+            notifyIgnoredDiscovery("Contact");
+            stats.early_drop_unknown_cmd++;
+            syncRequestInFlight = false;
+            if (companionReady) maybeRequestNext("drop contact discovery");
             continue;
         }
         if (!isDirectFrame(cmd) && !isGroupFrame(cmd)) {
@@ -1051,7 +1007,8 @@ export function setup(config)
     serialDevice = cfg.device ?? "/dev/ttyACM0";
     serialBaud = cfg.baud ?? 115200;
     serialState = cfg.enabled === true ? "opening" : "not-configured";
-    channelDiscovery = cfg.channel_discovery === true;
+    // Serial mode uses explicit Crow channel-to-radio slot mappings. The
+    // optional TCP discovery module is intentionally not part of this backend.
     strictDirectIdentity = cfg.strict_direct_identity === true || cfg.direct_identity_mode === "verified";
     channelDataTextTypes = {};
     const textTypes = cfg.channel_data_text_types;
@@ -1063,7 +1020,6 @@ export function setup(config)
             }
         }
     }
-    channelRefreshSeconds = cfg.channel_refresh_seconds ?? DEFAULT_CHANNEL_REFRESH;
     queuePollSeconds = cfg.queue_poll_seconds ?? DEFAULT_QUEUE_POLL;
     if (queuePollSeconds < 1) queuePollSeconds = 1;
     if (queuePollSeconds > 60) queuePollSeconds = 60;
@@ -1077,6 +1033,7 @@ export function setup(config)
         log0("invalid tx_channel_index=%s; using slot 0\n", outboundChannelIndex);
         outboundChannelIndex = 0;
     }
+    registerConfiguredChannelSlots(config);
     callsign = config?.callsign ?? null;
     deviceName = cfg.device_name ?? null;
     const gk = config?._gatekeeper;
@@ -1096,9 +1053,6 @@ export function setup(config)
     nextOpenTime = 0;
     openSerial();
     timers.setInterval("meshcore_serial_api.poll", SERIAL_POLL_INTERVAL);
-    if (channelDiscovery) {
-        timers.setInterval("meshcore_serial_api.channel_refresh", channelRefreshSeconds);
-    }
 };
 
 export function shutdown()
@@ -1227,9 +1181,6 @@ export function tick()
         syncingMessages = true;
         maybeRequestNext("periodic queue poll");
     }
-    if (serialTx && channelDiscovery && timers.tick("meshcore_serial_api.channel_refresh")) {
-        requestAllChannels("refresh");
-    }
 };
 
 export function process(msg) {};
@@ -1259,7 +1210,11 @@ export function status()
         baud: serialBaud,
         frame_mode: "framed",
         app_start_profile: cfg?.app_start_profile ?? "meshcore_cli",
-        channel_discovery: channelDiscovery,
+        channel_discovery: false,
+        channel_discovery_requests: 0,
+        channel_info_responses: 0,
+        channels_discovered: 0,
+        channels_updated: 0,
         configured_channel_namekey: configuredChannelNamekey,
         outbound_channel_index: outboundChannelIndex,
         pending_rx: length(pendingRx) + length(deferredFrames),
@@ -1282,10 +1237,6 @@ export function status()
         no_more_messages: stats.no_more_messages,
         sync_requests: stats.sync_requests,
         sync_backpressure: stats.sync_backpressure,
-        channel_discovery_requests: stats.channel_discovery_requests,
-        channel_info_responses: stats.channel_info_responses,
-        channels_discovered: stats.channels_discovered,
-        channels_updated: stats.channels_updated,
         direct_identity_unverified: stats.direct_identity_unverified,
         direct_identity_dropped: stats.direct_identity_dropped,
         direct_identity_mode: strictDirectIdentity ? "verified" : "compatibility",
@@ -1308,8 +1259,8 @@ export function status()
     };
 };
 
-// Focused parser/framing hooks used by test_meshcore_serial_api.uc.  These do
-// not require a physical serial device.
+// CROW_TEST_HOOKS_BEGIN
+// Focused parser/framing hooks used by the canonical ucode tests.
 export function _test_reset()
 {
     resetWireState();
@@ -1397,9 +1348,14 @@ export function _test_set_discovered_channel(index, namekey)
     return verifiedLocalChannelForSlot(index, namekey) !== null;
 };
 
+export function _test_set_configured_channel(index, namekey)
+{
+    return _test_set_discovered_channel(index, namekey);
+};
+
 export function _test_decode_channel_info(framePayload)
 {
-    return decodeChannelInfo(framePayload);
+    return require("meshcore_tcp_discovery_loader").parseChannelInfoForTest(framePayload);
 };
 
 export function _test_channel_receive_allowed(index, namekey)
@@ -1411,3 +1367,4 @@ export function _test_stats()
 {
     return stats;
 };
+// CROW_TEST_HOOKS_END

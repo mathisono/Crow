@@ -43,7 +43,10 @@ http://10.local.mesh/app/crow
 
 (Replace `10` with your node's IP on the mesh.)
 
-You should see an empty chat interface and a **Channels** section.
+You should see an empty chat interface and a **Channels** section. MeshCore
+channels are shown only when they are explicitly configured and mapped to a
+radio slot; Crow intentionally drops MeshCore contact and channel discovery
+data to protect low-RAM AREDN nodes.
 
 ### 3. **Add a Meshtastic or MeshCore Device**
 
@@ -59,7 +62,9 @@ You should see an empty chat interface and a **Channels** section.
     you want the direct bridge path
   - Click **Save**
 
-Crow will discover channels automatically. You should see them in the **Channels** panel within a few seconds.
+Crow will show the public channel and any explicitly configured channel-slot
+mappings. MeshCore discovery is intentionally disabled; this prevents unused
+contacts and channel records from consuming RAM.
 
 ### 4. **Send Your First Message**
 
@@ -120,7 +125,7 @@ Crow Node
 │   ├── UDP (multicast, default)
 │   └── TCP Companion API (opt-in, recommended)
 ├── Channel Discovery
-│   └── Auto-sync from radio
+│   └── Explicit configured mappings (MeshCore discovery is dropped)
 ├── Gatekeeper (ACL/anti-spam)
 └── Web UI
     ├── Chat interface
@@ -158,8 +163,9 @@ You can switch to **TCP Port-API** mode, which connects directly to your radio a
 Crow will connect and discover your channels within a few seconds.
 
 For MeshCore, use the TCP Companion API path instead of the UDP default when
-you want direct queue draining, channel discovery, and direct-message
-verification.
+you want direct queue draining and direct-message verification. MeshCore
+channel/contact discovery is intentionally disabled in Crow; configure only
+the channels that are needed and map them to the radio's slots.
 
 For details, see [Backend Selection Guide](BACKEND_SELECTION.md).
 
@@ -167,7 +173,9 @@ For details, see [Backend Selection Guide](BACKEND_SELECTION.md).
 
 ## Channel Configuration
 
-Channels in Crow mirror your radio's channels. You don't manually create channels—they're discovered from your Meshtastic or MeshCore device.
+Channels in Crow represent the radio channels that the operator has chosen to
+keep. Meshtastic TCP can use its documented discovery path, but Crow's
+low-RAM MeshCore path requires explicit channel name/key/slot mappings.
 
 ### Viewing Channels
 
@@ -196,7 +204,99 @@ To add a channel to your radio (and thus to Crow):
 
 Crow **never logs raw PSKs or encryption keys**. Channel encryption is handled by the radio firmware, transparent to Crow.
 
+## MeshCore channel soak benchmark
+
+The public channel directory at
+`https://bayareameshcore.com/channels/` (machine-readable source:
+`channels.json`) is the real-world baseline for this test. The directory
+contained **20 public channels** when the soak began on 2026-08-27. Those 20
+entries are a traffic reference, not 20 radio slots: MeshCore exposes slots
+0–7, and BB5/Hub5 currently use two mapped slots (public plus the private
+test channel).
+
+The passive monitor is used first for short five-minute soaks:
+
+```bash
+mkdir -p test-artifacts
+export CROW_NODE_PASSWORD='(operator-provided node password)'
+python3 tools/meshcore_channel_soak.py \\
+  --node NODE1=10.0.0.2 \\
+  --duration-hours 0.083333 \\
+  --interval-seconds 30 \\
+  --output test-artifacts/meshcore-channel-soak-5m-2slot.jsonl
+```
+
+It records the directory count/name digest, Crow service status, process RSS,
+available RAM, restart count, and fatal/OOM/ucode error deltas. It does not
+save channel secrets, inject traffic, alter radio channels, or retain message
+contents. Run each soak alongside normal live MeshCore traffic. The raw
+reports are ignored by Git; summarize the completed results in this section
+before a release.
+
+Acceptance criteria:
+
+- both Crow services remain running for the full 24 hours;
+- no new ucode, fatal, OOM, or kernel out-of-memory events;
+- no unexplained Crow restarts;
+- available RAM never reaches zero, with any sustained low-memory period
+  investigated before release;
+- channel handling is reported as mapped radio slots, separately from the
+  public directory's channel count.
+
+Preliminary live baseline at test start:
+
+| Node | Crow | Available RAM | Crow RSS | Mapped MeshCore slots |
+|---|---|---:|---:|---:|
+| BB5 | running | ~7.0 MiB | not yet stable | 2 |
+| Hub5 | running | ~21.3 MiB | not yet stable | 2 |
+
+Completed five-minute two-slot soak, 2026-08-27 19:31–19:36 PDT, using 30
+second samples (10 samples per node):
+
+| Node | Service samples | Available RAM range | Crow RSS range | Probe failures | New errors | PID changes |
+|---|---:|---:|---:|---:|---:|---:|
+| BB5 | 10/10 running | 7.9–9.9 MiB | 3.9–4.1 MiB | 0 | 0 | 0 |
+| Hub5 | 10/10 running | 25.5–27.4 MiB | 4.6 MiB | 0 | 0 | 0 |
+
+The completed run is a five-minute, two-mapped-slot soak. Short soaks are
+smoke tests, not the final release gate. A controlled slot-ramp test is
+required to claim a maximum beyond the current two-slot live configuration;
+adding directory entries alone would not create real MeshCore traffic. After
+the short-soak series passes, repeat the selected maximum configuration for
+24 hours before release.
+
 For details, see [Channel Management Guide](CHANNELS.md).
+
+## Keeping Crow running on AREDN
+
+Crow is supervised by OpenWrt `procd` and is enabled at boot. The service now
+continues retrying after crashes, while a separate `crow-watchdog` service
+checks the RAM-backed `/tmp/crow-heartbeat` every 60 seconds and restarts Crow
+if its process disappears or its event loop is stale for three minutes.
+
+Check both services and recent recovery events with:
+
+```sh
+/etc/init.d/crow status
+/etc/init.d/crow-watchdog status
+logread | grep -E 'crow|Crow'
+```
+
+For maintenance, stop the watchdog first so it does not undo an intentional
+Crow stop:
+
+```sh
+/etc/init.d/crow-watchdog stop
+/etc/init.d/crow stop
+```
+
+Nodes are always supplied explicitly so development tools never silently
+target a remembered live system:
+
+```sh
+python3 tools/meshcore_channel_soak.py --node NODE1=10.0.0.2 \
+  --duration-hours 24 --interval-seconds 60 --output test-artifacts/soak.jsonl
+```
 
 ---
 

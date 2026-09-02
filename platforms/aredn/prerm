@@ -1,4 +1,6 @@
 #!/bin/sh
+/etc/init.d/crow-watchdog stop
+/etc/init.d/crow-watchdog disable
 /etc/init.d/crow stop
 /etc/init.d/crow disable
 exit 0

@@ -10,6 +10,7 @@ const path = require('path');
 const { spawnSync } = require('child_process');
 
 const SOURCE = fs.readFileSync('meshcore_serial_api.uc', 'utf8');
+const DISCOVERY_SOURCE = fs.readFileSync('meshcore_tcp_discovery.uc', 'utf8');
 const FROM_RADIO = 0x3e;
 const TO_RADIO = 0x3c;
 const CMD_APP_START = 0x01;
@@ -163,14 +164,14 @@ ok('handles the real v3 queued-message prefix', SOURCE.includes('function incomi
 ok('rejects direct outbound messages', SOURCE.includes('channel.isDirect(msg.namekey)'));
 ok('uses real MeshCore group send command', SOURCE.includes('CMD_SEND_CHANNEL_TXT_MSG = 0x03'));
 ok('parses self-info from its printable trailing name', SOURCE.includes('function _test_parse_self_info(payload)') && SOURCE.includes('while (start > 0)'));
-ok('does not map a configured TX slot before discovery', !SOURCE.includes('channel.setMeshcoreSlotChannel(outboundChannelIndex, configured)'));
+ok('uses explicit configured channel slots without discovery', SOURCE.includes('registerConfiguredChannelSlots(config)') && SOURCE.includes('channel_discovery: false'));
 ok('requires exact tuple proof before serial send', SOURCE.includes('verifiedLocalChannelForSlot(outboundChannelIndex, configuredChannelNamekey)'));
-ok('normalizes Companion Public to Crow public namekey', SOURCE.includes('name === "Public"') && SOURCE.includes('channel.meshcorePublicChannelNamekey()'));
+ok('normalizes Companion Public to Crow public namekey', DISCOVERY_SOURCE.includes('name === "Public"') && DISCOVERY_SOURCE.includes('channel.meshcorePublicChannelNamekey()'));
 ok('waits for self-info before queue sync', SOURCE.includes('Wait for self-info or a queue push') && SOURCE.includes('companionReady && syncingMessages') && SOURCE.includes('if (cmd === RESP_SELF_INFO)'));
 ok('retries and reconnects after a lost serial handshake', SOURCE.includes('SERIAL_HANDSHAKE_ATTEMPTS') && SOURCE.includes('handshakeAttempts >= SERIAL_HANDSHAKE_ATTEMPTS') && SOURCE.includes('closeSerial("handshake timeout")'));
 ok('exposes serial handshake readiness', SOURCE.includes('handshake_ready: companionReady') && SOURCE.includes('handshake_attempts: handshakeAttempts'));
 ok('drops unverified serial group receive', SOURCE.includes('group_receive_unverified') && SOURCE.includes('until radio/Crow channel namekey matches'));
-ok('clears serial slot authority on reconnect', SOURCE.includes('channel.clearMeshcoreSlotChannels()') && SOURCE.includes('discoveredChannels = {}'));
+ok('does not retain radio discovery on reconnect', SOURCE.includes('optional TCP discovery module') && SOURCE.includes('configured: true'));
 ok('keeps Companion channel datagrams opt-in', SOURCE.includes('channel_data_text_types') && SOURCE.includes('channel_data_unrouted'));
 ok('bounds Companion channel datagrams', SOURCE.includes('MAX_CHANNEL_DATA_LENGTH') && SOURCE.includes('validChannelDataPayload') && SOURCE.includes('dataLen <= MAX_CHANNEL_DATA_LENGTH'));
 ok('reports modern direct identity as unverified', SOURCE.includes('direct_identity_verified: false') && SOURCE.includes('direct_identity_unverified++'));

@@ -24,7 +24,6 @@
 // =====================================================================
 
 import * as socket from "socket";
-import * as timers from "timers";
 import * as channel from "channel";
 import * as nodedb from "nodedb";
 import * as fs from "fs";
@@ -48,7 +47,6 @@ const CMD_SEND_DIRECT_MESSAGE  = 0x02;
 const CMD_SEND_CHANNEL_MESSAGE = 0x03;
 const CMD_ADD_UPDATE_CONTACT   = 0x09;
 const CMD_SYNC_NEXT_MESSAGE    = 0x0A;
-const CMD_GET_CHANNEL          = 0x1F;
 const CMD_SET_CHANNEL          = 0x20;
 const CMD_SEND_ANON_REQ        = 0x39;
 
@@ -98,11 +96,11 @@ const RECONNECT_INTERVAL       = 5;
 const SOCKET_READ_CHUNK        = 2048;
 const DEFAULT_MAX_PENDING_RX   = 4;
 const HARD_MAX_PENDING_RX      = 32;
-const DEFAULT_CHANNEL_REFRESH  = 600;
 const MAX_CHANNEL_INDEX        = 7;
-const DEFAULT_DISCOVERY_WINDOW = 1;
-const CHANNEL_REQUEST_TIMEOUT  = 5;
 const UNKNOWN_LOG_INTERVAL     = 64;
+const MAX_RESPONSE_CACHE       = 4;
+const MAX_DIRECT_PREFIXES      = 16;
+const DISCOVERY_NOTICE_INTERVAL = 300;
 
 const TEXT_TYPE_PLAIN          = 0x00;
 const TEXT_TYPE_CLI_DATA       = 0x01;
@@ -151,8 +149,7 @@ let serialProfile    = "crow_zeros";
 let nextReconnectTime = 0;
 let strictHook       = null;
 let channelDiscovery = false;
-let channelRefreshSeconds = DEFAULT_CHANNEL_REFRESH;
-let channelDiscoveryWindow = DEFAULT_DISCOVERY_WINDOW;
+let discovery         = null;
 
 let s                = null;
 let tcpbuf           = "";
@@ -171,13 +168,12 @@ let channelDataTextTypes = {};
 let strictDirectIdentity = false;
 let roomServers = [];
 let pendingRoomLogins = {};
+let roomLoginBootAttempted = false;
 let pendingChannelProvision = null;
 
-let channelScanActive = false;
-let channelScanNext = 0;
-let channelScanInFlight = false;
-let channelScanCurrent = null;
-let lastChannelRequestTime = 0;
+let directPrefixes = {};
+let directPrefixOrder = [];
+let lastDiscoveryNotice = 0;
 
 let stats            = {
     connects: 0,
@@ -200,12 +196,6 @@ let stats            = {
     channel_sends_ok: 0,
     channel_sends_failed: 0,
     group_receive_unverified: 0,
-    channel_scans: 0,
-    channel_discovery_requests: 0,
-    channel_info_responses: 0,
-    channel_discovery_timeouts: 0,
-    channels_discovered: 0,
-    channels_updated: 0,
     direct_identity_verified: 0,
     direct_identity_mismatch: 0,
     direct_identity_unverified: 0,
@@ -269,14 +259,27 @@ function notifyOperator(lines, mergekey)
     }
 }
 
-function notifyChannelDiscovered(ch, action)
+function notifyIgnoredDiscovery(kind)
 {
-    const verb = action === "updated" ? "updated" : "discovered";
+    const now = time();
+    if (lastDiscoveryNotice && now - lastDiscoveryNotice < DISCOVERY_NOTICE_INTERVAL) {
+        return;
+    }
+    lastDiscoveryNotice = now;
     notifyOperator([
-        `<b>MeshCore TCP API</b> ${verb} channel`,
-        `Index ${ch.index}: ${ch.name}`,
-        `Runtime only; not saved to Crow config.`
-    ], `meshcore-tcp-channel-${ch.index}`);
+        "<b>MeshCore discovery ignored</b>",
+        `${kind} discovery is not retained by Crow.`,
+        "Only direct messages and configured group-channel messages are kept."
+    ], "meshcore-discovery-ignored");
+}
+
+function cacheResponse(cmd, payload)
+{
+    if (length(responses) >= MAX_RESPONSE_CACHE) {
+        shift(responses);
+    }
+    push(responses, { cmd: cmd, payload: payload });
+    stats.responses_cached++;
 }
 
 function shouldLogFrame(code)
@@ -430,6 +433,68 @@ function mapDiscoveredChannels()
     }
 }
 
+// Called by the optional discovery module.  Configured slots remain in this
+// core module because they are needed for normal message routing; only radio
+// scanning and its transient request state live in meshcore_tcp_discovery.uc.
+function acceptDiscoveredChannel(ch)
+{
+    if (!ch || ch.index === null || !ch.namekey) return null;
+    const key = `${ch.index}`;
+    const old = discoveredChannels[key];
+    let action = null;
+    if (!old) {
+        discoveredChannels[key] = ch;
+        action = "discovered";
+    }
+    else if (old.name !== ch.name || old.secret_b64 !== ch.secret_b64) {
+        discoveredChannels[key] = ch;
+        action = "updated";
+    }
+    mapDiscoveredChannelIfLocal(ch);
+    return action;
+}
+
+function registerConfiguredChannelSlots(config)
+{
+    const register = function (slot, namekey) {
+        slot = int(slot);
+        if (slot < 0 || slot > MAX_CHANNEL_INDEX || !namekey) return;
+        const parts = split(namekey, " ");
+        if (length(parts) !== 2) return;
+        discoveredChannels[`${slot}`] = {
+            index: slot,
+            name: parts[0],
+            secret_b64: parts[1],
+            namekey: namekey,
+            configured: true
+        };
+    };
+
+    // MeshCore's built-in public channel is always slot 0 unless explicitly
+    // overridden. This keeps group text working without radio discovery.
+    register(config.meshcore_tcp_api?.public_channel_slot ??
+        config.meshcore_serial_api?.public_channel_slot ?? 0,
+        channel.meshcorePublicChannelNamekey());
+
+    const slots = cfg?.channel_slots;
+    if (type(slots) === "array") {
+        for (let i = 0; i < length(slots); i++) {
+            register(slots[i]?.slot, slots[i]?.namekey);
+        }
+    }
+    else if (slots && type(slots) === "object") {
+        for (let slot in slots) register(slot, slots[slot]);
+    }
+
+    const channels = config.channels ?? [];
+    for (let i = 0; i < length(channels); i++) {
+        if (channels[i]?.meshcore_slot != null) {
+            register(channels[i].meshcore_slot, channels[i].namekey);
+        }
+    }
+    mapDiscoveredChannels();
+}
+
 function verifiedLocalChannelForSlot(slot, namekey)
 {
     if (slot === null || slot < 0 || slot > MAX_CHANNEL_INDEX || !namekey) {
@@ -575,6 +640,8 @@ function publicKeyPrefixFromNode(id)
     if (id === null) {
         return null;
     }
+    const remembered = directPrefixes[`${id}`];
+    if (remembered) return remembered;
     const info = nodedb.getNode(id, false)?.nodeinfo;
     if (!info) {
         return null;
@@ -605,12 +672,12 @@ function rememberDirectPrefix(id, prefix)
         return;
     }
 
-    nodedb.createNode(id);
-    nodedb.updateNodeinfo(id, {
-        platform: "meshcore",
-        mc_public_key_prefix: substr(prefix, 0, 6),
-        mc_public_key_prefix_b64: b64enc(substr(prefix, 0, 6))
-    });
+    const key = `${id}`;
+    if (!directPrefixes[key]) push(directPrefixOrder, key);
+    directPrefixes[key] = substr(prefix, 0, 6);
+    while (length(directPrefixOrder) > MAX_DIRECT_PREFIXES) {
+        delete directPrefixes[shift(directPrefixOrder)];
+    }
 }
 
 function roomServerId(publicKey)
@@ -666,15 +733,6 @@ function roomServerFromConfig(record)
         sync_since: record.sync_since ?? 0
     };
 
-    nodedb.createNode(id);
-    nodedb.updateNodeinfo(id, {
-        id: sprintf("!%08x", id),
-        long_name: name,
-        short_name: shortName,
-        platform: "meshcore",
-        role: 32,
-        mc_public_key: publicKey
-    });
     return server;
 }
 
@@ -770,9 +828,6 @@ function resetState()
     syncingMessages = false;
     syncRequestInFlight = false;
     syncPausedBackpressure = false;
-    channelScanActive = false;
-    channelScanInFlight = false;
-    channelScanCurrent = null;
 }
 
 function disableNagle(sock)
@@ -813,6 +868,7 @@ function closeSocket(reason)
     s = null;
     nextReconnectTime = time() + RECONNECT_INTERVAL;
     resetState();
+    discovery?.resetScan?.();
 }
 
 function serialDeviceSafe(path)
@@ -1034,62 +1090,6 @@ function maybeRequestNext(reason)
     return sendSyncNextMessage(reason);
 }
 
-function requestChannelInfo(index, reason)
-{
-    if (!channelDiscovery || !s) {
-        return false;
-    }
-    stats.channel_discovery_requests++;
-    channelScanInFlight = true;
-    channelScanCurrent = index;
-    lastChannelRequestTime = time();
-    log1("channel discovery request index=%d reason=%s\n", index, reason ?? "unknown");
-    return sendCommand(CMD_GET_CHANNEL, chr(index & 0xff));
-}
-
-function continueChannelScan(reason)
-{
-    if (!channelDiscovery || !s || !channelScanActive || channelScanInFlight) {
-        return;
-    }
-    if (channelScanNext > MAX_CHANNEL_INDEX) {
-        channelScanActive = false;
-        channelScanCurrent = null;
-        log1("channel discovery scan complete\n");
-        return;
-    }
-    const idx = channelScanNext++;
-    requestChannelInfo(idx, reason);
-}
-
-function startChannelScan(reason)
-{
-    if (!channelDiscovery || !s || channelScanActive) {
-        return;
-    }
-    channelScanActive = true;
-    channelScanNext = 0;
-    channelScanInFlight = false;
-    channelScanCurrent = null;
-    stats.channel_scans++;
-    log1("channel discovery scan start reason=%s\n", reason ?? "unknown");
-    continueChannelScan(reason);
-}
-
-function checkChannelScanTimeout()
-{
-    if (!channelScanActive || !channelScanInFlight) {
-        return;
-    }
-    if (time() - lastChannelRequestTime >= CHANNEL_REQUEST_TIMEOUT) {
-        stats.channel_discovery_timeouts++;
-        log1("channel discovery timeout index=%s\n", channelScanCurrent);
-        channelScanInFlight = false;
-        channelScanCurrent = null;
-        continueChannelScan("timeout");
-    }
-}
-
 function buildSendChannelPayload(index, text)
 {
     text = substr(text ?? "", 0, MAX_TEXT_MESSAGE_LENGTH);
@@ -1144,6 +1144,29 @@ function sendRoomLoginRequest(server)
     state.sent_at = time();
     log0("room server login sent name=%s\n", server.name);
     return true;
+}
+
+function loginConfiguredRoomServersOnBoot()
+{
+    if (roomLoginBootAttempted || !s || length(roomServers) === 0) return;
+    roomLoginBootAttempted = true;
+
+    // Make one bounded contact/login attempt for the configured room server
+    // after each Crow process start.  The configured record supplies the
+    // default `hello` guest password when no password is specified.
+    for (let i = 0; i < length(roomServers); i++) {
+        const server = roomServers[i];
+        if (!server || pendingChannelProvision) continue;
+        const id = `${server.id}`;
+        if (pendingRoomLogins[id]) continue;
+        pendingRoomLogins[id] = { server: server, stage: "contact", sent_at: time() };
+        const ok = sendCommand(CMD_ADD_UPDATE_CONTACT, buildRoomServerContactPayload(server));
+        if (!ok) delete pendingRoomLogins[id];
+        if (ok) {
+            log0("room server boot login scheduled name=%s\n", roomServers[i].name);
+            break;
+        }
+    }
 }
 
 // ---------------------------------------------------------------------
@@ -1450,68 +1473,6 @@ function decodeTextFrame(cmd, payload)
     return null;
 }
 
-function decodeChannelInfo(framePayload)
-{
-    if (!framePayload || length(framePayload) < 50 || ord(framePayload, 0) !== RESP_CHANNEL_INFO) {
-        return null;
-    }
-    const index = ord(framePayload, 1);
-    const name = fieldCString(substr(framePayload, 2, 32));
-    const secret = substr(framePayload, 34, 16);
-    if (!name || length(name) === 0 || !secret || length(secret) === 0) {
-        return null;
-    }
-    const secret_b64 = b64enc(secret);
-    // Companion reports the built-in RF group as `Public`, while Crow uses
-    // its canonical MeshCore public namekey. Normalize only the fixed public
-    // key; custom channels retain their radio-reported name.
-    const publicNamekey = channel.meshcorePublicChannelNamekey();
-    const publicParts = split(publicNamekey, " ");
-    // Compare the decoded fixed key as bytes. This avoids making the alias
-    // decision dependent on base64 formatting/padding from the device.
-    const isBuiltInPublic = name === "Public" && length(publicParts) === 2 &&
-        secret === b64dec(publicParts[1]);
-    const namekey = isBuiltInPublic ? publicNamekey : `${name} ${secret_b64}`;
-    return {
-        index: index,
-        name: name,
-        secret: secret,
-        secret_b64: secret_b64,
-        namekey: namekey
-    };
-}
-
-function processChannelInfo(framePayload)
-{
-    stats.channel_info_responses++;
-    channelScanInFlight = false;
-    channelScanCurrent = null;
-
-    const ch = decodeChannelInfo(framePayload);
-    if (!ch) {
-        continueChannelScan("bad-channel-info");
-        return;
-    }
-
-    const key = `${ch.index}`;
-    const old = discoveredChannels[key];
-    if (!old) {
-        discoveredChannels[key] = ch;
-        stats.channels_discovered++;
-        log1("channel discovered index=%d name=%s\n", ch.index, ch.name);
-        notifyChannelDiscovered(ch, "discovered");
-    }
-    else if (old.name !== ch.name || old.secret_b64 !== ch.secret_b64) {
-        discoveredChannels[key] = ch;
-        stats.channels_updated++;
-        log1("channel updated index=%d name=%s\n", ch.index, ch.name);
-        notifyChannelDiscovered(ch, "updated");
-    }
-
-    mapDiscoveredChannelIfLocal(ch);
-    continueChannelScan("channel-info");
-}
-
 // ---------------------------------------------------------------------
 // Smart accumulator: frames -> typed actions/messages
 // ---------------------------------------------------------------------
@@ -1623,21 +1584,22 @@ function smartAccumulate(data)
                 deviceName = name;
                 channelCreated = false;
             }
-            startChannelScan("self-info");
+            discovery?.onSelfInfo?.();
+            loginConfiguredRoomServersOnBoot();
             continue;
         }
 
         if (cmd === RESP_CHANNEL_INFO) {
-            stats.responses_cached++;
             syncRequestInFlight = false;
-            push(responses, { cmd: cmd, payload: framePayload });
-            processChannelInfo(framePayload);
+            if (!discovery?.onChannelInfo?.(framePayload)) {
+                notifyIgnoredDiscovery("Channel");
+                maybeRequestNext("drop channel discovery");
+            }
             continue;
         }
 
         if (cmd === RESP_OK || cmd === RESP_ERROR) {
-            stats.responses_cached++;
-            push(responses, { cmd: cmd, payload: framePayload });
+            cacheResponse(cmd, framePayload);
             if (pendingChannelProvision) {
                 completeChannelProvision(cmd === RESP_OK);
             }
@@ -1666,6 +1628,14 @@ function smartAccumulate(data)
 
         if (cmd === PUSH_LOGIN_SUCCESS || cmd === PUSH_LOGIN_FAIL) {
             processRoomLogin(framePayload, cmd === PUSH_LOGIN_SUCCESS);
+            continue;
+        }
+
+        if (cmd === PUSH_CODE_NEW_ADVERT || cmd === PUSH_CODE_CONTACTS_FULL) {
+            notifyIgnoredDiscovery("Contact");
+            stats.early_drop_unknown_cmd++;
+            syncRequestInFlight = false;
+            maybeRequestNext("drop contact discovery");
             continue;
         }
 
@@ -1728,6 +1698,10 @@ function popPending(reason)
 
 function setupTransport(config, kind)
 {
+    if (discovery) {
+        discovery.shutdown();
+        discovery = null;
+    }
     if (s) closeSocket("reconfigure");
     enabled = false;
     cfg = kind === "serial"
@@ -1751,7 +1725,10 @@ function setupTransport(config, kind)
     if (serialProfile !== "crow_zeros" && serialProfile !== "meshcore_cli") {
         serialProfile = "crow_zeros";
     }
-    channelDiscovery = !!cfg.channel_discovery;
+    // Serial always uses explicitly configured slots. TCP channel scanning is
+    // an optional module so the normal message path does not pay for its
+    // parser, timer, or transient scan state.
+    channelDiscovery = !serialMode && cfg.channel_discovery === true;
     channelDataTextTypes = {};
     const textTypes = cfg.channel_data_text_types;
     if (textTypes && type(textTypes) === "array") {
@@ -1764,27 +1741,39 @@ function setupTransport(config, kind)
     }
     strictDirectIdentity = cfg.strict_direct_identity === true || cfg.direct_identity_mode === "verified";
     pendingRoomLogins = {};
+    roomLoginBootAttempted = false;
     pendingChannelProvision = null;
     loadRoomServers(config);
-    channelRefreshSeconds = cfg.channel_refresh_seconds ?? DEFAULT_CHANNEL_REFRESH;
-    channelDiscoveryWindow = cfg.channel_discovery_window ?? DEFAULT_DISCOVERY_WINDOW;
-    if (channelDiscoveryWindow < 1) channelDiscoveryWindow = 1;
-    if (channelDiscoveryWindow > 4) channelDiscoveryWindow = 4;
 
     deviceName = cfg.device_name ?? null;
     channelCreated = ensureConfiguredPublicChannel(config);
+    registerConfiguredChannelSlots(config);
 
     const gk = config._gatekeeper;
     strictHook = gk && type(gk.isEnabled) === "function"
         ? function () { return gk.isEnabled() === true; }
         : null;
 
+    if (channelDiscovery) {
+        try {
+            discovery = require("meshcore_tcp_discovery_loader");
+            discovery.setup({
+                enabled: true,
+                refresh_seconds: cfg.channel_refresh_seconds,
+                sendCommand: sendCommand,
+                onChannel: acceptDiscoveredChannel
+            });
+        }
+        catch (e) {
+            discovery = null;
+            channelDiscovery = false;
+            log0("unable to load optional channel discovery: %s\n", e);
+        }
+    }
+
     nextReconnectTime = 0;
     s = openTransport();
     if (s) sendBootHandshake();
-    if (channelDiscovery) {
-        timers.setInterval("meshcore_tcp_api.channel_refresh", channelRefreshSeconds);
-    }
 };
 
 export function setup(config)
@@ -1799,6 +1788,10 @@ export function setupSerial(config)
 
 export function shutdown()
 {
+    if (discovery) {
+        discovery.shutdown();
+        discovery = null;
+    }
     closeSocket("shutdown");
 };
 
@@ -2017,10 +2010,7 @@ export function tick()
     if (enabled && s && syncingMessages && !syncRequestInFlight && !pendingFull()) {
         maybeRequestNext(syncPausedBackpressure ? "resume after backpressure" : "tick resume");
     }
-    if (enabled && s && channelDiscovery && timers.tick("meshcore_tcp_api.channel_refresh")) {
-        startChannelScan("refresh");
-    }
-    checkChannelScanTimeout();
+    discovery?.tick?.();
 };
 
 export function process(msg)
@@ -2034,6 +2024,7 @@ export function pending()
 
 export function status()
 {
+    const discoveryStatus = discovery?.status?.() ?? {};
     return {
         connects: stats.connects,
         disconnects: stats.disconnects,
@@ -2062,13 +2053,13 @@ export function status()
         syncing_messages: syncingMessages,
         sync_request_in_flight: syncRequestInFlight,
         sync_paused_backpressure: syncPausedBackpressure,
-        channel_discovery: channelDiscovery,
-        channel_scans: stats.channel_scans,
-        channel_discovery_requests: stats.channel_discovery_requests,
-        channel_info_responses: stats.channel_info_responses,
-        channel_discovery_timeouts: stats.channel_discovery_timeouts,
-        channels_discovered: stats.channels_discovered,
-        channels_updated: stats.channels_updated,
+        channel_discovery: discoveryStatus.channel_discovery ?? false,
+        channel_scans: discoveryStatus.channel_scans ?? 0,
+        channel_discovery_requests: discoveryStatus.channel_discovery_requests ?? 0,
+        channel_info_responses: discoveryStatus.channel_info_responses ?? 0,
+        channel_discovery_timeouts: discoveryStatus.channel_discovery_timeouts ?? 0,
+        channels_discovered: discoveryStatus.channels_discovered ?? 0,
+        channels_updated: discoveryStatus.channels_updated ?? 0,
         direct_identity_verified: stats.direct_identity_verified,
         direct_identity_mismatch: stats.direct_identity_mismatch,
         direct_identity_unverified: stats.direct_identity_unverified,
@@ -2094,9 +2085,20 @@ export function status()
     };
 };
 
-// ---------------------------------------------------------------------
-// Test/introspection hooks
-// ---------------------------------------------------------------------
+export function takeResponse(cmd)
+{
+    for (let i = 0; i < length(responses); i++) {
+        if (responses[i].cmd === cmd) {
+            const resp = responses[i];
+            splice(responses, i, 1);
+            return resp;
+        }
+    }
+    return null;
+};
+
+// CROW_TEST_HOOKS_BEGIN
+// Parser/framing hooks used by the canonical ucode tests.
 
 export function _test_inject(data, gatekeeperShim)
 {
@@ -2131,11 +2133,18 @@ export function _test_set_strict_direct_identity(enabledMode)
 
 export function _test_reset()
 {
+    if (discovery) {
+        discovery.shutdown();
+        discovery = null;
+    }
     resetState();
     pendingRx = [];
     responses = [];
     msgSeq = 0;
     discoveredChannels = {};
+    directPrefixes = {};
+    directPrefixOrder = [];
+    lastDiscoveryNotice = 0;
     channel.clearMeshcoreSlotChannels();
     unknownFrameCounts = {};
     meshcoreSelfPublicKey = null;
@@ -2163,9 +2172,14 @@ export function _test_set_discovered_channel(index, namekey)
     return mapDiscoveredChannelIfLocal(discoveredChannels[`${index}`]);
 };
 
+export function _test_set_configured_channel(index, namekey)
+{
+    return _test_set_discovered_channel(index, namekey);
+};
+
 export function _test_decode_channel_info(framePayload)
 {
-    return decodeChannelInfo(framePayload);
+    return require("meshcore_tcp_discovery_loader").parseChannelInfoForTest(framePayload);
 };
 
 export function _test_channel_send_allowed(index, namekey)
@@ -2190,26 +2204,7 @@ export function _test_stats()
 
 export function _test_take_response(cmd)
 {
-    for (let i = 0; i < length(responses); i++) {
-        if (responses[i].cmd === cmd) {
-            const resp = responses[i];
-            splice(responses, i, 1);
-            return resp;
-        }
-    }
-    return null;
-};
-
-export function takeResponse(cmd)
-{
-    for (let i = 0; i < length(responses); i++) {
-        if (responses[i].cmd === cmd) {
-            const resp = responses[i];
-            splice(responses, i, 1);
-            return resp;
-        }
-    }
-    return null;
+    return takeResponse(cmd);
 };
 
 export function _test_build_frame(cmd, payload)
@@ -2256,3 +2251,4 @@ export function _test_build_room_contact(name, publicKey)
 {
     return buildCommand(CMD_ADD_UPDATE_CONTACT, buildRoomServerContactPayload({ name: name, public_key: publicKey }));
 };
+// CROW_TEST_HOOKS_END

@@ -334,16 +334,15 @@ api._test_reset();
     check("strict direct identity unverified counted", api._test_stats().direct_identity_unverified, 1);
 }
 
-// ---- 16. Channel info response is cached for discovery/control
+// ---- 16. Channel discovery response is dropped, not retained
 api._test_reset();
 {
     const response = chr(RESP_CHANNEL_INFO) + chr(0) + ("TacNet" + fillBytes(0, 26)) + fillBytes(1, 16);
     const frame = chr(0x3E) + chr(length(response) & 0xFF) + chr((length(response) >> 8) & 0xFF) + response;
     check("channel info: no Crow message emitted", length(api._test_inject(frame, STRICT_ON)), 0);
-    check("channel info: cached stat", api._test_stats().responses_cached, 1);
+    check("channel info: not cached", api._test_stats().responses_cached, 0);
     const cached = api._test_take_response(RESP_CHANNEL_INFO);
-    check("channel info: cached cmd", cached?.cmd, RESP_CHANNEL_INFO);
-    check("channel info: cached payload length", length(cached?.payload), 50);
+    check("channel info: no retained response", cached, null);
 }
 
 // ---- 17. Client-to-radio command frame uses '<' and little-endian length

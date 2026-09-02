@@ -9,7 +9,6 @@ import * as groups from "groups";
 import * as aprs from "aprs";
 import * as meshcore_backend from "meshcore_backend";
 import * as meshtastic_backend from "meshtastic_backend";
-import * as meshcore_discovery from "meshcore_tcp_discovery";
 import * as gatekeeper from "gatekeeper";
 
 function fmtBytes(n)
@@ -370,16 +369,9 @@ export function post(cmd, id)
                     const reply = [ "<b>Discovered Channels</b>", "&nbsp;" ];
 
                     if (backend === "all" || backend === "meshcore") {
-                        const groups_discovered = meshcore_discovery.getCachedGroups();
-                        if (groups_discovered && length(groups_discovered) > 0) {
-                            push(reply, "<b>═══ MeshCore Groups ═══</b>");
-                            for (let i = 0; i < length(groups_discovered); i++) {
-                                const g = groups_discovered[i];
-                                push(reply, `<b>Slot ${g.slot}: ${g.name}</b> (${g.key_size ?? "?"}-byte key)`);
-                                push(reply, `<div class="cj" onclick='cmd("/join ${g.name}")'>/join ${g.name}</div>`);
-                            }
-                            push(reply, "&nbsp;");
-                        }
+                        push(reply, "<b>MeshCore discovery disabled</b>");
+                        push(reply, "Configure MeshCore channel slots in Crow to use them.");
+                        push(reply, "&nbsp;");
                     }
 
                     if (backend === "all" || backend === "meshtastic") {
@@ -404,9 +396,7 @@ export function post(cmd, id)
                     }
 
                     push(reply, "<b>═══ Summary ═══</b>");
-                    const meshcore_groups = meshcore_discovery.getCachedGroups();
-                    const mc_count = meshcore_groups ? length(meshcore_groups) : 0;
-                    push(reply, `MeshCore: ${mc_count} discovered groups`);
+                    push(reply, "MeshCore: discovery disabled; no groups retained");
                     push(reply, "");
                     push(reply, "<i>Use /join &lt;channel_name&gt; to join</i>");
 
@@ -639,7 +629,9 @@ export function post(cmd, id)
                             const reply = [ "USB storage candidates:", "&nbsp;" ];
                             for (let i = 0; i < length(candidates); i++) {
                                 const d = candidates[i];
-                                push(reply, `<b>${d.device}</b> ${d.model ?? ""} ${fmtBytes(d.size_bytes)}${d.mounted ? " [mounted]" : ""}`);
+                                const identity = d.label ? ` label=${d.label}` : "";
+                                const filesystem = d.filesystem ? ` fs=${d.filesystem}` : "";
+                                push(reply, `<b>${d.device}</b> ${d.model ?? ""} ${fmtBytes(d.size_bytes)}${identity}${filesystem}${d.mounted ? " [mounted]" : ""}`);
                             }
                             event.queue({ cmd: "/reply", reply: reply, socket: id });
                             break;
@@ -669,6 +661,22 @@ export function post(cmd, id)
                     }
                     break;
                 }
+                case "assimilate":
+                {
+                    if (!storageSupported(id, "storageAssimilate")) {
+                        break;
+                    }
+                    const result = platform.storageAssimilate();
+                    const reply = [ result.ok ? "USB storage assimilated." : "USB assimilation failed.", result.message ?? "" ];
+                    if (result.device) {
+                        push(reply, `Device: ${result.device}${result.label ? ` label=${result.label}` : ""}${result.filesystem ? ` fs=${result.filesystem}` : ""}`);
+                    }
+                    if (result.discovery_run) {
+                        push(reply, "USB storage discovery/support setup was run.");
+                    }
+                    event.queue({ cmd: "/reply", reply: reply, socket: id });
+                    break;
+                }
                 case "quota":
                 {
                     if (cmd[2] === "images" && cmd[3]) {
@@ -684,7 +692,7 @@ export function post(cmd, id)
                     break;
                 }
                 default:
-                    event.queue({ cmd: "/reply", reply: [ "Usage:", "/storage status", "/storage usb scan", "/storage usb enable", "/storage usb disable", "/storage quota images <mb>" ], socket: id });
+                    event.queue({ cmd: "/reply", reply: [ "Usage:", "/storage status", "/storage assimilate", "/storage usb scan", "/storage usb enable", "/storage usb disable", "/storage quota images <mb>" ], socket: id });
                     break;
             }
             break;
@@ -703,6 +711,7 @@ export function post(cmd, id)
                 "<b>/cmd meshcore room ...</b> &mdash; add/login to a MeshCore room server",
                 "<b>/cmd meshcore private ...</b> &mdash; provision a MeshCore private channel",
                 "<b>/storage</b> status &mdash; show active storage state",
+                "<b>/storage assimilate</b> &mdash; discover and activate an existing USB data drive (never formats)",
                 "<b>/channels</b> &mdash; list public channels on local network"
             ], socket: id });
             break;

@@ -37,11 +37,39 @@ cp "$SRC/platforms/aredn/firewall" "$ROOT/data/etc/local/mesh-firewall/21-crow"
 cp "$SRC"/*.uc "$ROOT/data/usr/local/crow/"
 # Remove raven.uc (APRS app, not part of Crow LoRa router)
 rm -f "$ROOT/data/usr/local/crow/raven.uc"
+# Keep parser/framing hooks available to source-level tests, but do not ship
+# them to constrained nodes. Marked blocks must be balanced in every module.
+for module in "$ROOT/data/usr/local/crow"/*.uc; do
+    stripped="$module.release"
+    awk '
+        /CROW_TEST_HOOKS_BEGIN/ {
+            if (skip) exit 2
+            skip = 1
+            next
+        }
+        /CROW_TEST_HOOKS_END/ {
+            if (!skip) exit 3
+            skip = 0
+            next
+        }
+        !skip { print }
+        END { if (skip) exit 4 }
+    ' "$module" > "$stripped" || {
+        echo "Unbalanced test-hook markers in $module" >&2
+        exit 1
+    }
+    mv "$stripped" "$module"
+done
+if grep -R -n -E 'CROW_TEST_HOOKS|export (function|const) _test_|ForTest' "$ROOT/data/usr/local/crow"; then
+    echo "Development test hooks leaked into the release payload" >&2
+    exit 1
+fi
 cp "$SRC"/crypto/*.uc "$ROOT/data/usr/local/crow/crypto/"
 cp "$SRC"/platforms/aredn/*.uc "$ROOT/data/usr/local/crow/platforms/aredn/"
 cp "$SRC/platforms/aredn/raven.conf" "$ROOT/data/usr/local/crow/crow.conf"
 cp "$SRC/platforms/aredn/crow-migrate-raven.sh" "$ROOT/data/usr/local/crow/platforms/aredn/crow-migrate-raven.sh"
 cp "$SRC/platforms/aredn/crow-runner.sh" "$ROOT/data/usr/local/crow/platforms/aredn/crow-runner.sh"
+cp "$SRC/platforms/aredn/crow-watchdog.sh" "$ROOT/data/usr/local/crow/platforms/aredn/crow-watchdog.sh"
 if ! command -v "$GO_BIN" >/dev/null 2>&1; then
     echo "Go is required to build the AREDN crow-rawtty helper (set GO_BIN or install go)." >&2
     exit 1
@@ -61,12 +89,13 @@ cp "$SRC/platforms/aredn/admin.sh" "$ROOT/data/www/cgi-bin/apps/crow/admin"
 cp "$SRC/platforms/aredn/image.uc" "$ROOT/data/www/cgi-bin/apps/crow/image"
 
 cp "$SRC/platforms/aredn/crow.init" "$ROOT/data/etc/init.d/crow"
+cp "$SRC/platforms/aredn/crow-watchdog.init" "$ROOT/data/etc/init.d/crow-watchdog"
 
 cp "$SRC/platforms/aredn/upgrade.conf" "$ROOT/data/etc/arednsysupgrade.d/crow.conf"
 
-chmod 755 "$ROOT/data/etc/local/mesh-firewall/21-crow" "$ROOT/data/etc/init.d/crow"
+chmod 755 "$ROOT/data/etc/local/mesh-firewall/21-crow" "$ROOT/data/etc/init.d/crow" "$ROOT/data/etc/init.d/crow-watchdog"
 chmod 755 "$ROOT/data/www/apps/crow"/* "$ROOT/data/www/cgi-bin/apps/crow/admin" "$ROOT/data/www/cgi-bin/apps/crow/image"
-chmod 755 "$ROOT/data/usr/local/crow/platforms/aredn/crow-runner.sh" "$ROOT/data/usr/local/crow/platforms/aredn/crow-migrate-raven.sh"
+chmod 755 "$ROOT/data/usr/local/crow/platforms/aredn/crow-runner.sh" "$ROOT/data/usr/local/crow/platforms/aredn/crow-migrate-raven.sh" "$ROOT/data/usr/local/crow/platforms/aredn/crow-watchdog.sh"
 
 mkdir -p "$ROOT/data/usr/local/crow/winlink/forms"
 cp -R "$SRC/winlink/forms"/* "$ROOT/data/usr/local/crow/winlink/forms"

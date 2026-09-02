@@ -5,13 +5,59 @@ import * as utils from "utils";
 
 const SAVE_INTERVAL = 31 * 60; // 31 minutes
 const KEEP_WINDOW = 7 * 24 * 60 * 60; // 7 days
+const MAX_TRANSIENT_MESHCORE = 16;
+const TRANSIENT_MESHCORE_TTL = 60 * 60;
 
 // Keep standalone module tests safe before the platform lifecycle calls setup().
 let nodedb = {};
+let transientMeshcore = {};
+let transientMeshcoreOrder = [];
+
+function isMeshcoreContact(n)
+{
+    return n?.nodeinfo?.platform === "meshcore" ||
+        n?.nodeinfo?.platform === "meshcore-direct";
+}
+
+function pruneMeshcoreContacts()
+{
+    let removed = 0;
+    for (let id in nodedb) {
+        if (isMeshcoreContact(nodedb[id]) && !nodedb[id].favorite) {
+            delete nodedb[id];
+            removed++;
+        }
+    }
+    if (removed > 0) {
+        DEBUG0("nodedb: removed %d non-favorite MeshCore contacts\n", removed);
+        platform.store("nodedb", nodedb);
+    }
+}
+
+function pruneTransientMeshcore()
+{
+    const cutoff = time() - TRANSIENT_MESHCORE_TTL;
+    for (let id in transientMeshcore) {
+        if ((transientMeshcore[id].lastseen ?? 0) < cutoff) {
+            delete transientMeshcore[id];
+            for (let i = 0; i < length(transientMeshcoreOrder); i++) {
+                if (transientMeshcoreOrder[i] === id) {
+                    splice(transientMeshcoreOrder, i, 1);
+                    break;
+                }
+            }
+        }
+    }
+}
 
 export function setup(config)
 {
     nodedb = platform.load("nodedb") ?? {};
+    transientMeshcore = {};
+    transientMeshcoreOrder = [];
+    // Crow retains direct/group text, not the MeshCore contact directory.
+    // Purge old records at boot so the policy takes effect immediately.
+    pruneMeshcoreContacts();
     // The following can be removed after people have updated
     for (let k in nodedb) {
         const n = nodedb[k];
@@ -22,10 +68,11 @@ export function setup(config)
 
 function saveDB()
 {
+    pruneTransientMeshcore();
     const window = time() - KEEP_WINDOW;
     for (let id in nodedb) {
         const n = nodedb[id];
-        if (n.lastseen < window && !n.favorite) {
+        if ((isMeshcoreContact(n) || n.lastseen < window) && !n.favorite) {
             delete nodedb[id];
         }
     }
@@ -52,11 +99,23 @@ export function getNode(id, create)
             nodeinfo: node.getInfo()
         };
     }
-    return nodedb[id] ?? (create === false ? null : { id: id });
+    return nodedb[id] ?? transientMeshcore[`${id}`] ?? (create === false ? null : { id: id });
 };
 
 function saveNode(n)
 {
+    if (n.meshcore_transient) {
+        const key = `${n.id}`;
+        if (!transientMeshcore[key]) {
+            push(transientMeshcoreOrder, key);
+        }
+        n.lastseen = time();
+        transientMeshcore[key] = n;
+        while (length(transientMeshcoreOrder) > MAX_TRANSIENT_MESHCORE) {
+            delete transientMeshcore[shift(transientMeshcoreOrder)];
+        }
+        return;
+    }
     if (!n.me) {
         nodedb[n.id] = n;
         n.lastseen = time();
@@ -81,6 +140,12 @@ export function getNodeByMeshcoreLongname(longname)
             return nodedb[k];
         }
     }
+    for (let k in transientMeshcore) {
+        const info = transientMeshcore[k].nodeinfo;
+        if (info && info.long_name === longname && info.platform === "meshcore") {
+            return transientMeshcore[k];
+        }
+    }
     return null;
 };
 
@@ -91,10 +156,26 @@ export function getNodeByMeshcorePublickey(public_key, create)
             return nodedb[k];
         }
     }
+    for (let k in transientMeshcore) {
+        if (transientMeshcore[k].nodeinfo?.mc_public_key === public_key) {
+            return transientMeshcore[k];
+        }
+    }
     if (create === false) {
         return null;
     }
-    return createNode(struct.unpack(">I", public_key)[0]);
+    const id = struct.unpack(">I", public_key)[0];
+    const transient = {
+        id: id,
+        meshcore_transient: true,
+        nodeinfo: {
+            platform: "meshcore",
+            mc_public_key: public_key,
+            is_unmessagable: false
+        }
+    };
+    saveNode(transient);
+    return transient;
 };
 
 export function getNodesByPublickeyHash(publicKeyHash, wantNative)
@@ -107,6 +188,13 @@ export function getNodesByPublickeyHash(publicKeyHash, wantNative)
             if ((wantNative && isNative) || (!wantNative && !isNative)) {
                 push(nodes, n);
             }
+        }
+    }
+    for (let k in transientMeshcore) {
+        const n = transientMeshcore[k];
+        if (!wantNative && n.nodeinfo?.mc_public_key !== null &&
+            ord(n.nodeinfo.mc_public_key) === publicKeyHash) {
+            push(nodes, n);
         }
     }
     return nodes;

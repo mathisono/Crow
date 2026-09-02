@@ -1,5 +1,3 @@
-import * as udp from "meshtastic";
-import * as api from "meshtastic_API";
 import * as channel from "channel";
 
 let active = null;
@@ -7,10 +5,26 @@ let activeName = null;
 let lastConfig = null;
 export let enabled = false;
 
+// Do not instantiate both the UDP and Port API implementations on startup.
+// The AREDN target is often memory constrained, and only one transport can be
+// active for a given configuration.
+function loadBackend(name)
+{
+    switch (name) {
+        case "udp":
+            return require("meshtastic_udp_loader");
+        case "tcp":
+            return require("meshtastic_tcp_loader");
+        default:
+            return null;
+    }
+}
+
 export function registerProto(name, portnum, decode)
 {
-    udp.registerProto(name, portnum, decode);
-    api.registerProto(name, portnum, decode);
+    if (active?.registerProto) {
+        active.registerProto(name, portnum, decode);
+    }
 };
 
 function log0(fmt, ...args)
@@ -122,17 +136,30 @@ export function setup(config)
     enabled = false;
 
     if (wantsApi(config)) {
-        active = api;
         activeName = "tcp";
     }
     else if (wantsUdp(config)) {
         ensureDefaultChannel(config, channel.meshtasticPublicChannelNamekey(), "Meshtastic~Public");
-        active = udp;
         activeName = "udp";
     }
 
-    if (!active) {
+    if (!activeName) {
         log0("disabled\n");
+        return;
+    }
+
+    const selected = activeName;
+    try {
+        active = loadBackend(activeName);
+        // meshtasticprotobufs is a definition registry, not a backend. Load
+        // it only after the selected transport exists so it cannot pull both
+        // transport implementations into the module graph.
+        require("meshtasticprotobufs_loader").setup(active);
+    }
+    catch (e) {
+        active = null;
+        activeName = null;
+        log0("unable to load %s backend: %s\n", selected ?? "meshtastic", e);
         return;
     }
 

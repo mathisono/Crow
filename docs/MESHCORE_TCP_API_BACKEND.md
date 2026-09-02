@@ -1,6 +1,6 @@
 # MeshCore TCP / Serial-WiFi API Backend
 
-> Status: Implemented. Stock outer framing, bounded message-waiting sync, channel discovery, direct/channel receive, and direct/channel transmit are shared by the TCP and USB serial transports. Live hardware validation remains transport/device dependent.
+> Status: Implemented. Stock outer framing, bounded message-waiting sync, configured-slot group receive, and direct/channel transmit are shared by the TCP and USB serial transports. MeshCore contact/channel discovery is intentionally discarded. Live hardware validation remains transport/device dependent.
 
 ## Scope
 
@@ -104,7 +104,8 @@ No double-filtering: `router.uc:queue()` runs the canonical `gatekeeper.filterIn
 
 ## Discovery
 
-`meshcore_tcp_discovery.uc` now sends channel discovery requests through `meshcore_tcp_api.sendCommand()`.
+`meshcore_tcp_discovery.uc` remains only as a compatibility module; it no
+longer requests or returns radio channel discovery data.
 
 Discovery request:
 
@@ -124,7 +125,8 @@ RESP_CODE_CHANNEL_INFO = 0x12
   bytes 34-49 16-byte secret
 ```
 
-The TCP backend caches `0x12` responses. Discovery drains cached responses using `takeResponse(0x12)` and maps discovered slots to channels.
+The TCP backend drops `0x12` responses. Group slots are mapped only from Crow
+configuration (`channel_slots` or `meshcore_slot`).
 
 Because the socket is non-blocking, discovery is asynchronous: one sync may send requests, and a later sync may parse responses that arrived afterward.
 
@@ -133,15 +135,14 @@ Because the socket is non-blocking, discovery is asynchronous: one sync may send
 The TCP and USB backends can stay enabled while RF group traffic remains safe
 per channel. A group frame is accepted only when all three values agree:
 
-1. the radio-reported channel slot from `0x12`;
-2. the radio-reported channel name/key;
+1. the explicitly configured radio channel slot;
+2. the configured channel name/key;
 3. Crow's local channel `namekey` (`<name> <base64-key>`).
 
-Discovery is read-only and authoritative for the radio side. Crow does not
-invent a key, write the radio, or auto-enable an unmatched discovered group.
-If the exact tuple is not present, inbound group traffic is dropped and
-outbound channel sends fail safely. Set `channel_discovery: true` when using
-this gate; a static slot/namekey guess is not sufficient to verify the radio.
+Crow does not retain discovery data or auto-enable an unmatched group. If the
+exact configured tuple is not present, inbound group traffic is dropped and
+outbound channel sends fail safely. The built-in public channel defaults to
+slot 0; use `channel_slots` or `meshcore_slot` for other groups.
 
 ## Smart Accumulator
 

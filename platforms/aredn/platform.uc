@@ -22,6 +22,9 @@ const CROW_INTERNAL_ROOT = "/usr/local/crow";
 const CROW_TMP_ROOT = "/tmp/apps/crow";
 const CROW_USB_MOUNT = "/mnt/crow";
 const CROW_USB_LABEL = "CROWDATA";
+const CROW_USB_SETUP = "/usr/local/crow/platforms/aredn/usb-setup.sh";
+const CROW_USB_ASSIMILATE_STATUS = "/tmp/crow-storage-assimilate.status";
+const CROW_USB_ASSIMILATE_LOG = "/tmp/crow-storage-assimilate.log";
 const DEFAULT_IMAGE_QUOTA = 64 * 1024 * 1024;
 const DEFAULT_MIN_FREE = 16 * 1024 * 1024;
 
@@ -116,13 +119,23 @@ function installCrowInitCompat()
     system("/bin/chmod 755 /etc/init.d/crow >/dev/null 2>&1");
 }
 
-function installStorageHotplug()
+function installStorageHotplug(device)
 {
-    const hotplugLabel = safeShellArg(storageLabel) ?? CROW_USB_LABEL;
+    const info = blockInfo(device);
+    const hotplugUUID = safeShellArg(info.UUID ?? "");
+    const hotplugLabel = safeShellArg(info.LABEL ?? storageLabel);
     const hotplugMount = safeShellArg(storageMountpoint);
-    if (!hotplugMount) {
+    if (!hotplugMount || (!hotplugUUID && !hotplugLabel)) {
         return false;
     }
+    const matchPatterns = [];
+    if (hotplugUUID) {
+        push(matchPatterns, `*UUID=${hotplugUUID}*`);
+    }
+    if (hotplugLabel) {
+        push(matchPatterns, `*LABEL=${hotplugLabel}*`);
+    }
+    const hotplugMatch = join("|", matchPatterns);
     if (!fs.access("/etc/hotplug.d/block")) {
         mkdirp("/etc/hotplug.d/block");
     }
@@ -132,8 +145,9 @@ function installStorageHotplug()
 [ -n "$DEVNAME" ] || exit 0
 DEV="/dev/$DEVNAME"
 INFO="$(/sbin/block info "$DEV" 2>/dev/null)"
-case "$INFO" in
-    *LABEL="${hotplugLabel}"*|*LABEL=${hotplugLabel}*) ;;
+NORMALIZED="$(printf '%s' "$INFO" | tr -d '\"')"
+case "$NORMALIZED" in
+    ${hotplugMatch}) ;;
     *) exit 0 ;;
 esac
 mkdir -p "${hotplugMount}"
@@ -159,7 +173,7 @@ function persistStorageMount(device)
     }
 
     installCrowInitCompat();
-    installStorageHotplug();
+    installStorageHotplug(device);
 
     let cmd = "/sbin/uci -q delete fstab.crow >/dev/null 2>&1; ";
     cmd += "/sbin/uci set fstab.crow=mount; ";
@@ -299,6 +313,34 @@ function copyIfMissing(srcDir, dstDir)
     }
 }
 
+function migrateTemporaryImagesToUsb()
+{
+    const srcDir = `${CROW_TMP_ROOT}/images`;
+    const dstDir = `${storageMountpoint}/images`;
+    if (!fs.access(srcDir) || !fs.access(dstDir)) {
+        return;
+    }
+    const entries = fs.lsdir(srcDir);
+    for (let i = 0; i < length(entries); i++) {
+        const src = `${srcDir}/${entries[i]}`;
+        const dst = `${dstDir}/${entries[i]}`;
+        const srcInfo = fs.lstat(src);
+        if (srcInfo?.type !== "file") {
+            continue;
+        }
+        if (!fs.access(dst)) {
+            const data = fs.readfile(src);
+            if (data != null) {
+                fs.writefile(dst, data);
+            }
+        }
+        const dstInfo = fs.lstat(dst);
+        if (dstInfo?.type === "file" && dstInfo.size === srcInfo.size) {
+            fs.unlink(src);
+        }
+    }
+}
+
 function migrateDataToUsb()
 {
     if (storageState !== "usb" || !storageMountpoint) {
@@ -306,7 +348,7 @@ function migrateDataToUsb()
     }
     // Copy message data from internal to USB if USB dirs are empty
     copyIfMissing(`${CROW_INTERNAL_ROOT}/data`, `${storageMountpoint}/data`);
-    copyIfMissing(`${CROW_TMP_ROOT}/images`, `${storageMountpoint}/images`);
+    migrateTemporaryImagesToUsb();
     // Winlink forms subdirectories need recursive handling
     const formSrc = `${CROW_INTERNAL_ROOT}/winlink/forms`;
     const formDst = `${storageMountpoint}/winlink/forms`;
@@ -392,7 +434,8 @@ function imageQuotaPrune()
         }
     }
     sort(files, (a, b) => a.mtime - b.mtime);
-    for (let i = 0; size > storageImageQuota && i < length(files); i++) {
+    const limit = storageState === "usb" ? storageImageQuota : maxBinarySize;
+    for (let i = 0; size > limit && i < length(files); i++) {
         fs.unlink(files[i].path);
         size -= files[i].size;
     }
@@ -457,13 +500,17 @@ function setupStorage(config)
             }
             const sectors = readTrim(`/sys/block/${b}/size`) + 0;
             const device = partitionForBlock(b);
+            const info = blockInfo(device);
             mounted = currentMountDevice(storageMountpoint) === device;
             push(candidates, {
                 device: device,
                 block: b,
                 model: readTrim(`/sys/block/${b}/device/model`) ?? "removable storage",
                 size_bytes: sectors * 512,
-                mounted: mounted
+                mounted: mounted,
+                label: info.LABEL,
+                filesystem: info.TYPE,
+                uuid: info.UUID
             });
         }
     }
@@ -472,7 +519,17 @@ function setupStorage(config)
     return candidates;
 }
 
-/* export */ function storageMount()
+function selectStorageCandidate(candidates)
+{
+    for (let i = 0; i < length(candidates); i++) {
+        if (candidates[i].label === storageLabel) {
+            return candidates[i];
+        }
+    }
+    return length(candidates) === 1 ? candidates[0] : null;
+}
+
+/* export */ function storageMount(requestedDevice)
 {
     if (!hasUsbPort()) {
         setInternalStorage();
@@ -487,7 +544,7 @@ function setupStorage(config)
         return { ok: true, message: "USB storage active." };
     }
 
-    let device = storageDevice;
+    let device = requestedDevice ?? storageDevice;
     if (device && !deviceIsSafeUsb(device)) {
         setDegradedStorage(`Refusing unsafe storage device ${device}`);
         return { ok: false, message: storageReason };
@@ -499,7 +556,12 @@ function setupStorage(config)
             setDegradedStorage("No removable USB storage candidates found.");
             return { ok: false, message: storageReason };
         }
-        device = candidates[0].device;
+        const candidate = selectStorageCandidate(candidates);
+        if (!candidate) {
+            setDegradedStorage("Multiple removable drives found and none is labeled CROWDATA.");
+            return { ok: false, message: storageReason };
+        }
+        device = candidate.device;
     }
 
     if (!deviceIsSafeUsb(device)) {
@@ -528,6 +590,75 @@ function setupStorage(config)
     migrateDataToUsb();
     imageQuotaPrune();
     return { ok: true, message: "USB storage active." };
+}
+
+function assimilationFailureMessage(status)
+{
+    switch (status) {
+        case "no-package-manager":
+            return "Neither apk nor opkg is available to install USB storage support.";
+        case "package-install-failed":
+            return "USB storage support packages could not be installed. Check package feeds and the system log.";
+        case "no-usb-controller":
+            return "No active USB host controller was found after loading storage support.";
+        case "no-removable-drive":
+            return "USB support loaded, but no removable block drive appeared. Reinsert the flash drive and retry.";
+        case "unsupported-filesystem":
+            return "The removable drive was found, but its existing filesystem is not supported. Assimilation never formats media.";
+        default:
+            return "USB discovery failed. Check /tmp/crow-storage-assimilate.log for details.";
+    }
+}
+
+/* export */ function storageAssimilate()
+{
+    if (!hasUsbPort()) {
+        setInternalStorage();
+        return { ok: false, message: "This device does not have a USB port." };
+    }
+
+    storageMode = "usb";
+    let candidates = storageScan();
+    let discoveryRun = false;
+    if (!candidates || length(candidates) === 0) {
+        if (!fs.access(CROW_USB_SETUP)) {
+            setDegradedStorage("Crow USB discovery helper is missing.");
+            return { ok: false, message: storageReason };
+        }
+        discoveryRun = true;
+        const setupArg = safeShellArg(CROW_USB_SETUP);
+        const logArg = safeShellArg(CROW_USB_ASSIMILATE_LOG);
+        if (!setupArg || !logArg) {
+            setDegradedStorage("Crow USB discovery helper path is invalid.");
+            return { ok: false, message: storageReason };
+        }
+        const rc = system(`${setupArg} assimilate >${logArg} 2>&1`);
+        const status = readTrim(CROW_USB_ASSIMILATE_STATUS);
+        if (rc !== 0 || status !== "ready") {
+            const reason = assimilationFailureMessage(status);
+            setDegradedStorage(reason);
+            return { ok: false, message: reason, discovery_run: true };
+        }
+        candidates = storageScan();
+    }
+
+    const candidate = selectStorageCandidate(candidates ?? []);
+    if (!candidate) {
+        const reason = length(candidates ?? []) > 1
+            ? "Multiple removable drives found and none is labeled CROWDATA."
+            : "No removable USB storage candidates found.";
+        setDegradedStorage(reason);
+        return { ok: false, message: reason, discovery_run: discoveryRun };
+    }
+    const result = storageMount(candidate.device);
+    result.discovery_run = discoveryRun;
+    result.device = candidate.device;
+    result.label = candidate.label;
+    result.filesystem = candidate.filesystem;
+    if (result.ok) {
+        result.message = `${candidate.device} mounted at ${storageMountpoint}; Crow data and images assimilated.`;
+    }
+    return result;
 }
 
 /* export */ function storageDisable()
@@ -613,6 +744,9 @@ function setupStorage(config)
     const binarymem = freemem * MAX_BINARY_MEM;
     if (binarymem > maxBinarySize) {
         maxBinarySize = binarymem;
+    }
+    if (storageState !== "usb") {
+        imageQuotaPrune();
     }
 
     if (services.watch) {
@@ -778,14 +912,14 @@ function path(name)
     // Reduce cached files to maxBinarySize, or persistent image files to image quota.
     const dirname = fs.dirname(p);
     let size = 0;
-    const limit = index(name, "img") === 0 ? storageImageQuota : maxBinarySize;
+    const limit = index(name, "img") === 0 && storageState === "usb" ? storageImageQuota : maxBinarySize;
     const dir = map(fs.lsdir(dirname), f => {
         const i = fs.stat(`${dirname}/${f}`);
         size += i.size;
         return { f: f, m: i.mtime, s: i.size };
     });
     sort(dir, (a, b) => a.m - b.m);
-    for (let i = 0; size > limit && i < length(dir); i++) {
+    for (let i = 0; size + length(data) > limit && i < length(dir); i++) {
         size -= dir[i].s;
         fs.unlink(`${dirname}/${dir[i].f}`);
     }
@@ -1122,6 +1256,7 @@ return {
     storageStatus,
     storageScan,
     storageMount,
+    storageAssimilate,
     storageDisable,
     storageImageQuota
 };

@@ -1,17 +1,11 @@
 #!/usr/bin/env python3
 """Query a Crow channel using the same WebSocket protocol as ui/ui.js."""
 
-import importlib.util
 import json
 import sys
 import time
 
-
-def load_ws():
-    spec = importlib.util.spec_from_file_location("crow_ws", "/tmp/crow-ws-air-test.py")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module.WebSocket
+from crow_websocket import WebSocket
 
 
 def main():
@@ -20,7 +14,7 @@ def main():
         return 2
     host, namekey = sys.argv[1:3]
     needles = sys.argv[3:]
-    ws = load_ws()(host)
+    ws = WebSocket(host)
     try:
         ws.send_json({"cmd": "texts", "namekey": namekey})
         deadline = time.time() + 8

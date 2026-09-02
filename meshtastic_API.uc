@@ -590,6 +590,7 @@ function processDiscoveredChannels(buf)
     return length(chans) > 0 || complete !== null;
 }
 
+// CROW_TEST_HOOKS_BEGIN
 export function _test_reset_discovery()
 {
     discoveredChannels = {};
@@ -607,6 +608,7 @@ export function _test_stats()
 {
     return stats;
 };
+// CROW_TEST_HOOKS_END
 
 function buildWantConfigId(id)
 {

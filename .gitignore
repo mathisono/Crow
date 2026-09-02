@@ -6,3 +6,7 @@ build/
 dist/
 *.ipk
 *.apk
+
+# Local soak-test reports
+test-artifacts/
+__pycache__/

@@ -1,391 +1,298 @@
 // =====================================================================
-// meshcore_tcp_discovery.uc
+// Optional MeshCore TCP channel discovery
 // =====================================================================
 //
-// MeshCore group/channel discovery for the TCP / Serial-WiFi API path.
+// This module is deliberately not imported by meshcore_tcp_api.uc at load
+// time.  Channel discovery is disabled on small AREDN nodes unless an
+// operator explicitly enables it.  Keeping the scanner and its parser out
+// of the normal TCP message backend reduces both code and live state.
 //
-// Discovery asks the radio for memory slots 0-7 using:
-//
-//     CMD_GET_CHANNEL = 0x1F
-//
-// The corrected TCP transport is provided by meshcore_tcp_api.uc, which
-// now sends client-to-radio frames as:
-//
-//     [ '<' ][ length LSB ][ length MSB ][ command + payload ]
-//
-// Channel responses are cached by meshcore_tcp_api.uc when radio-to-client
-// frames arrive as:
-//
-//     [ '>' ][ length LSB ][ length MSB ][ 0x12 + channel-info payload ]
-//
-// queryDeviceGroups() sends slot queries and drains any cached 0x12
-// responses that have already arrived. This keeps discovery non-blocking;
-// the periodic sync will pick up responses as the backend receives them.
-//
-// =====================================================================
 
 import * as channel from "channel";
-import * as meshcoreTcpApi from "meshcore_tcp_api";
 
-const CMD_GET_CHANNEL             = 0x1F;
-const PACKET_CHANNEL_INFO         = 0x12;
+const CMD_GET_CHANNEL          = 0x1f;
+const RESP_CHANNEL_INFO        = 0x12;
+const CHANNEL_RESPONSE_SIZE    = 50;
+const MAX_CHANNEL_INDEX        = 7;
+const CHANNEL_NAME_OFFSET      = 2;
+const CHANNEL_NAME_LENGTH      = 32;
+const SECRET_KEY_OFFSET        = 34;
+const SECRET_KEY_LENGTH        = 16;
+const DEFAULT_REFRESH_SECONDS  = 600;
+const REQUEST_TIMEOUT_SECONDS  = 5;
 
-const CHANNEL_RESPONSE_SIZE        = 50;
-const CHANNEL_RESPONSE_ID_OFFSET   = 0;
-const CHANNEL_INDEX_OFFSET         = 1;
-const CHANNEL_NAME_OFFSET          = 2;
-const CHANNEL_NAME_LENGTH          = 32;
-const SECRET_KEY_OFFSET            = 34;
-const SECRET_KEY_LENGTH            = 16;
-
-let enabled              = false;
-let cachedGroups        = [];
-let lastSyncTime        = 0;
-let syncIntervalMs      = 300000;
+let enabled = false;
+let sendCommand = null;
+let onChannel = null;
+let refreshSeconds = DEFAULT_REFRESH_SECONDS;
+let scanActive = false;
+let scanNext = 0;
+let requestInFlight = false;
+let requestIndex = null;
+let requestAt = 0;
+let lastScan = 0;
 
 let stats = {
-    syncs_run: 0,
-    queries_sent: 0,
-    responses_seen: 0,
-    new_groups_detected: 0,
-    deleted_groups_detected: 0,
-    key_changes_detected: 0,
-    errors: 0
+    channel_scans: 0,
+    channel_discovery_requests: 0,
+    channel_info_responses: 0,
+    channel_discovery_timeouts: 0,
+    channels_discovered: 0,
+    channels_updated: 0
 };
 
 function log0(fmt, ...args)
 {
-    DEBUG0("meshcore_discovery: " + fmt, ...args);
-};
+    DEBUG0("meshcore_tcp_discovery: " + fmt, ...args);
+}
 
 function log1(fmt, ...args)
 {
-    DEBUG1("meshcore_discovery: " + fmt, ...args);
-};
+    DEBUG1("meshcore_tcp_discovery: " + fmt, ...args);
+}
+
+function notifyChannelDiscovered(ch, action)
+{
+    const verb = action === "updated" ? "updated" : "discovered";
+    try {
+        global.event?.queue?.({ cmd: "/reply", reply: [
+            `<b>MeshCore TCP API</b> ${verb} channel`,
+            `Index ${ch.index}: ${ch.name}`,
+            "Runtime only; not saved to Crow config."
+        ] });
+        global.event?.notify?.({ cmd: "channels" }, `meshcore-tcp-channel-${ch.index}`);
+    }
+    catch (_) {}
+}
+
+function fieldCString(value)
+{
+    if (!value) return "";
+    for (let i = 0; i < length(value); i++) {
+        if (ord(value, i) === 0) return substr(value, 0, i);
+    }
+    return value;
+}
 
 function byteAt(data, off)
 {
     return type(data) === "array" ? data[off] : ord(data, off);
-};
+}
 
 function isAllZeros(data)
 {
     if (!data) return true;
     for (let i = 0; i < length(data); i++) {
-        if (data[i] !== 0x00) return false;
+        if (byteAt(data, i) !== 0) return false;
     }
     return true;
-};
+}
 
 function parseChannelInfo(data)
 {
-    if (!data || length(data) < CHANNEL_RESPONSE_SIZE) {
-        log1("parseChannelInfo: insufficient data (%d bytes)\n", length(data) ?? 0);
+    if (!data || length(data) < CHANNEL_RESPONSE_SIZE ||
+        byteAt(data, 0) !== RESP_CHANNEL_INFO) {
         return null;
     }
 
-    const packetId = byteAt(data, CHANNEL_RESPONSE_ID_OFFSET);
-    if (packetId !== PACKET_CHANNEL_INFO) {
-        log1("parseChannelInfo: wrong packet type (got 0x%02x, expected 0x%02x)\n",
-             packetId, PACKET_CHANNEL_INFO);
+    const index = byteAt(data, 1);
+    if (index > MAX_CHANNEL_INDEX) return null;
+
+    const name = fieldCString(substr(data, CHANNEL_NAME_OFFSET, CHANNEL_NAME_LENGTH));
+    const secret = substr(data, SECRET_KEY_OFFSET, SECRET_KEY_LENGTH);
+    if (!name || length(secret) !== SECRET_KEY_LENGTH || isAllZeros(secret)) {
         return null;
     }
 
-    const channelIndex = byteAt(data, CHANNEL_INDEX_OFFSET);
-    if (channelIndex > 7) {
-        log1("parseChannelInfo: invalid channel index %d\n", channelIndex);
-        return null;
-    }
-
-    let nameBytes = [];
-    for (let i = 0; i < CHANNEL_NAME_LENGTH; i++) {
-        push(nameBytes, byteAt(data, CHANNEL_NAME_OFFSET + i) ?? 0);
-    }
-
-    let nameStr = "";
-    for (let i = 0; i < length(nameBytes); i++) {
-        const b = nameBytes[i];
-        if (b === 0x00) break;
-        nameStr += chr(b);
-    }
-
-    let secretKey = [];
-    for (let i = 0; i < SECRET_KEY_LENGTH; i++) {
-        push(secretKey, byteAt(data, SECRET_KEY_OFFSET + i) ?? 0);
-    }
-
-    const isConfigured = (length(nameStr) > 0) && !isAllZeros(secretKey);
+    const publicNamekey = channel.meshcorePublicChannelNamekey();
+    const publicParts = split(publicNamekey, " ");
+    const isBuiltInPublic = name === "Public" && length(publicParts) === 2 &&
+        secret === b64dec(publicParts[1]);
 
     return {
-        packet_id: packetId,
-        channel_index: channelIndex,
-        channel_name: nameStr,
-        secret_key: secretKey,
-        is_configured: isConfigured,
-        raw_name_bytes: nameBytes,
-        raw_key_bytes: secretKey
+        index: index,
+        name: name,
+        secret: secret,
+        secret_b64: b64enc(secret),
+        namekey: isBuiltInPublic ? publicNamekey : `${name} ${b64enc(secret)}`
     };
-};
+}
 
-function groupFromParsed(parsed)
+function request(index, reason)
 {
-    return {
-        slot: parsed.channel_index,
-        name: parsed.channel_name,
-        key: parsed.secret_key,
-        key_size: SECRET_KEY_LENGTH,
-        is_programmed: parsed.is_configured,
-        timestamp: systime()
-    };
-};
-
-export function queryDeviceGroups()
-{
-    const groups = [];
-
-    for (let slot = 0; slot < 8; slot++) {
-        if (meshcoreTcpApi.sendCommand(CMD_GET_CHANNEL, chr(slot))) {
-            stats.queries_sent++;
-        }
-        else {
-            stats.errors++;
-            log1("slot %d: unable to send CMD_GET_CHANNEL\n", slot);
-        }
+    if (!enabled || !sendCommand || index < 0 || index > MAX_CHANNEL_INDEX) {
+        return false;
     }
-
-    for (let i = 0; i < 8; i++) {
-        const response = meshcoreTcpApi.takeResponse(PACKET_CHANNEL_INFO);
-        if (!response) {
-            break;
-        }
-        stats.responses_seen++;
-
-        const parsed = parseChannelInfo(response.payload);
-        if (!parsed) {
-            stats.errors++;
-            continue;
-        }
-        if (!parsed.is_configured) {
-            log1("slot %d: empty\n", parsed.channel_index);
-            continue;
-        }
-
-        const group = groupFromParsed(parsed);
-        push(groups, group);
-        log1("slot %d: %s (%d-byte key)\n", group.slot, group.name, group.key_size);
-    }
-
-    log0("discovered %d groups from cached TCP responses\n", length(groups));
-    return groups;
-};
-
-function keysEqual(key1, key2)
-{
-    if (!key1 || !key2) return key1 === key2;
-    if (type(key1) !== type(key2)) return false;
-    if (length(key1) !== length(key2)) return false;
-    for (let i = 0; i < length(key1); i++) {
-        if (key1[i] !== key2[i]) return false;
+    requestInFlight = true;
+    requestIndex = index;
+    requestAt = time();
+    stats.channel_discovery_requests++;
+    log1("channel discovery request index=%d reason=%s\n", index, reason ?? "unknown");
+    if (!sendCommand(CMD_GET_CHANNEL, chr(index))) {
+        requestInFlight = false;
+        requestIndex = null;
+        return false;
     }
     return true;
-};
+}
 
-function getCachedGroup(slot)
+function continueScan(reason)
 {
-    for (let i = 0; i < length(cachedGroups); i++) {
-        const group = cachedGroups[i];
-        if (group.slot === slot) return group;
-    }
-    return null;
-};
-
-function detectNewGroups(current)
-{
-    for (let i = 0; i < length(current); i++) {
-        const group = current[i];
-        if (!getCachedGroup(group.slot)) {
-            log0("NEW group detected: slot %d, name=%s\n", group.slot, group.name);
-            stats.new_groups_detected++;
-            autoDiscoverGroup(group);
-        }
-    }
-};
-
-function detectDeletedGroups(current)
-{
-    for (let i = 0; i < length(cachedGroups); i++) {
-        const cached = cachedGroups[i];
-        let found = false;
-        for (let j = 0; j < length(current); j++) {
-            const group = current[j];
-            if (group.slot === cached.slot) {
-                found = true;
-                break;
-            }
-        }
-        if (!found) {
-            log0("DELETED group: slot %d, name=%s\n", cached.slot, cached.name);
-            stats.deleted_groups_detected++;
-            deprecateGroup(cached);
-        }
-    }
-};
-
-function detectKeyChanges(current)
-{
-    for (let i = 0; i < length(current); i++) {
-        const group = current[i];
-        const cached = getCachedGroup(group.slot);
-        if (cached && !keysEqual(group.key, cached.key)) {
-            log0("KEY ROTATION: slot %d, name=%s\n", group.slot, group.name);
-            stats.key_changes_detected++;
-            alertKeyRotation(group, cached);
-            updateGroupKey(group);
-        }
-        if (cached && group.name !== cached.name) {
-            log0("RENAMED: slot %d, %s -> %s\n", group.slot, cached.name, group.name);
-            renameGroup(cached.slot, group.name);
-        }
-    }
-};
-
-function autoDiscoverGroup(group)
-{
-    const keyStr = encodeGroupKey(group.key);
-    const namekey = `${group.name} ${keyStr}`;
-    const local = channel.getLocalChannelByNameKey(namekey);
-    if (!local) {
-        log1("radio group discovered but not enabled in Crow: %s (slot %d)\n", namekey, group.slot);
+    if (!enabled || !scanActive || requestInFlight) return;
+    if (scanNext > MAX_CHANNEL_INDEX) {
+        scanActive = false;
+        lastScan = time();
+        log1("channel discovery scan complete\n");
         return;
     }
-    channel.setMeshcoreSlotChannel(group.slot, local);
-    log1("matched configured Crow channel: %s (slot %d)\n", namekey, group.slot);
-};
+    request(scanNext++, reason);
+}
 
-function deprecateGroup(group)
+function startScan(reason)
 {
-    log1("deprecated: slot %d, name=%s\n", group.slot, group.name);
-};
+    if (!enabled || scanActive) return;
+    scanActive = true;
+    scanNext = 0;
+    requestInFlight = false;
+    requestIndex = null;
+    stats.channel_scans++;
+    continueScan(reason);
+}
 
-function alertKeyRotation(newGroup, oldGroup)
+export function setup(options)
 {
-    log0("ALERT: Group '%s' key has changed!\n", newGroup.name);
-    log0("  Please review the change on your radio.\n");
-};
-
-function updateGroupKey(group)
-{
-    log1("updated key for slot %d: %s\n", group.slot, group.name);
-};
-
-function renameGroup(slot, newName)
-{
-    log1("renamed slot %d to: %s\n", slot, newName);
-};
-
-function encodeGroupKey(keyBytes)
-{
-    let raw = "";
-    if (type(keyBytes) === "array") {
-        for (let i = 0; i < length(keyBytes); i++) {
-            raw += chr(keyBytes[i] & 0xFF);
-        }
-    }
-    else {
-        raw = keyBytes ?? "";
-    }
-    return b64enc(raw);
-};
-
-export function tick()
-{
-    if (!enabled) return;
-
-    const now = systime() * 1000;
-    if (now - lastSyncTime < syncIntervalMs) {
-        return;
-    }
-
-    syncChannelSlots();
-    lastSyncTime = now;
-};
-
-function syncChannelSlots()
-{
-    log1("sync: querying radio for group slots...\n");
-    stats.syncs_run++;
-
-    const currentGroups = queryDeviceGroups();
-
-    detectNewGroups(currentGroups);
-    detectDeletedGroups(currentGroups);
-    detectKeyChanges(currentGroups);
-
-    cachedGroups = currentGroups;
-
-    log1("sync: complete (new=%d, deleted=%d, key_changes=%d)\n",
-         stats.new_groups_detected, stats.deleted_groups_detected,
-         stats.key_changes_detected);
-};
-
-export function setup(config)
-{
-    if (!config?.meshcore_discovery?.enabled) {
-        return;
-    }
-
-    enabled = true;
-    syncIntervalMs = config.meshcore_discovery.sync_interval_ms ?? 300000;
-
-    log0("discovery enabled (sync interval: %d ms)\n", syncIntervalMs);
-    startup();
-};
-
-export function startup()
-{
-    if (!enabled) return;
-
-    log1("initial discovery...\n");
-    const groups = queryDeviceGroups();
-
-    for (let i = 0; i < length(groups); i++) {
-        const group = groups[i];
-        autoDiscoverGroup(group);
-    }
-
-    cachedGroups = groups;
-    lastSyncTime = systime() * 1000;
-
-    log0("initial discovery: found %d groups\n", length(groups));
+    // Do not call the later exported shutdown() declaration here. AREDN's
+    // ucode binding does not make that declaration available as a local
+    // function before its source position.
+    enabled = false;
+    sendCommand = null;
+    onChannel = null;
+    scanActive = false;
+    requestInFlight = false;
+    requestIndex = null;
+    requestAt = 0;
+    lastScan = 0;
+    sendCommand = options?.sendCommand;
+    onChannel = options?.onChannel;
+    refreshSeconds = options?.refresh_seconds ?? DEFAULT_REFRESH_SECONDS;
+    if (refreshSeconds < 60) refreshSeconds = 60;
+    enabled = options?.enabled === true && type(sendCommand) === "function";
+    if (enabled) log0("optional channel discovery enabled\n");
 };
 
 export function shutdown()
 {
     enabled = false;
+    sendCommand = null;
+    onChannel = null;
+    scanActive = false;
+    requestInFlight = false;
+    requestIndex = null;
+    requestAt = 0;
+    lastScan = 0;
 };
 
-export function getStats()
+// Preserve cumulative counters across reconnects, but abandon an in-flight
+// scan so a response from the previous USB/TCP session cannot block the next
+// connection's scan.
+export function resetScan()
 {
-    return stats;
+    scanActive = false;
+    scanNext = 0;
+    requestInFlight = false;
+    requestIndex = null;
+    requestAt = 0;
 };
 
-export function getCachedGroups()
+export function onSelfInfo()
 {
-    return cachedGroups;
+    startScan("self-info");
 };
 
-export function getSyncStatus()
+export function onChannelInfo(framePayload)
+{
+    if (!enabled || !requestInFlight) return false;
+    stats.channel_info_responses++;
+    requestInFlight = false;
+    requestIndex = null;
+
+    const ch = parseChannelInfo(framePayload);
+    if (ch && onChannel) {
+        const action = onChannel(ch);
+        if (action === "discovered") {
+            stats.channels_discovered++;
+            notifyChannelDiscovered(ch, action);
+        }
+        if (action === "updated") {
+            stats.channels_updated++;
+            notifyChannelDiscovered(ch, action);
+        }
+    }
+    continueScan(ch ? "channel-info" : "bad-channel-info");
+    return true;
+};
+
+export function tick()
+{
+    if (!enabled) return;
+    if (requestInFlight && time() - requestAt >= REQUEST_TIMEOUT_SECONDS) {
+        stats.channel_discovery_timeouts++;
+        log1("channel discovery timeout index=%s\n", requestIndex);
+        requestInFlight = false;
+        requestIndex = null;
+        continueScan("timeout");
+    }
+    if (!scanActive && lastScan && time() - lastScan >= refreshSeconds) {
+        startScan("periodic refresh");
+    }
+};
+
+export function status()
 {
     return {
-        enabled: enabled,
-        last_sync_time: lastSyncTime,
-        next_sync_in_ms: max(0, syncIntervalMs - (systime() * 1000 - lastSyncTime)),
-        cached_groups: length(cachedGroups),
-        stats: stats
+        channel_discovery: enabled,
+        channel_scans: stats.channel_scans,
+        channel_discovery_requests: stats.channel_discovery_requests,
+        channel_info_responses: stats.channel_info_responses,
+        channel_discovery_timeouts: stats.channel_discovery_timeouts,
+        channels_discovered: stats.channels_discovered,
+        channels_updated: stats.channels_updated,
+        scan_active: scanActive,
+        request_in_flight: requestInFlight
     };
 };
 
+// CROW_TEST_HOOKS_BEGIN
 export function parseChannelInfoForTest(data)
 {
-    return parseChannelInfo(data);
+    if (!data || length(data) < CHANNEL_RESPONSE_SIZE ||
+        byteAt(data, 0) !== RESP_CHANNEL_INFO) {
+        return null;
+    }
+    const index = byteAt(data, 1);
+    if (index > MAX_CHANNEL_INDEX) return null;
+
+    const nameBytes = [];
+    for (let i = 0; i < CHANNEL_NAME_LENGTH; i++) {
+        push(nameBytes, byteAt(data, CHANNEL_NAME_OFFSET + i) ?? 0);
+    }
+    let name = "";
+    for (let i = 0; i < length(nameBytes); i++) {
+        if (nameBytes[i] === 0) break;
+        name += chr(nameBytes[i]);
+    }
+    const secret = [];
+    for (let i = 0; i < SECRET_KEY_LENGTH; i++) {
+        push(secret, byteAt(data, SECRET_KEY_OFFSET + i) ?? 0);
+    }
+    return {
+        packet_id: RESP_CHANNEL_INFO,
+        channel_index: index,
+        channel_name: name,
+        secret_key: secret,
+        is_configured: length(name) > 0 && !isAllZeros(secret),
+        raw_name_bytes: nameBytes,
+        raw_key_bytes: secret
+    };
 };
+// CROW_TEST_HOOKS_END

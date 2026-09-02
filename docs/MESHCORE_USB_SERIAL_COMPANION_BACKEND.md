@@ -14,6 +14,10 @@ on minimal AREDN images that omit `stty`. The helper uses a direct termios
 `ioctl`, so its raw-mode setting persists after it exits. Only
 `/dev/ttyACM<N>` and `/dev/ttyUSB<N>` paths and 115200 baud are accepted.
 
+The MeshCore selector loads this backend only when serial/USB transport is
+selected. It does not instantiate the TCP or UDP MeshCore implementations, and
+serial mode never loads the optional TCP channel-discovery scanner.
+
 RAK CDC ACM boards can reset when the port is opened. Crow keeps the stream
 open for a two-second startup settle period before sending `CMD_APP_START`;
 sending it immediately can lose the complete self-info reply.
@@ -39,7 +43,8 @@ GO_BIN=/path/to/go CROW_GOARCH=mips CROW_GOMIPS=softfloat sh platforms/aredn/bui
   resynchronisation, oversize discard, and bounded local pending queue).
 - Queued-message drain: radio push `0x83` triggers `CMD_SYNC_NEXT_MESSAGE`
   (`0x0a`) and Crow applies backpressure while its local queue is full.
-- Optional `CMD_GET_CHANNEL` (`0x1f`) querying for slots 0–7.
+- Channel slot mapping from explicit Crow configuration; `CMD_GET_CHANNEL`
+  discovery is disabled.
 - Cleartext group text receive and send via `CMD_SEND_CHANNEL_TXT_MSG`
   (`0x03`).
 
@@ -80,7 +85,8 @@ group (0–7).
     "frame_mode": "framed",
     "app_start_profile": "meshcore_cli",
     "max_pending_rx": 4,
-    "channel_discovery": true,
+    "channel_discovery": false,
+    "channel_slots": { "0": "MeshCore izOH6cXN6mrJ5e26oRXNcg==" },
     "channel_refresh_seconds": 600,
     "channel_data_text_types": [],
     "direct_identity_mode": "compatibility",
@@ -97,11 +103,9 @@ group (0–7).
 ```
 
 The example key is illustrative; replace it with the actual 16-byte Base64
-key from the radio. Crow never writes discovered radio keys into its config.
-When discovery sees a channel that exactly matches a configured Crow
-`namekey`, it maps that radio slot for inbound group-message routing. The
-configured `channel_namekey` is also mapped to `tx_channel_index` after the
-normal channel setup phase.
+key from the radio. Crow does not retain radio discovery data. The configured
+`channel_namekey` is mapped to `tx_channel_index` after normal channel setup;
+additional group slots use `channel_slots` or `meshcore_slot`.
 
 `app_start_profile` can be `meshcore_cli` (the default) or `crow_zeros`; both
 send `CMD_APP_START` followed by seven reserved bytes and `Crow`. MeshCore

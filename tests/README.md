@@ -2,18 +2,36 @@
 
 Lightweight regression tests for Crow modules. No test framework dependency.
 
+## Test entry point
+
+Run the complete development suite from the repository root:
+
+```sh
+tests/run_all.sh
+```
+
+The runner executes every `tests/run_*.js` contract check. Runners with a
+canonical ucode counterpart invoke it automatically when `ucode` is available;
+the runner also executes the four standalone ucode suites. Tests and
+development tools are not included in AREDN packages, and source-level test
+hooks are stripped from release modules during packaging.
+
 ## Files
 
 | File | Runtime | Purpose |
 | --- | --- | --- |
-| `test_outbound_formatter.uc` | `ucode` | Canonical tests for `lora_outbound_text.uc` (outbound LoRa text formatter: callsign + gateway tag + truncation). |
-| `run_formatter_tests.js` | `node` | Node runner with a JS port of the formatter contract. Runs the same logical cases without needing a ucode interpreter, and auto-invokes the `.uc` tests when `ucode` is on PATH. |
-| `test_meshcore_tcp_api.uc` | `ucode` | Canonical tests for `meshcore_tcp_api.uc` Smart Accumulator: fragmentation, oversize kill switch, encrypted/unknown-cmd early-drop, resync. |
-| `run_meshcore_tcp_api_tests.js` | `node` | Node mirror with a JS port of the accumulator. Same logical cases, runnable without ucode; auto-invokes `.uc` tests when `ucode` is on PATH. |
-| `run_meshcore_backend_selector.js` | `node` | Smoke tests for MeshCore backend public-channel selection, TCP/USB precedence, and label setup. |
-| `test_meshcore_serial_api.uc` | `ucode` | Canonical USB Companion framing and exact RF name/key/slot gate checks. |
-| `run_meshcore_serial_api_tests.js` | `node` | Node mirror for USB Companion framing, queue handling, and the exact RF gate. |
-| `run_router_gatekeeper_matrix.js` | `node` | Router/gatekeeper scope matrix, including MeshCore TCP local-direct handling, slot mapping, and strict callsign checks. |
+| `run_aprs_backend_label_tests.js` | `node` | APRS backend display-name/callsign mapping. |
+| `run_aprs_retry_dedupe_tests.js` | `node` | APRS retry IDs, bounded deduplication, and retained-history suppression. |
+| `run_formatter_tests.js` | `node` + optional `ucode` | Outbound LoRa callsign/tag formatting and truncation. |
+| `run_meshcore_backend_selector.js` | `node` + optional `ucode` | Lazy backend selection and TCP/USB/UDP precedence. |
+| `run_meshcore_serial_api_tests.js` | `node` + optional `ucode` | USB Companion framing, queue handling, and RF slot gate. |
+| `run_meshcore_tcp_api_tests.js` | `node` + optional `ucode` | TCP accumulator fragmentation, bounds, resync, and direct-message parsing. |
+| `run_meshtastic_api_tests.js` | `node` + optional `ucode` | Meshtastic API framing and channel behavior. |
+| `run_router_gatekeeper_matrix.js` | `node` | Router/gatekeeper scope, local-direct handling, slot mapping, and callsign policy. |
+| `run_storage_assimilate_tests.js` | `node` | Safe USB discovery, non-formatting assimilation, migration, quotas, and hotplug identity. |
+
+Canonical ucode fixtures remain under `tests/test_*.uc`; the Node runners are
+portable mirrors/static contract checks for development hosts without ucode.
 
 ## When to run
 
@@ -46,10 +64,10 @@ This executes the JS port of the formatter against 20 cases. If `ucode` is
 on PATH, the same runner also invokes the `.uc` test file and reports its
 result. Exits non-zero on any failure.
 
-To run all Node-backed checks:
+To run all checks:
 
 ```sh
-for f in tests/run_*.js; do node "$f" || exit $?; done
+tests/run_all.sh
 ```
 
 ### With the ucode interpreter (canonical path on AREDN / OpenWrt SDK)
@@ -90,8 +108,11 @@ command -v ucode >/dev/null \
 
 ## What is not covered (yet)
 
-- Strict gatekeeper end-to-end decisions on outbound text.
-- AREDN CGI path handling, WebSocket frame limits, UI escaping (covered by other static checks listed in `docs/CROW_MIGRATION_PLAN.md`).
+- Live RF/TNC delivery and radio firmware behavior.
+- AREDN CGI path handling, browser rendering, and full WebSocket integration.
+
+Those require the live-node tools under `tools/`; they are deliberately kept
+out of the deterministic local regression suite and out of release packages.
 
 If you add tests for any of the above, follow the same pattern: a canonical
 `.uc` test plus a `node`-runnable mirror under `tests/` so CI / dev laptops

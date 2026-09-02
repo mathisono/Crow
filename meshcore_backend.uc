@@ -1,12 +1,27 @@
-import * as udp from "meshcore";
-import * as api from "meshcore_tcp_api";
-import * as serialApi from "meshcore_serial_api";
 import * as channel from "channel";
 
 let active = null;
 let activeName = null;
 let lastConfig = null;
 export let enabled = false;
+
+// Keep transport implementations out of the module graph until the selected
+// transport is known.  AREDN nodes running Crow can have only a few dozen MB
+// of RAM, and static imports instantiate every MeshCore transport even when
+// only one can be active.
+function loadBackend(name)
+{
+    switch (name) {
+        case "serial":
+            return require("meshcore_serial_loader");
+        case "tcp":
+            return require("meshcore_tcp_loader");
+        case "udp":
+            return require("meshcore_udp_loader");
+        default:
+            return null;
+    }
+}
 
 function log0(fmt, ...args)
 {
@@ -178,25 +193,31 @@ export function setup(config)
 
     if (wantsSerial(config)) {
         ensureDefaultPublicChannel(config);
-        // Load the serial wrapper only when selected.  Keeping this import
-        // lazy avoids the config -> commands -> discovery -> TCP module cycle
-        // on ucode versions that reject parallel module initialization.
-        active = serialApi;
         activeName = "serial";
     }
     else if (wantsApi(config)) {
         ensureDefaultPublicChannel(config);
-        active = api;
         activeName = "tcp";
     }
     else if (wantsUdp(config)) {
         ensureDefaultPublicChannel(config);
-        active = udp;
         activeName = "udp";
     }
 
-    if (!active) {
+    if (!activeName) {
         log0("disabled\n");
+        return;
+    }
+
+    try {
+        active = loadBackend(activeName);
+    }
+    catch (e) {
+        active = null;
+        log0("unable to load %s backend: %s\n", activeName, e);
+    }
+    if (!active) {
+        activeName = null;
         return;
     }
 
@@ -309,6 +330,7 @@ export function backendStatus()
     return out;
 };
 
+// CROW_TEST_HOOKS_BEGIN
 export function _test_ensure_default_public_channel(config)
 {
     ensureDefaultPublicChannel(config);
@@ -321,3 +343,4 @@ export function _test_backend_choice(config)
     if (wantsUdp(config)) return "udp";
     return null;
 };
+// CROW_TEST_HOOKS_END

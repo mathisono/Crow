@@ -360,8 +360,9 @@ Transport type for MeshCore.
     "host": "127.0.0.1",
     "port": 4403,
     "max_pending_rx": 4,
-    "channel_discovery": true,
+    "channel_discovery": false,
     "channel_refresh_seconds": 600,
+    "channel_slots": { "0": "MeshCore izOH6cXN6mrJ5e26oRXNcg==" },
     "channel_data_text_types": [],
     "direct_identity_mode": "compatibility",
     "room_servers": [
@@ -379,7 +380,7 @@ Transport type for MeshCore.
 - `host`: `"127.0.0.1"`
 - `port`: `4403`
 - `max_pending_rx`: `4`
-- `channel_discovery`: `false`
+- `channel_discovery`: `false` (discovery is ignored; retained for config compatibility)
 - `channel_refresh_seconds`: `600`
 - `channel_data_text_types`: `[]` (disabled by default)
 - `direct_identity_mode`: `"compatibility"`
@@ -398,13 +399,14 @@ Transport type for MeshCore.
   default. Add numeric application data types such as `65535` to
   `channel_data_text_types` only when that application payload is known to be
   printable text.
-- Channel discovery is read-only and runtime-only. It does not write Crow
-  config or auto-map an unmatched MeshCore group slot.
-- RF group receive/send is enabled per channel only after the discovered radio
-  slot, channel name, and key exactly match a Crow local `channels[].namekey`.
-- Keep `channel_discovery: true` when using the TCP/serial group path; a
-  configured namekey without a verified radio slot remains receive/send
-  disabled.
+- Contact and channel discovery frames are dropped immediately. Crow emits a
+  rate-limited operator message, but does not retain or display a discovery
+  directory.
+- RF group receive/send uses explicit configured slot mappings. The built-in
+  MeshCore public channel is mapped to slot 0; add `channel_slots` or set
+  `meshcore_slot` on a local channel for other group channels.
+- `messages.max` bounds the number of retained messages per conversation;
+  direct and configured group text remains retained on disk.
 - `room_servers` is an optional list of known MeshCore room servers. Each
   entry requires a display `name` and the full 32-byte Ed25519 public key in
   base64. An omitted entry password uses MeshCore's documented default guest
@@ -428,7 +430,8 @@ Transport type for MeshCore.
     "baud": 115200,
     "app_start_profile": "crow_zeros",
     "max_pending_rx": 4,
-    "channel_discovery": true,
+    "channel_discovery": false,
+    "channel_slots": { "0": "MeshCore izOH6cXN6mrJ5e26oRXNcg==" },
     "channel_data_text_types": [],
     "direct_identity_mode": "compatibility"
   }
@@ -440,11 +443,10 @@ the local USB serial device. It includes both receive queue draining and
 direct/channel transmit. Use `meshcore.backend: "serial"` to force it when
 TCP is also configured.
 
-The serial backend uses the same safety defaults as TCP: exact discovered
-channel tuple proof, opt-in `0x1B` text routing, and compatibility-mode
-handling for modern direct frames whose destination is not present on the
-wire. Native USB handshake readiness is exposed in backend status; it is not
-RF receive proof.
+The serial backend uses the same safety defaults as TCP: explicit configured
+channel slots, opt-in `0x1B` text routing, and compatibility-mode handling for
+modern direct frames whose destination is not present on the wire. Native USB
+handshake readiness is exposed in backend status; it is not RF receive proof.
 
 ---
 

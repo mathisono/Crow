@@ -4,6 +4,12 @@ Status: **Crow-side MeshCore Companion API backend**.
 
 Crow's MeshCore TCP backend is `meshcore_tcp_api.uc`.
 
+On memory-constrained AREDN nodes, `meshcore_backend.uc` loads only the
+configured transport at runtime. The UDP and USB serial implementations are
+not imported when TCP is selected, and TCP channel discovery is a separate
+optional module. With `channel_discovery` omitted or `false`, the normal TCP
+message backend does not load the discovery scanner or retain scan state.
+
 This backend is for the MeshCore **Companion binary API over TCP**. It is the message-bridge API for Crow.
 
 ## App goal
@@ -110,7 +116,12 @@ metadata.direct_identity_verified = true when a legacy destination id was checke
 Legacy verified mismatches are dropped by `router.uc`; only frames without an
 exposed destination id keep the queue-origin fallback during bring-up.
 
-On direct receive, Crow stores the sender's 6-byte MeshCore public-key prefix in `nodedb` so later direct replies can be sent with `CMD_SEND_MESSAGE`.
+On direct receive, Crow keeps the sender's 6-byte MeshCore public-key prefix in
+a bounded transient cache for replies and creates only a minimal direct-thread
+anchor so retained messages remain visible after restart. Discovery-only
+contact records and names/positions are not retained. The UDP backend does not
+persist peer-derived crypto keys; direct keys are derived on demand, while the
+local public key and configured channel keys remain in normal configuration.
 
 Channel messages keep their MeshCore channel index / group slot so router scope can allow the public channel and user-added/mapped channels while dropping unmapped slots.
 
@@ -263,18 +274,19 @@ unknown sender test
 
 This conservative behavior applies to both direct and channel/group bridge ingress. Once MeshCore identity can be strongly tied to contacts/callsigns, this rule can be relaxed deliberately.
 
-## Channel discovery notifications
+## Discovery/contact retention policy
 
-The backend can request MeshCore Companion channel info using:
+Crow does not request or retain MeshCore contacts or channel-directory data.
+Incoming advert/contact-full/channel-info frames are dropped immediately and a
+rate-limited operator message explains the policy. Group traffic remains
+available through explicit configured slot mappings.
+
+The legacy protocol identifiers are:
 
 ```text
 CMD_GET_CHANNEL        = 0x1F
 RESP_CODE_CHANNEL_INFO = 0x12
 ```
-
-When `meshcore_tcp_api.channel_discovery=true`, Crow requests channel slots `0` through `15` after self-info is received and again on the refresh timer.
-
-Discovery is paced one request at a time instead of blasting all slots at once.
 
 Example config:
 
@@ -288,21 +300,14 @@ Example config:
     "host": "127.0.0.1",
     "port": 4403,
     "max_pending_rx": 4,
-    "channel_discovery": true,
-    "channel_refresh_seconds": 600
+    "channel_discovery": false,
+    "channel_slots": { "0": "MeshCore izOH6cXN6mrJ5e26oRXNcg==" }
   }
 }
 ```
 
-Channel discovery is runtime-only in this pass. It does not write Crow config. It maps a discovered channel slot only when that channel is already one of Crow's local channels. New/unknown channel discoveries notify the operator, but do not silently join or persist the channel.
-
-When a new or changed channel is discovered, the backend emits an operator notification through Crow's existing websocket command-reply path:
-
-```text
-MeshCore TCP API discovered channel
-Index N: ChannelName
-Runtime only; not saved to Crow config.
-```
+The built-in MeshCore public channel is mapped to slot 0. Configure additional
+slots with `channel_slots` or a local channel's `meshcore_slot` field.
 
 Telemetry fields:
 
@@ -394,7 +399,8 @@ Strict Gatekeeper validation should confirm:
 
 Channel discovery validation should confirm:
 
-- `channel_discovery=true` sends paced `CMD_GET_CHANNEL` requests for slots `0` through `15`;
+- `channel_discovery=true` loads `meshcore_tcp_discovery.uc` and sends paced
+  `CMD_GET_CHANNEL` requests for slots `0` through `7`;
 - `RESP_CODE_CHANNEL_INFO` increments `channel_info_responses`;
 - a new channel increments `channels_discovered`;
 - a changed channel increments `channels_updated`;

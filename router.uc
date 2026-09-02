@@ -28,10 +28,7 @@ export function setGatekeeper(gk)
     gatekeeper = gk;
 };
 
-// NEW (Phase 1): Register temporary group channel for testing
-// Before Phase 2 implements auto-discovery, this allows manual setup
-// of group slot -> channel mappings for testing.
-// Usage: router.registerGroupChannel(0, group_channel_object)
+// Register an explicit MeshCore slot-to-channel mapping.
 export function registerGroupChannel(slot, channelObj)
 {
     if (slot === null || slot < 0 || slot > 7) {
@@ -174,9 +171,7 @@ export function queueId(id)
     return false;
 };
 
-// NEW (Phase 1): Resolve group message channel by slot index
-// Group messages from MeshCore TCP API have group_slot field (0-7)
-// which identifies the memory slot. Map this to a Crow channel.
+// Resolve a MeshCore group message through its configured radio slot.
 function resolveGroupChannel(msg)
 {
     if (!msg.metadata?.is_group_message) {
@@ -194,7 +189,6 @@ function resolveGroupChannel(msg)
     
     if (!groupChannel) {
         DEBUG0("router: group message slot %d not mapped to any channel, dropping\n", slot);
-        // TODO (Phase 2): Could queue for later once discovery runs
         return null;
     }
     

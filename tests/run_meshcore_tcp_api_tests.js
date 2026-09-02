@@ -169,8 +169,8 @@ class SmartAccumulator {
                 continue;
             }
             if (code === RESP_CHANNEL_INFO) {
-                this.stats.responses_cached++;
-                this.responses.push({ cmd: code, payload: framePayload });
+                // Discovery metadata is deliberately dropped rather than
+                // cached; configured slots are supplied by Crow config.
                 continue;
             }
             this.stats.early_drop_unknown_cmd++;
@@ -537,8 +537,8 @@ const STRICT_OFF = { isEnabled: () => false };
     const a = new SmartAccumulator(STRICT_ON);
     const response = Buffer.concat([Buffer.from([RESP_CHANNEL_INFO, 0]), Buffer.from('TacNet'), Buffer.alloc(26), Buffer.alloc(16, 1)]);
     check('channel info no message', a.inject(Buffer.concat([Buffer.from([FRAME_FROM_RADIO, response.length & 0xFF, response.length >> 8]), response])).length, 0);
-    check('channel info cached', a.stats.responses_cached, 1);
-    check('channel info cached cmd', a.takeResponse(RESP_CHANNEL_INFO)?.cmd, RESP_CHANNEL_INFO);
+    check('channel info not cached', a.stats.responses_cached, 0);
+    check('channel info response dropped', a.takeResponse(RESP_CHANNEL_INFO), null);
 }
 {
     const cmd = buildCommand(CMD_SYNC_NEXT_MESSAGE);

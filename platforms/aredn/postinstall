@@ -19,6 +19,8 @@ fi
 
 /etc/init.d/crow enable
 /etc/init.d/crow start
+/etc/init.d/crow-watchdog enable
+/etc/init.d/crow-watchdog start
 if [ -x /etc/local/mesh-firewall/21-crow ]; then
     /etc/local/mesh-firewall/21-crow
 fi

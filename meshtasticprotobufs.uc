@@ -1,4 +1,9 @@
-import * as meshtastic from "meshtastic_backend";
+// Protocol definitions are registered only after meshtastic_backend has
+// selected its active transport.  Keeping this module side-effect free at
+// import time avoids loading Meshtastic at all on MeshCore-only nodes.
+export function setup(backend)
+{
+    if (!backend || type(backend.registerProto) !== "function") return false;
 
 /*
  * Known port numbers
@@ -33,7 +38,7 @@ import * as meshtastic from "meshtastic_backend";
  * 257 - atakforwarder
  */
 
-meshtastic.registerProto(
+backend.registerProto(
     "packet", null,
     {
         "1": "fixed32 from",
@@ -65,7 +70,7 @@ meshtastic.registerProto(
 // its own private proto table. The UDP multicast backend (meshtastic.uc) does
 // not use Port-API framing.
 
-meshtastic.registerProto(
+backend.registerProto(
     "data", null,
     {
         "1": "enum portnum",
@@ -79,7 +84,7 @@ meshtastic.registerProto(
         "9": "uint32 bitfield"
     }
 );
-meshtastic.registerProto(
+backend.registerProto(
     "position", 3,
     {
         "1": "sfixed32 latitude_i",
@@ -108,7 +113,7 @@ meshtastic.registerProto(
     }
 );
 
-meshtastic.registerProto(
+backend.registerProto(
     "nodeinfo", 4,
     {
         "1": "string id",
@@ -123,7 +128,7 @@ meshtastic.registerProto(
     }
 );
 
-meshtastic.registerProto(
+backend.registerProto(
     "routediscovery", null,
     {
         "1": "repeated fixed32 route",
@@ -132,7 +137,7 @@ meshtastic.registerProto(
         "4": "repeated int32 snr_back"
     }
 );
-meshtastic.registerProto(
+backend.registerProto(
     "routing", 5,
     {
         "1": "proto routediscovery route_request",
@@ -141,7 +146,7 @@ meshtastic.registerProto(
     }
 );
 
-meshtastic.registerProto(
+backend.registerProto(
     "statistics", null,
     {
         "1": "uint32 messages_total",
@@ -155,7 +160,7 @@ meshtastic.registerProto(
         "9": "uint32 return_window"
     }
 );
-meshtastic.registerProto(
+backend.registerProto(
     "history", null,
     {
         "1": "uint32 history_messages",
@@ -163,14 +168,14 @@ meshtastic.registerProto(
         "3": "uint32 last_request"
     }
 );
-meshtastic.registerProto(
+backend.registerProto(
     "heartbeat", null,
     {
         "1": "uint32 period",
         "2": "uint32 secondary"
     }
 );
-meshtastic.registerProto(
+backend.registerProto(
     "storeandforward", 65,
     {
         "1": "enum rr",
@@ -181,7 +186,7 @@ meshtastic.registerProto(
     }
 );
 
-meshtastic.registerProto(
+backend.registerProto(
     "device_metrics", null,
     {
         "1": "uint32 battery_level",
@@ -191,7 +196,7 @@ meshtastic.registerProto(
         "5": "uint32 uptime_seconds"
     }
 );
-meshtastic.registerProto(
+backend.registerProto(
     "airquality_metrics", null,
     {
         "1": "uint32 pm10_standard",
@@ -222,7 +227,7 @@ meshtastic.registerProto(
     }
 );
 
-meshtastic.registerProto(
+backend.registerProto(
     "power_metrics", null,
     {
         "1": "float ch1_voltage",
@@ -243,7 +248,7 @@ meshtastic.registerProto(
         "16": "float ch8_current"
     }
 );
-meshtastic.registerProto(
+backend.registerProto(
     "environment_metrics", null,
     {
         "1": "float temperature",
@@ -270,7 +275,7 @@ meshtastic.registerProto(
         "22": "float soil_temperature"
     }
 );
-meshtastic.registerProto(
+backend.registerProto(
     "airquality_metrics", null,
     {
         "1": "uint32 pm10_standard",
@@ -300,7 +305,7 @@ meshtastic.registerProto(
         "25": "float particles_tps"
     }
 );
-meshtastic.registerProto(
+backend.registerProto(
     "telemetry", 67,
     {
         "1": "fixed32 time",
@@ -314,7 +319,7 @@ meshtastic.registerProto(
     }
 );
 
-meshtastic.registerProto(
+backend.registerProto(
     "traceroute", 70,
     {
         "1": "repeated fixed32 route",
@@ -324,7 +329,7 @@ meshtastic.registerProto(
     }
 );
 
-meshtastic.registerProto(
+backend.registerProto(
     "neighbor", null,
     {
         "1": "uint32 node_id",
@@ -333,7 +338,7 @@ meshtastic.registerProto(
         "4": "uint32 node_broadcast_interval_secs"
     }
 );
-meshtastic.registerProto(
+backend.registerProto(
     "neighborinfo", 71,
     {
         "1": "uint32 node_id",
@@ -342,3 +347,6 @@ meshtastic.registerProto(
         "4": "repeated unpacked neighbor neighbors"
     }
 );
+
+    return true;
+};

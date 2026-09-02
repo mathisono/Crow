@@ -1,2 +1,3 @@
 #!/bin/sh
 /etc/init.d/crow restart
+/etc/init.d/crow-watchdog restart

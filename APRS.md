@@ -81,6 +81,11 @@ Xastir, YAAC, or another APRS/TNC2-style TCP server:
 }
 ```
 
+Crow keeps the configured backend key stable for channel mappings and derives
+the user-facing backend label from the transport, backend key, and APRS
+callsign. For example, backend key `xastir_dzb4` with callsign `KJ6DZB-10`
+appears in Configure Channels as `aprs-tnc[xastir_dzb4] KJ6DZB-10`.
+
 ## Sending APRS messages
 
 Use the configured APRS Crow channel, for example `APRS og==`.
