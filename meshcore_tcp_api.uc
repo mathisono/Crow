@@ -299,6 +299,12 @@ function shouldLogFrame(code)
 
 function countNonMessageFrame(cmd)
 {
+    // Keep encrypted binary frames out of the generic unknown-frame path when
+    // strict Part 97 filtering is disabled.  Command 0x90 is also Companion's
+    // contacts-full push and is handled by the discovery-drop branch above.
+    if (cmd === CMD_ENCRYPTED_BIN) {
+        return true;
+    }
     switch (cmd) {
         case RESP_LOG_DATA:
             stats.log_data_frames++;

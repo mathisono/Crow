@@ -263,6 +263,11 @@ export function status()
 };
 
 // CROW_TEST_HOOKS_BEGIN
+export function decodeChannelInfoForTest(data)
+{
+    return parseChannelInfo(data);
+};
+
 export function parseChannelInfoForTest(data)
 {
     if (!data || length(data) < CHANNEL_RESPONSE_SIZE ||

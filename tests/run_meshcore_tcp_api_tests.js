@@ -164,8 +164,15 @@ class SmartAccumulator {
                 else frames.push({ cmd: code, payload });
                 continue;
             }
+            if (code === CMD_ENCRYPTED_DM) {
+                // 0x90 is also Companion's contacts-full push. Production
+                // safely drops it through the discovery-notification path.
+                this.stats.early_drop_unknown_cmd++;
+                continue;
+            }
             if (code === 0x82 || code === 0x84 || code === 0x8A || code === 0x88 ||
-                code === 0x89 || code === 0x8B || code === 0x8C || code === 0x8E || code === 0x90) {
+                code === 0x89 || code === 0x8B || code === 0x8C || code === 0x8E ||
+                code === CMD_ENCRYPTED_BIN) {
                 continue;
             }
             if (code === RESP_CHANNEL_INFO) {
@@ -409,7 +416,10 @@ const STRICT_OFF = { isEnabled: () => false };
 {
     const a = new SmartAccumulator(STRICT_OFF);
     a.inject(buildRadioFrame(CMD_ENCRYPTED_DM, Buffer.alloc(16)));
-    check('encrypted strict-off ignored as known non-message', a.stats.early_drop_unknown_cmd, 0);
+    check('encrypted strict-off 0x90 safely ignored as contacts-full', a.stats.early_drop_unknown_cmd, 1);
+    const b = new SmartAccumulator(STRICT_OFF);
+    b.inject(buildRadioFrame(CMD_ENCRYPTED_BIN, Buffer.alloc(16)));
+    check('encrypted binary strict-off ignored as known non-message', b.stats.early_drop_unknown_cmd, 0);
 }
 {
     const a = new SmartAccumulator(STRICT_ON);

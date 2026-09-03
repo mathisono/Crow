@@ -139,7 +139,12 @@ api._test_reset();
     const enc = api._test_build_frame(CMD_ENCRYPTED_DM, fillBytes(0x58, 16));
     api._test_inject(enc, STRICT_OFF);
     check("encrypted strict-off: not counted as encrypted drop", api._test_stats().early_drop_encrypted, 0);
-    check("encrypted strict-off: ignored as known non-message", api._test_stats().early_drop_unknown_cmd, 0);
+    check("encrypted strict-off: 0x90 is safely ignored as contacts-full", api._test_stats().early_drop_unknown_cmd, 1);
+    check("encrypted strict-off: not counted as unknown frame", api._test_stats().unknown_frames, 0);
+    api._test_reset();
+    const encBin = api._test_build_frame(0x91, fillBytes(0x58, 16));
+    api._test_inject(encBin, STRICT_OFF);
+    check("encrypted binary strict-off: ignored as known non-message", api._test_stats().early_drop_unknown_cmd, 0);
 }
 
 // ---- 7. Unknown command early-drop

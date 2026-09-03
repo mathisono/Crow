@@ -167,6 +167,7 @@ ok('parses self-info from its printable trailing name', SOURCE.includes('functio
 ok('uses explicit configured channel slots without discovery', SOURCE.includes('registerConfiguredChannelSlots(config)') && SOURCE.includes('channel_discovery: false'));
 ok('requires exact tuple proof before serial send', SOURCE.includes('verifiedLocalChannelForSlot(outboundChannelIndex, configuredChannelNamekey)'));
 ok('normalizes Companion Public to Crow public namekey', DISCOVERY_SOURCE.includes('name === "Public"') && DISCOVERY_SOURCE.includes('channel.meshcorePublicChannelNamekey()'));
+ok('serial channel test hook uses the runtime decoder', SOURCE.includes('decodeChannelInfoForTest(framePayload)') && DISCOVERY_SOURCE.includes('return parseChannelInfo(data);'));
 ok('waits for self-info before queue sync', SOURCE.includes('Wait for self-info or a queue push') && SOURCE.includes('companionReady && syncingMessages') && SOURCE.includes('if (cmd === RESP_SELF_INFO)'));
 ok('retries and reconnects after a lost serial handshake', SOURCE.includes('SERIAL_HANDSHAKE_ATTEMPTS') && SOURCE.includes('handshakeAttempts >= SERIAL_HANDSHAKE_ATTEMPTS') && SOURCE.includes('closeSerial("handshake timeout")'));
 ok('exposes serial handshake readiness', SOURCE.includes('handshake_ready: companionReady') && SOURCE.includes('handshake_attempts: handshakeAttempts'));

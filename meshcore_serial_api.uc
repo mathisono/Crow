@@ -1355,7 +1355,7 @@ export function _test_set_configured_channel(index, namekey)
 
 export function _test_decode_channel_info(framePayload)
 {
-    return require("meshcore_tcp_discovery_loader").parseChannelInfoForTest(framePayload);
+    return require("meshcore_tcp_discovery_loader").decodeChannelInfoForTest(framePayload);
 };
 
 export function _test_channel_receive_allowed(index, namekey)
