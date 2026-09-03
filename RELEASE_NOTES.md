@@ -39,6 +39,17 @@ that closes without returning frames is not RF proof, and the retained soak
 files include historical failure evidence as well as successful short runs.
 See [DEVELOPMENT_PLAN.md](docs/DEVELOPMENT_PLAN.md) for the hardware gate record.
 
+## Credits
+
+Crow continues the
+[Raven Mesh Messaging Platform](https://github.com/kn6plv/Raven), originally
+developed by Tim Wilkinson and the Raven contributors. Crow was conceived,
+invented, and directed by Mathison, with human-directed AI engineering support
+from Bob/OpenAI Codex using GPT-5.5 and GPT-5.6, Google Gemini, and Anthropic
+Claude 4.6. See
+[CREDITS.md](https://github.com/mathisono/Crow/blob/main/CREDITS.md) for the
+complete development provenance.
+
 ## Artifacts
 
 - `crow_alpha.ipk` for opkg-based AREDN/OpenWrt nodes.

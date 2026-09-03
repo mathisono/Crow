@@ -8,4 +8,15 @@ Send mesages, share a file, have group chats with your APRS stations. Dose your 
 
 Documentation can be found in the [Crow GitHub wiki](https://github.com/mathisono/Crow/wiki).
 
+## Credits
+
+Crow is derived from the
+[Raven Mesh Messaging Platform](https://github.com/kn6plv/Raven), originally
+developed by Tim Wilkinson with contributions preserved in this repository's
+Git history. Crow was conceived, invented, and directed by Mathison and was
+developed through human-directed, AI-assisted engineering using Bob/OpenAI
+Codex with GPT-5.5 and GPT-5.6, Google Gemini, and Anthropic Claude 4.6.
+
+See [CREDITS.md](CREDITS.md) for the full project provenance.
+
 The name APRS™ (Automatic Packet Reporting System) is a registered trademark originally held by its creator, the late Bob Bruninga (WB4APR).
