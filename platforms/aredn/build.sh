@@ -126,6 +126,7 @@ Description: Crow Mesh Messaging
 __EOF__
 cp "$SRC/platforms/aredn/postinst" "$ROOT/control/postinst"
 cp "$SRC/platforms/aredn/prerm" "$ROOT/control/prerm"
+printf '%s\n' '/usr/local/crow/crow.conf' > "$ROOT/control/conffiles"
 chmod 755 "$ROOT/control/postinst" "$ROOT/control/prerm"
 
 (cd "$ROOT/control" && tar --sort=name --mtime="@${BUILD_EPOCH}" --owner=0 --group=0 --numeric-owner -czf ../control.tar.gz .)
@@ -145,8 +146,9 @@ if [ ! -x "$MKAPK" ]; then
 fi
 cp "$SRC/platforms/aredn/postinstall" "$ROOT/data/.post-install"
 cp "$SRC/platforms/aredn/prerm" "$ROOT/data/.pre-deinstall"
+cp "$SRC/platforms/aredn/preupgrade" "$ROOT/data/.pre-upgrade"
 cp "$SRC/platforms/aredn/postupgrade" "$ROOT/data/.post-upgrade"
-chmod 755 "$ROOT/data/.post-install" "$ROOT/data/.pre-deinstall" "$ROOT/data/.post-upgrade"
+chmod 755 "$ROOT/data/.post-install" "$ROOT/data/.pre-deinstall" "$ROOT/data/.pre-upgrade" "$ROOT/data/.post-upgrade"
 "$MKAPK" \
     -n crow \
     -v "$VER" \

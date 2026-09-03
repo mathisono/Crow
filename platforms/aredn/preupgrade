@@ -1,0 +1,10 @@
+#!/bin/sh
+
+# APK does not treat /usr/local as a protected configuration path. Preserve
+# Crow's live configuration before the package payload replaces the default.
+if [ -f /usr/local/crow/crow.conf ]; then
+    umask 077
+    cp -p /usr/local/crow/crow.conf /tmp/crow.conf.pre-upgrade
+fi
+
+exit 0
