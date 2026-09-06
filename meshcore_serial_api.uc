@@ -414,7 +414,7 @@ function openSerial()
             nextOpenTime = time() + REOPEN_INTERVAL;
             return false;
         }
-        serialState = "connected";
+        serialState = "connecting";
         lastError = null;
         stats.opens++;
         // Opening a RAK CDC ACM port can reset the companion firmware.  Sending
@@ -801,6 +801,7 @@ function smartAccumulate(data)
         if (cmd === RESP_SELF_INFO) {
             stats.self_info++;
             companionReady = true;
+            serialState = "connected";
             handshakeDue = 0;
             handshakeAttempts = 0;
             syncRequestInFlight = false;

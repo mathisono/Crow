@@ -1,0 +1,134 @@
+#!/bin/sh
+#
+# Resolve a USB CDC ACM Companion by identity, then expose it as a local TCP
+# stream for Crow. The wrapper stays alive while the radio is absent and
+# re-resolves it after disconnects or USB re-enumeration.
+
+DEV_ROOT="${CROW_SERIAL_DEV_ROOT:-/dev}"
+SYS_TTY_ROOT="${CROW_SERIAL_SYS_TTY_ROOT:-/sys/class/tty}"
+USB_ID="${CROW_SERIAL_USB_ID:-}"
+USB_SERIAL="${CROW_SERIAL_USB_SERIAL:-}"
+LISTEN_HOST="${CROW_SERIAL_LISTEN_HOST:-127.0.0.1}"
+LISTEN_PORT="${CROW_SERIAL_LISTEN_PORT:-4405}"
+RETRY_SECONDS="${CROW_SERIAL_RETRY_SECONDS:-3}"
+TEST_MODE="${CROW_SERIAL_TEST_MODE:-0}"
+
+log()
+{
+    logger -t crow-serial-bridge "$*" 2>/dev/null || true
+}
+
+is_device()
+{
+    [ -c "$1" ] || { [ "$TEST_MODE" = "1" ] && [ -e "$1" ]; }
+}
+
+usb_identity()
+{
+    tty="${1##*/}"
+    path=$(readlink -f "$SYS_TTY_ROOT/$tty/device" 2>/dev/null) || return 1
+    while [ -n "$path" ] && [ "$path" != "/" ]; do
+        if [ -f "$path/idVendor" ] && [ -f "$path/idProduct" ]; then
+            vendor=$(tr 'A-F' 'a-f' < "$path/idVendor")
+            product=$(tr 'A-F' 'a-f' < "$path/idProduct")
+            serial=""
+            [ -f "$path/serial" ] && serial=$(cat "$path/serial")
+            printf '%s:%s %s\n' "$vendor" "$product" "$serial"
+            return 0
+        fi
+        path=${path%/*}
+        [ -n "$path" ] || path="/"
+    done
+    return 1
+}
+
+identity_matches()
+{
+    identity=$(usb_identity "$1") || return 1
+    actual_id=${identity%% *}
+    actual_serial=${identity#* }
+
+    if [ -n "$USB_SERIAL" ]; then
+        [ "$actual_serial" = "$USB_SERIAL" ]
+        return
+    fi
+    if [ -n "$USB_ID" ]; then
+        expected_id=$(printf '%s' "$USB_ID" | tr 'A-F' 'a-f')
+        [ "$actual_id" = "$expected_id" ]
+        return
+    fi
+    return 1
+}
+
+resolve_device()
+{
+    candidate_count=0
+    candidate=""
+    match_count=0
+    matched=""
+
+    for device in "$DEV_ROOT"/ttyACM*; do
+        is_device "$device" || continue
+        candidate_count=$((candidate_count + 1))
+        candidate="$device"
+        if identity_matches "$device"; then
+            match_count=$((match_count + 1))
+            matched="$device"
+        fi
+    done
+
+    if [ "$match_count" -eq 1 ]; then
+        printf '%s\n' "$matched"
+        return 0
+    fi
+    if [ "$match_count" -gt 1 ]; then
+        log "multiple USB ACM devices match identity; refusing ambiguous selection"
+        return 3
+    fi
+    if [ "$candidate_count" -eq 1 ]; then
+        log "USB identity did not match; using sole ACM device $candidate"
+        printf '%s\n' "$candidate"
+        return 0
+    fi
+    if [ "$candidate_count" -gt 1 ]; then
+        log "multiple USB ACM devices found and none matches identity; refusing ambiguous selection"
+        return 3
+    fi
+    return 2
+}
+
+if [ "${1:-}" = "--resolve" ]; then
+    resolve_device
+    exit $?
+fi
+
+child=""
+stop()
+{
+    [ -n "$child" ] && kill "$child" 2>/dev/null || true
+    [ -n "$child" ] && wait "$child" 2>/dev/null || true
+    exit 0
+}
+trap stop INT TERM
+
+while :; do
+    device=$(resolve_device)
+    rc=$?
+    if [ "$rc" -ne 0 ]; then
+        [ "$rc" -eq 2 ] && log "waiting for a USB ACM Companion"
+        sleep "$RETRY_SECONDS"
+        continue
+    fi
+
+    identity=$(usb_identity "$device" 2>/dev/null || echo "unknown")
+    log "bridging $device ($identity) to $LISTEN_HOST:$LISTEN_PORT"
+    /usr/bin/socat -d -d \
+        "FILE:$device,raw,nonblock,echo=0" \
+        "TCP-LISTEN:$LISTEN_PORT,bind=$LISTEN_HOST,reuseaddr" &
+    child=$!
+    wait "$child"
+    rc=$?
+    child=""
+    log "bridge exited rc=$rc; rescanning USB ACM devices"
+    sleep "$RETRY_SECONDS"
+done

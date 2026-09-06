@@ -393,6 +393,11 @@ function resolveBackendName(namekey)
     return defaultBackendName;
 }
 
+export function backendNameForChannel(namekey)
+{
+    return channelBackendMap[namekey] ?? null;
+};
+
 // Resolve which backend name to use for a group (group.backend > channel backend > default)
 function resolveGroupBackendName(g, namekey)
 {

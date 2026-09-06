@@ -31,6 +31,7 @@
     --unread-color: white;
     --channel-selected-bg-color: #f0f0f0;
     --channel-hover-bg-color: #e8e8e8;
+    --channel-disconnected-bg-color: rgba(255, 255, 255, 0.88);
     --node-selected-bg-color: #f0f0f0;
     --node-hover-bg-color: #e8e8e8;
     --link-color: #0040c0;
@@ -81,6 +82,7 @@
     --unread-color: #303030;
     --channel-selected-bg-color: #383838;
     --channel-hover-bg-color: #404040;
+    --channel-disconnected-bg-color: rgba(32, 32, 32, 0.90);
     --node-selected-bg-color: #383838;
     --node-hover-bg-color: #404040;
     --link-color: #70a0ff;
@@ -392,9 +394,11 @@ a
 }
 .channel .n
 {
+    position: relative;
     height: 30px;
     flex: 1;
     align-items: center;
+    overflow: hidden;
 }
 .channel .t
 {
@@ -406,6 +410,24 @@ a
 {
     display: block;
     font-size: 10px;
+}
+.channel .backend-disconnected
+{
+    position: absolute;
+    inset: 0;
+    align-items: center;
+    justify-content: center;
+    color: #e00000;
+    background-color: var(--channel-disconnected-bg-color);
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: 0.08em;
+    pointer-events: none;
+    z-index: 1;
+}
+.channel .backend-disconnected.connecting
+{
+    color: #9a6200;
 }
 .channel .unread,
 .node .unread

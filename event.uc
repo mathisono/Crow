@@ -226,9 +226,27 @@ export function tick()
                 case "channels":
                 {
                     const channels = map(channel.getAllLocalChannels(), c => {
-                        return { namekey: c.namekey, label: c.label ?? "", meshtastic: channel.isMeshtasticPreset(c.namekey), meshcore: channel.isMeshcorePreset(c.namekey), aredn: channel.isAREDNPreset(c.namekey), winlink: c.winlink, telemetry: c.telemetry, backend: c.backend ?? "", state: textmessage.state(c.namekey) };
+                        const binding = commands.channelBackendBinding(c);
+                        return {
+                            namekey: c.namekey,
+                            label: c.label ?? "",
+                            meshtastic: channel.isMeshtasticPreset(c.namekey),
+                            meshcore: channel.isMeshcorePreset(c.namekey),
+                            aredn: channel.isAREDNPreset(c.namekey),
+                            winlink: c.winlink,
+                            telemetry: c.telemetry,
+                            backend: c.backend ?? "",
+                            backend_family: binding?.family ?? "",
+                            backend_key: binding?.key ?? "",
+                            state: textmessage.state(c.namekey)
+                        };
                     });
-                    send({ event: msg.cmd, channels: channels, aprs_backends: aprs.enabled ? aprs.getBackendNames() : [] });
+                    send({
+                        event: msg.cmd,
+                        channels: channels,
+                        aprs_backends: aprs.enabled ? aprs.getBackendNames() : [],
+                        backend_status: commands.backendStatusSnapshot()
+                    });
                     break;
                 }
                 case "newchannels":
@@ -367,7 +385,7 @@ export function tick()
         merge = {};
     }
     if (timers.tick("keepalive")) {
-        send({ event: "beat" });
+        send({ event: "beat", backend_status: commands.backendStatusSnapshot() });
     }
 };
 

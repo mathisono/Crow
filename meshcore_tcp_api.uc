@@ -170,6 +170,7 @@ let roomServers = [];
 let pendingRoomLogins = {};
 let roomLoginBootAttempted = false;
 let pendingChannelProvision = null;
+let connectionReady = false;
 
 let directPrefixes = {};
 let directPrefixOrder = [];
@@ -834,6 +835,7 @@ function resetState()
     syncingMessages = false;
     syncRequestInFlight = false;
     syncPausedBackpressure = false;
+    connectionReady = false;
 }
 
 function disableNagle(sock)
@@ -1584,6 +1586,7 @@ function smartAccumulate(data)
 
         if (cmd === RESP_SELF_INFO) {
             stats.self_info++;
+            connectionReady = true;
             syncRequestInFlight = false;
             const name = parseSelfInfo(framePayload);
             if (name) {
@@ -2032,6 +2035,7 @@ export function status()
 {
     const discoveryStatus = discovery?.status?.() ?? {};
     return {
+        state: !s ? "disconnected" : (connectionReady ? "connected" : "connecting"),
         connects: stats.connects,
         disconnects: stats.disconnects,
         handshakes_sent: stats.handshakes_sent,

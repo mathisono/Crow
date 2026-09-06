@@ -119,7 +119,8 @@ function candidateStatus(key, label, transport, configured, isActive, host, port
         state = "configured-inactive";
     }
     else if (configured && isActive) {
-        state = socketHandle ? (transport === "udp" ? "listening" : "connected") : "enabled-no-socket";
+        state = detail.state ??
+            (socketHandle ? (transport === "udp" ? "listening" : "connected") : "enabled-no-socket");
     }
 
     return {
@@ -130,6 +131,7 @@ function candidateStatus(key, label, transport, configured, isActive, host, port
         configured: configured,
         active: isActive,
         state: state,
+        last_error: detail.last_error,
         host: host,
         port: port,
         socket: socketHandle !== null,

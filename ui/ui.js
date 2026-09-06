@@ -14,6 +14,7 @@ let replyid;
 let activeFilter;
 let winlink = null;
 let aprsBackends = [];
+let backendStatuses = {};
 let activityTimeout;
 let catchupTimeout;
 let focusid = null;
@@ -138,6 +139,75 @@ function getChannel(namekey)
     return directs[namekey];
 }
 
+function updateBackendStatuses(statuses)
+{
+    if (!Array.isArray(statuses)) {
+        return false;
+    }
+    const next = {};
+    statuses.forEach(status => {
+        const family = String(status?.family ?? "");
+        const key = String(status?.key ?? "");
+        if (family && key) {
+            next[`${family}:${key}`] = {
+                state: String(status?.state ?? "disconnected"),
+                label: String(status?.label ?? "device"),
+                transport: String(status?.transport ?? ""),
+                device: String(status?.device ?? ""),
+                host: String(status?.host ?? ""),
+                port: status?.port ?? null,
+                error: String(status?.error ?? "")
+            };
+        }
+    });
+    const changed = JSON.stringify(next) !== JSON.stringify(backendStatuses);
+    backendStatuses = next;
+    return changed;
+}
+
+function channelBackendDisconnected(channel)
+{
+    const family = String(channel?.backend_family ?? "");
+    const key = String(channel?.backend_key ?? "");
+    if (!family || !key) {
+        return false;
+    }
+    const status = backendStatuses[`${family}:${key}`];
+    return !!status && status.state !== "connected" && status.state !== "listening";
+}
+
+function channelBackendReadout(channel)
+{
+    if (!channelBackendDisconnected(channel)) {
+        return null;
+    }
+
+    const status = backendStatuses[`${channel.backend_family}:${channel.backend_key}`];
+    const state = status.state;
+    let text = "CAN'T CONNECT TO DEVICE";
+    let pending = false;
+    if (state === "connecting" || state === "opening") {
+        text = "CONNECTING TO DEVICE";
+        pending = true;
+    }
+    else if (state === "reconnecting") {
+        text = "RECONNECTING TO DEVICE";
+        pending = true;
+    }
+
+    let endpoint = status.device;
+    if (!endpoint && status.host) {
+        endpoint = status.host + (status.port != null ? `:${status.port}` : "");
+    }
+    const detail = status.error || state.replace(/-/g, " ");
+    const target = endpoint ? ` (${endpoint})` : "";
+    return {
+        text: text,
+        pending: pending,
+        title: `${status.label || "Device"}${target}: ${detail}`
+    };
+}
+
 function isDirect(namekey)
 {
     return namekey.indexOf("DirectMessages ") === 0;
@@ -214,9 +284,11 @@ function htmlChannel(channel)
     const nk = channel.namekey.split(" ");
     const namekey = String(channel.namekey ?? "");
     const onclick = `showNamekey(${JSON.stringify(namekey)})`;
+    const backendReadout = channelBackendReadout(channel);
     return `<div class="channel ${rightSelection === namekey ? "selected" : ""}" data-namekey="${attr(namekey)}" onclick="${attr(onclick)}">
         <div class="n">
             <div class="t">${channel.label ? esc(channel.label) : (channel.meshtastic ? "Meshtastic" : esc(nk[0]))}</div>
+            ${backendReadout ? `<div class="backend-disconnected ${backendReadout.pending ? "connecting" : "failed"}" title="${attr(backendReadout.title)}" aria-label="${attr(backendReadout.title)}">${esc(backendReadout.text)}</div>` : ''}
         </div>
         <div class="unread">${channel.state.count > 0 ? safeInt(channel.state.count) : ''}</div>
     </div>`;
@@ -624,6 +696,7 @@ function updateChannels(msg)
 {
     if (msg) {
         channels = msg.channels;
+        updateBackendStatuses(msg.backend_status);
         if (msg.aprs_backends) {
             aprsBackends = msg.aprs_backends;
         }
@@ -1499,6 +1572,9 @@ function startup()
                     commandReply(msg);
                     break;
                 case "beat":
+                    if (updateBackendStatuses(msg.backend_status) && channels) {
+                        updateChannels();
+                    }
                     break;
                 default:
                     break;

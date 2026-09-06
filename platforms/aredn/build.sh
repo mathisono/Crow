@@ -70,6 +70,7 @@ cp "$SRC/platforms/aredn/raven.conf" "$ROOT/data/usr/local/crow/crow.conf"
 cp "$SRC/platforms/aredn/crow-migrate-raven.sh" "$ROOT/data/usr/local/crow/platforms/aredn/crow-migrate-raven.sh"
 cp "$SRC/platforms/aredn/crow-runner.sh" "$ROOT/data/usr/local/crow/platforms/aredn/crow-runner.sh"
 cp "$SRC/platforms/aredn/crow-watchdog.sh" "$ROOT/data/usr/local/crow/platforms/aredn/crow-watchdog.sh"
+cp "$SRC/tools/crow-serial-bridge" "$ROOT/data/usr/local/crow/crow-serial-bridge"
 if ! command -v "$GO_BIN" >/dev/null 2>&1; then
     echo "Go is required to build the AREDN crow-rawtty helper (set GO_BIN or install go)." >&2
     exit 1
@@ -79,6 +80,7 @@ fi
     -o "$ROOT/data/usr/local/crow/crow-rawtty" \
     ./tools/crow-rawtty)
 chmod 755 "$ROOT/data/usr/local/crow/crow-rawtty"
+chmod 755 "$ROOT/data/usr/local/crow/crow-serial-bridge"
 printf "export const version = '%s';\n" "$VERSION" > "$ROOT/data/usr/local/crow/version.uc"
 
 cp "$SRC/ui/ui.js" "$SRC/ui/ui.css" "$SRC/ui/crow.svg" "$ROOT/data/www/apps/crow/"

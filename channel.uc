@@ -198,6 +198,19 @@ export function getChannelByMeshcoreSlot(slot)
     return channelsByMeshcoreSlot[slot];
 };
 
+export function isMeshcoreSlotChannel(namekey)
+{
+    if (!namekey) {
+        return false;
+    }
+    for (let slot in channelsByMeshcoreSlot) {
+        if (channelsByMeshcoreSlot[slot]?.namekey === namekey) {
+            return true;
+        }
+    }
+    return false;
+};
+
 // NEW (Phase 2): Register a channel for a MeshCore group slot
 // Called during auto-discovery to map slot->channel
 export function setMeshcoreSlotChannel(slot, channel)

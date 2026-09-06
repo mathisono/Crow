@@ -192,6 +192,74 @@ function backendStatusReply()
     return reply;
 }
 
+function compactBackendStatus(b)
+{
+    return {
+        family: b.family ?? "",
+        key: b.key ?? "",
+        label: b.label ?? "",
+        transport: b.transport ?? "",
+        state: b.state ?? "disconnected",
+        configured: b.configured === true,
+        active: b.active === true,
+        device: b.device ?? "",
+        host: b.host ?? "",
+        port: b.port,
+        error: b.last_error ?? ""
+    };
+}
+
+export function backendStatusSnapshot()
+{
+    const out = [];
+
+    if (aprs.enabled) {
+        const statuses = aprs.getBackendStatus ? aprs.getBackendStatus() : [];
+        for (let i = 0; i < length(statuses); i++) {
+            statuses[i].family = "aprs";
+            push(out, compactBackendStatus(statuses[i]));
+        }
+    }
+
+    const meshcore = meshcore_backend.backendStatus ? meshcore_backend.backendStatus() : [];
+    for (let i = 0; i < length(meshcore); i++) {
+        if (meshcore[i].configured) {
+            push(out, compactBackendStatus(meshcore[i]));
+        }
+    }
+
+    const meshtastic = meshtastic_backend.backendStatus ? meshtastic_backend.backendStatus() : [];
+    for (let i = 0; i < length(meshtastic); i++) {
+        if (meshtastic[i].configured) {
+            push(out, compactBackendStatus(meshtastic[i]));
+        }
+    }
+
+    return out;
+};
+
+export function channelBackendBinding(c)
+{
+    const aprsName = aprs.enabled && aprs.backendNameForChannel
+        ? aprs.backendNameForChannel(c?.namekey)
+        : null;
+    if (aprsName) {
+        return { family: "aprs", key: aprsName };
+    }
+
+    if (channel.isMeshcorePreset(c?.namekey) || channel.isMeshcoreSlotChannel(c?.namekey)) {
+        const name = meshcore_backend.backendName ? meshcore_backend.backendName() : null;
+        return name ? { family: "meshcore", key: `meshcore.${name}` } : null;
+    }
+
+    if (channel.isMeshtasticPreset(c?.namekey)) {
+        const name = meshtastic_backend.backendName ? meshtastic_backend.backendName() : null;
+        return name ? { family: "meshtastic", key: `meshtastic.${name}` } : null;
+    }
+
+    return null;
+};
+
 export function post(cmd, id)
 {
     switch (cmd[0]) {
