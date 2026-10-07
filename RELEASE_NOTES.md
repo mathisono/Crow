@@ -5,6 +5,8 @@
 - Raw Xastir, YAAC, and generic TNC2 TCP connections no longer receive an
   APRS-IS login line. This prevents local TNC servers from closing otherwise
   valid Crow sessions immediately after connect.
+- Raw TNC2 packets no longer carry the APRS-IS-only `TCPIP*` path marker, which
+  allows Xastir/YAAC IGates to forward locally injected Crow packets upstream.
 - Every APRS disconnect path now uses the same exponential retry schedule:
   5 seconds initially, doubling to a maximum of 5 minutes.
 - Configured APRS groups restore and bind a missing AREDN-only group channel at

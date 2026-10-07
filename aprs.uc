@@ -365,7 +365,15 @@ function aprsMessage(dst, text, id)
     return `:${dst}:${text}${id ? "{" + id : ""}`;
 }
 
-function tnc2(info) { return `${cfg.callsign}>${DEST},TCPIP*:${info}\r\n`; }
+function tnc2(inst, info)
+{
+    // TCPIP* says the packet has already traversed APRS-IS. It belongs on a
+    // direct APRS-IS upload, but causes a local Xastir/YAAC IGate to reject the
+    // packet as an Internet-to-Internet loop. Raw TNC2 clients inject without
+    // that path and let the local application add its own RF/IGate routing.
+    const path = inst.config?.type === "aprsis" ? ",TCPIP*" : "";
+    return `${cfg.callsign}>${DEST}${path}:${info}\r\n`;
+}
 
 function parseTnc2(line)
 {
@@ -463,7 +471,7 @@ function backendSendTo(inst, info)
         case "xastir":
         case "yaac":
         case "tcp_text":
-            payload = tnc2(info);
+            payload = tnc2(inst, info);
             break;
         default:
             inst.tx_dropped++;

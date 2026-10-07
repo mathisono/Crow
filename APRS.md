@@ -88,6 +88,10 @@ to gate client-originated packets. If APRS-IS delivery is required regardless
 of the local application's IGate policy, configure a second `aprsis` backend
 and bind the transmitting channel or group to that backend.
 
+Crow adds the `TCPIP*` path marker only when uploading directly to APRS-IS.
+Packets injected into Xastir/YAAC omit it so the local application's IGate does
+not reject them as packets that already traversed APRS-IS.
+
 Crow keeps the configured backend key stable for channel mappings and derives
 the user-facing backend label from the transport, backend key, and APRS
 callsign. For example, backend key `xastir_dzb4` with callsign `KJ6DZB-10`
