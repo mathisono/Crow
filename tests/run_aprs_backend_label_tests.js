@@ -58,6 +58,12 @@ failures += check(
 
 const source = fs.readFileSync(path.join(__dirname, '..', 'aprs.uc'), 'utf8');
 failures += check(
+    'only APRS-IS receives an APRS-IS login line',
+    source.includes('if (btype === "aprsis") {') &&
+    !source.includes('btype === "aprsis" || btype === "tcp_text"'),
+    true
+);
+failures += check(
     'production instance receives APRS callsign',
     source.includes('createBackendInstance(name, backendsCfg[name], cfg.callsign)'),
     true
@@ -68,6 +74,6 @@ failures += check(
     true
 );
 
-const total = 6;
+const total = 7;
 console.log(`\n${total - failures} passed, ${failures} failed`);
 process.exit(failures ? 1 : 0);

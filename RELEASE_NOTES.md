@@ -1,3 +1,31 @@
+# Crow r30 (unreleased)
+
+## APRS reliability and group repeat
+
+- Raw Xastir, YAAC, and generic TNC2 TCP connections no longer receive an
+  APRS-IS login line. This prevents local TNC servers from closing otherwise
+  valid Crow sessions immediately after connect.
+- Every APRS disconnect path now uses the same exponential retry schedule:
+  5 seconds initially, doubling to a maximum of 5 minutes.
+- Configured APRS groups restore and bind a missing AREDN-only group channel at
+  startup. This prevents stale channel override arrays from silently disabling
+  group posting after a base configuration or package update.
+- APRS backend status now reports transmit attempts and dropped sends, and the
+  runtime log records each packet handed to a backend.
+- Xastir TCP acceptance and APRS-IS delivery are explicitly separated: Xastir
+  must be configured to IGate client-originated packets, or Crow must use a
+  separate APRS-IS backend for traffic that must reach APRS-IS directly.
+
+## Validation
+
+- Complete Crow development suite passed.
+- The updated APRS module loaded successfully on BB5MC and Hub5 target ucode.
+- BB5MC restored `%APRSTest` despite a stale channel override and transmitted
+  one APRS packet to each of its three configured group members.
+- Hub5 maintained its Xastir connection after the raw-TNC login correction.
+
+---
+
 # Crow v0.0.2-r21140793
 
 This release hardens Crow for constrained AREDN nodes and rolls the completed

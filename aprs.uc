@@ -49,6 +49,17 @@ function closeBackendSocket(inst)
     }
 }
 
+function scheduleReconnect(inst)
+{
+    const delay = inst.reconnect_delay;
+    closeBackendSocket(inst);
+    inst.connecting = false;
+    inst.connect_deadline = 0;
+    inst.reconnect_after = time() * 1000 + delay;
+    inst.reconnect_delay = min(delay * 2, RECONNECT_MAX_MS);
+    return delay;
+}
+
 function clearObject(o)
 {
     for (let k in o) {
@@ -103,6 +114,8 @@ function createBackendInstance(name, bcfg, callsign)
         reconnect_delay: RECONNECT_BASE_MS,
         pending_rx: [],
         duplicates_dropped: 0,
+        tx_attempts: 0,
+        tx_dropped: 0,
         connecting: false,
         connect_deadline: 0
     };
@@ -115,7 +128,7 @@ function finishConnect(inst, btype, b, host, port)
     inst.reconnect_delay = RECONNECT_BASE_MS;
     inst.reconnect_after = 0;
     inst.socket.listen();
-    if (btype === "aprsis" || btype === "tcp_text" || btype === "xastir" || btype === "yaac") {
+    if (btype === "aprsis") {
         const passcode = b.passcode ?? "-1";
         inst.socket.send(`user ${cfg.callsign} pass ${passcode} vers Crow 0.1\r\n`);
         if (b.filter) {
@@ -145,10 +158,7 @@ function checkPendingConnect(name, inst)
     // Check deadline
     if (t >= inst.connect_deadline) {
         DEBUG0("%s: connect timed out (retry in %ds)\n", inst.displayName, inst.reconnect_delay / 1000);
-        closeBackendSocket(inst);
-        inst.connecting = false;
-        inst.reconnect_after = t + inst.reconnect_delay;
-        inst.reconnect_delay = min(inst.reconnect_delay * 2, RECONNECT_MAX_MS);
+        scheduleReconnect(inst);
     }
 }
 
@@ -181,6 +191,28 @@ function getGroup(name)
     for (let i = 0; i < length(cfg.groups ?? []); i++) {
         if (lc(cfg.groups[i].name) === name) {
             return cfg.groups[i];
+        }
+    }
+    return null;
+}
+
+function groupBaseName(g)
+{
+    const name = trim(g?.name ?? "");
+    return substr(name, 0, 1) === "#" || substr(name, 0, 1) === "%"
+        ? substr(name, 1) : name;
+}
+
+function findGroupChannelNamekey(channels, g)
+{
+    const base = groupBaseName(g);
+    if (!base) {
+        return null;
+    }
+    for (let i = 0; i < length(channels); i++) {
+        const namekey = channels[i]?.namekey ?? "";
+        if (index(namekey, `%${base} `) === 0 || index(namekey, `#${base} `) === 0) {
+            return namekey;
         }
     }
     return null;
@@ -417,20 +449,30 @@ function getBackendInstance(name)
 function backendSendTo(inst, info)
 {
     if (!inst?.socket || !inst.config?.tx_enabled) {
+        if (inst) {
+            inst.tx_dropped++;
+        }
         return false;
     }
+    let payload = null;
     switch (inst.config?.type) {
         case "kiss_tcp":
-            inst.socket.send(kissFrame(inst, makeAx25(inst, info)));
-            return true;
+            payload = kissFrame(inst, makeAx25(inst, info));
+            break;
         case "aprsis":
         case "xastir":
         case "yaac":
         case "tcp_text":
-            inst.socket.send(tnc2(info));
-            return true;
+            payload = tnc2(info);
+            break;
+        default:
+            inst.tx_dropped++;
+            return false;
     }
-    return false;
+    inst.socket.send(payload);
+    inst.tx_attempts++;
+    DEBUG0("%s: transmitted APRS packet (%d bytes)\n", inst.displayName, length(payload));
+    return true;
 }
 
 function backendSend(backendName, info)
@@ -697,8 +739,7 @@ function connectBackend(name, inst)
     inst.socket = socket.create(socket.AF_INET, socket.SOCK_STREAM | socket.SOCK_NONBLOCK, 0);
     if (!inst.socket) {
         DEBUG0("%s: socket create failed\n", inst.displayName);
-        inst.reconnect_after = t + inst.reconnect_delay;
-        inst.reconnect_delay = min(inst.reconnect_delay * 2, RECONNECT_MAX_MS);
+        scheduleReconnect(inst);
         return;
     }
     const r = inst.socket.connect({ address: host, port: port });
@@ -712,9 +753,7 @@ function connectBackend(name, inst)
             return;
         }
         DEBUG0("%s: connect %s:%d failed (retry in %ds): %s\n", inst.displayName, host, port, inst.reconnect_delay / 1000, err);
-        closeBackendSocket(inst);
-        inst.reconnect_after = t + inst.reconnect_delay;
-        inst.reconnect_delay = min(inst.reconnect_delay * 2, RECONNECT_MAX_MS);
+        scheduleReconnect(inst);
         return;
     }
     finishConnect(inst, btype, b, host, port);
@@ -727,7 +766,8 @@ function recvFromBackend(inst)
     }
     const data = inst.socket.recv(2048);
     if (!data) {
-        closeBackendSocket(inst);
+        const delay = scheduleReconnect(inst);
+        DEBUG0("%s: connection closed (retry in %ds)\n", inst.displayName, delay / 1000);
         return null;
     }
     if (inst.config?.type === "kiss_tcp") {
@@ -773,7 +813,10 @@ export function setup(config)
     cfg.channel = cfg.channel ?? `${DEFAULT_CHANNEL_NAME} ${DEFAULT_CHANNEL_KEY}`;
     channelKey = split(cfg.channel, " ", 2)[1];
 
-    // Keep existing local channels; only ensure APRS channel is present.
+    // Keep existing local channels and ensure the APRS channel is present.
+    // Configured groups are authoritative even when a stale channel override
+    // replaced the base channel array, so restore a missing AREDN-only group
+    // channel at runtime instead of silently disabling group send/repeat.
     const localChannels = channel.getAllLocalChannels();
     let hasAprsChannel = false;
     for (let i = 0; i < length(localChannels); i++) {
@@ -784,6 +827,18 @@ export function setup(config)
     }
     if (!hasAprsChannel) {
         push(localChannels, { namekey: cfg.channel });
+    }
+    for (let i = 0; i < length(cfg.groups ?? []); i++) {
+        const g = cfg.groups[i];
+        if (!findGroupChannelNamekey(localChannels, g)) {
+            const base = groupBaseName(g);
+            if (base) {
+                push(localChannels, {
+                    namekey: `%${base} ${DEFAULT_CHANNEL_KEY}`,
+                    backend: g.backend ?? ""
+                });
+            }
+        }
     }
     channel.updateLocalChannels(localChannels);
     router = config.router;
@@ -822,6 +877,15 @@ export function setup(config)
     // Also bind the main APRS channel to default if not already bound
     if (!channelBackendMap[cfg.channel]) {
         channelBackendMap[cfg.channel] = defaultBackendName;
+    }
+    const activeChannels = channel.getAllLocalChannels();
+    for (let i = 0; i < length(cfg.groups ?? []); i++) {
+        const g = cfg.groups[i];
+        const namekey = findGroupChannelNamekey(activeChannels, g);
+        if (namekey) {
+            channelBackendMap[namekey] = g.backend && backends[g.backend]
+                ? g.backend : defaultBackendName;
+        }
     }
 
     // Connect all backends
@@ -1016,6 +1080,8 @@ export function getBackendStatus()
             socket: inst.socket !== null,
             pending_rx: length(inst.pending_rx),
             duplicates_dropped: inst.duplicates_dropped,
+            tx_attempts: inst.tx_attempts,
+            tx_dropped: inst.tx_dropped,
             reconnect_in_seconds: max(0, int((inst.reconnect_after - t) / 1000)),
             reconnect_delay_seconds: int(inst.reconnect_delay / 1000)
         });

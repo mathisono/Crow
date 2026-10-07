@@ -81,6 +81,13 @@ Xastir, YAAC, or another APRS/TNC2-style TCP server:
 }
 ```
 
+TNC2 TCP backends are raw local-client connections. Crow does not send an
+APRS-IS login line to them. A packet accepted by a Xastir/YAAC TCP server only
+appears on APRS-IS when that application is separately configured and enabled
+to gate client-originated packets. If APRS-IS delivery is required regardless
+of the local application's IGate policy, configure a second `aprsis` backend
+and bind the transmitting channel or group to that backend.
+
 Crow keeps the configured backend key stable for channel mappings and derives
 the user-facing backend label from the transport, backend key, and APRS
 callsign. For example, backend key `xastir_dzb4` with callsign `KJ6DZB-10`
@@ -131,3 +138,7 @@ Each group can optionally repeat received APRS messages from one group member ba
 ```
 
 When enabled, a message received from one group member is sent to the other group members, not back to the sender. Crow applies simple duplicate suppression and rate limiting to reduce loops.
+
+Configured APRS groups automatically restore their AREDN-only `%Group og==`
+channel during startup if an older channel override omitted it. This keeps the
+group and repeat path active across base configuration and package upgrades.

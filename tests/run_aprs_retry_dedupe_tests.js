@@ -69,11 +69,22 @@ check('production exposes dropped retry count',
     source.includes('duplicates_dropped: inst.duplicates_dropped'), true);
 check('production assigns deterministic cross-gateway APRS id',
     source.includes('extra.id = stableId'), true);
+check('remote socket close schedules APRS reconnect backoff',
+    source.includes('const delay = scheduleReconnect(inst);') &&
+    source.includes('connection closed (retry in %ds)'), true);
+check('configured APRS groups restore missing local channels',
+    source.includes('function findGroupChannelNamekey(channels, g)') &&
+    source.includes('namekey: `%${base} ${DEFAULT_CHANNEL_KEY}`'), true);
+check('configured APRS group channels receive their backend mapping',
+    source.includes('channelBackendMap[namekey] = g.backend && backends[g.backend]'), true);
+check('APRS transmit attempts and disconnected drops are observable',
+    source.includes('tx_attempts: inst.tx_attempts') &&
+    source.includes('tx_dropped: inst.tx_dropped'), true);
 
 const textSource = fs.readFileSync(path.join(__dirname, '..', 'textmessage.uc'), 'utf8');
 check('retained APRS retry guard handles legacy text-store ids',
     textSource.includes('function isAprsRetryCopy(chanmessages, msg, text, textfrom)'), true);
 
-const total = 15;
+const total = 19;
 console.log(`\n${total - failures} passed, ${failures} failed`);
 process.exit(failures ? 1 : 0);
