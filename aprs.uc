@@ -100,7 +100,7 @@ function defaultChannelNameForBackend(bcfg)
         case "aprsis":
             return DEFAULT_APRSIS_CHANNEL_NAME;
         case "kiss_tcp":
-            return "APRS-RF-Feed";
+            return "APRS-tcpKiss";
         case "tcp_text":
         case "xastir":
         case "yaac":

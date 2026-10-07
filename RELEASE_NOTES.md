@@ -3,7 +3,7 @@
 ## APRS reliability and group repeat
 
 - Implicit APRS channels now describe their transport: APRS-IS uses
-  `APRS-IS-Feed`, KISS TCP uses `APRS-RF-Feed`, and TNC2-style backends use
+  `APRS-IS-Feed`, KISS TCP uses `APRS-tcpKiss`, and TNC2-style backends use
   `APRS-TNC-Feed`. The generated channel is bound to the selected default
   backend without requiring a duplicate `channels` entry.
 - APRS group channels keep their `%`-prefixed internal routing namekeys while
