@@ -6,7 +6,8 @@ APRS is public amateur-radio traffic. Keep transmit disabled until the station c
 
 ## Basic configuration
 
-Add an `aprs` block to `raven.conf` and add the APRS channel to `channels`:
+Add an `aprs` block to `raven.conf`. Crow creates and binds the default APRS
+channel automatically, so it does not need to be duplicated in `channels`:
 
 ```json
 {
@@ -14,31 +15,26 @@ Add an `aprs` block to `raven.conf` and add the APRS channel to `channels`:
   "aprs": {
     "enabled": true,
     "callsign": "N0CALL-10",
-    "channel": "APRS og==",
-    "default_group": "APRSgroup1",
     "inline_max_members": 10,
     "backend": {
       "type": "aprsis",
       "host": "rotate.aprs2.net",
       "port": 14580,
       "tx_enabled": false
-    },
-    "groups": [
-      {
-        "name": "APRSgroup1",
-        "members": [ "N0CALL-4", "N0CALL-7" ],
-        "repeat_member_messages": false,
-        "rate_limit_seconds": 20,
-        "max_members": 10
-      }
-    ]
+    }
   },
   "channels": [
-    { "namekey": "AREDN og==", "telemetry": false },
-    { "namekey": "APRS og==", "telemetry": false }
+    { "namekey": "AREDN og==", "telemetry": false }
   ]
 }
 ```
+
+The implicit channel is transport-aware: `APRS-IS-Feed` for APRS-IS,
+`APRS-RF-Feed` for KISS TCP, and `APRS-TNC-Feed` for Xastir, YAAC, or a raw
+TNC2 TCP stream. An explicit `aprs.channel` remains supported and always wins.
+When multiple backends are configured, `aprs.default_backend` selects which
+one owns the implicit channel; otherwise Crow uses the first configured
+backend.
 
 For APRS-IS transmit, set a valid APRS-IS passcode in the backend config and set `tx_enabled` to `true` only when ready.
 

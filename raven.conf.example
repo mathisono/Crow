@@ -9,24 +9,13 @@
     "aprs": {
         "enabled": false,
         "callsign": "KJ6DZB-10",
-        "channel": "APRS og==",
-        "default_group": "APRSgroup1",
         "inline_max_members": 10,
         "backend": {
             "type": "aprsis",
             "host": "rotate.aprs2.net",
             "port": 14580,
             "tx_enabled": false
-        },
-        "groups": [
-            {
-                "name": "APRSgroup1",
-                "members": [ "KJ6DZB-4", "KJ6DZB-10" ],
-                "repeat_member_messages": false,
-                "rate_limit_seconds": 20,
-                "max_members": 10
-            }
-        ]
+        }
     },
     "location": {
         "latitude": 37.000,
@@ -41,7 +30,6 @@
     "messages": {},
     "channels": [
         { "namekey": "AREDN og==", "telemetry": false },
-        { "namekey": "APRS og==", "telemetry": false },
         { "namekey": "LongFast AQ==", "telemetry": true, "meshtastic": true }
     ],
     "telemetry": {

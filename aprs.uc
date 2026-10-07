@@ -20,7 +20,7 @@ const RECONNECT_MAX_MS = 300000;
 const INBOUND_DEDUPE_TTL_SECONDS = 1800;
 const INBOUND_DEDUPE_MAX = 64;
 
-const DEFAULT_CHANNEL_NAME = "APRS-IS-Feed";
+const DEFAULT_APRSIS_CHANNEL_NAME = "APRS-IS-Feed";
 const DEFAULT_CHANNEL_KEY = "og==";
 
 let cfg = null;
@@ -91,6 +91,22 @@ function backendTypeLabel(btype)
         case "xastir":
         case "yaac":     return "aprs-tnc";
         default:         return "aprs";
+    }
+};
+
+function defaultChannelNameForBackend(bcfg)
+{
+    switch (bcfg?.type ?? "aprsis") {
+        case "aprsis":
+            return DEFAULT_APRSIS_CHANNEL_NAME;
+        case "kiss_tcp":
+            return "APRS-RF-Feed";
+        case "tcp_text":
+        case "xastir":
+        case "yaac":
+            return "APRS-TNC-Feed";
+        default:
+            return "APRS-Feed";
     }
 };
 
@@ -818,7 +834,34 @@ export function setup(config)
     }
     enabled = true;
     cfg.callsign = normcall(cfg.callsign ?? config.callsign);
-    cfg.channel = cfg.channel ?? `${DEFAULT_CHANNEL_NAME} ${DEFAULT_CHANNEL_KEY}`;
+
+    // Resolve the backend before creating the implicit APRS channel so its
+    // name describes the actual transport. Explicit channel configuration is
+    // always preserved for backward compatibility.
+    let backendsCfg = cfg.backends;
+    if (!backendsCfg) {
+        backendsCfg = {};
+        if (cfg.backend) {
+            backendsCfg["default"] = cfg.backend;
+        }
+        else {
+            backendsCfg["default"] = { type: "aprsis" };
+        }
+    }
+    let firstName = null;
+    for (let name in backendsCfg) {
+        if (!firstName) {
+            firstName = name;
+        }
+    }
+    if (!firstName) {
+        backendsCfg["default"] = { type: "aprsis" };
+        firstName = "default";
+    }
+    defaultBackendName = cfg.default_backend && backendsCfg[cfg.default_backend]
+        ? cfg.default_backend : firstName;
+
+    cfg.channel = cfg.channel ?? `${defaultChannelNameForBackend(backendsCfg[defaultBackendName])} ${DEFAULT_CHANNEL_KEY}`;
     channelKey = split(cfg.channel, " ", 2)[1];
 
     // Keep existing local channels and ensure the APRS channel is present.
@@ -830,11 +873,14 @@ export function setup(config)
     for (let i = 0; i < length(localChannels); i++) {
         if (localChannels[i].namekey === cfg.channel) {
             hasAprsChannel = true;
+            if (localChannels[i].backend == null) {
+                localChannels[i].backend = defaultBackendName;
+            }
             break;
         }
     }
     if (!hasAprsChannel) {
-        push(localChannels, { namekey: cfg.channel });
+        push(localChannels, { namekey: cfg.channel, backend: defaultBackendName });
     }
     for (let i = 0; i < length(cfg.groups ?? []); i++) {
         const g = cfg.groups[i];
@@ -852,26 +898,9 @@ export function setup(config)
     router = config.router;
 
     // --- Initialize backends ---
-    // Backward compat: single "backend" → backends.default
-    let backendsCfg = cfg.backends;
-    if (!backendsCfg) {
-        backendsCfg = {};
-        if (cfg.backend) {
-            backendsCfg["default"] = cfg.backend;
-        }
-        else {
-            backendsCfg["default"] = { type: "aprsis" };
-        }
-    }
-    // Pick the first backend as default
-    let firstName = null;
     for (let name in backendsCfg) {
         backends[name] = createBackendInstance(name, backendsCfg[name], cfg.callsign);
-        if (!firstName) {
-            firstName = name;
-        }
     }
-    defaultBackendName = firstName;
 
     // Build channel→backend map from config channels
     if (config.channels) {

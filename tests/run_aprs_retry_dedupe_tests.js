@@ -77,6 +77,13 @@ check('configured APRS groups restore missing local channels',
     source.includes('namekey: `%${base} ${DEFAULT_CHANNEL_KEY}`'), true);
 check('configured APRS group channels receive their backend mapping',
     source.includes('channelBackendMap[namekey] = g.backend && backends[g.backend]'), true);
+check('implicit APRS channel name follows the selected transport',
+    source.includes('function defaultChannelNameForBackend(bcfg)') &&
+    source.includes('return "APRS-RF-Feed";') &&
+    source.includes('return "APRS-TNC-Feed";') &&
+    source.includes('defaultChannelNameForBackend(backendsCfg[defaultBackendName])'), true);
+check('implicit APRS channel carries its backend binding',
+    source.includes('push(localChannels, { namekey: cfg.channel, backend: defaultBackendName })'), true);
 check('APRS transmit attempts and disconnected drops are observable',
     source.includes('tx_attempts: inst.tx_attempts') &&
     source.includes('tx_dropped: inst.tx_dropped'), true);
@@ -85,6 +92,6 @@ const textSource = fs.readFileSync(path.join(__dirname, '..', 'textmessage.uc'),
 check('retained APRS retry guard handles legacy text-store ids',
     textSource.includes('function isAprsRetryCopy(chanmessages, msg, text, textfrom)'), true);
 
-const total = 19;
+const total = 21;
 console.log(`\n${total - failures} passed, ${failures} failed`);
 process.exit(failures ? 1 : 0);
