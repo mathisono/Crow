@@ -605,6 +605,9 @@ function updateMe(msg)
 {
     me = nodeExpand(msg.node);
     nodes[me.num] = me;
+    const nodeName = String(me.long_name ?? "").trim();
+    I("node-name").textContent = nodeName;
+    I("node-name").title = nodeName || "Local node name";
     I("post").style.display = me.is_unmessagable ? "none" : null;
 }
 
