@@ -279,15 +279,22 @@ function toDisplayKey(key)
     return key;
 }
 
+function channelDisplayName(namekey)
+{
+    const name = String(namekey ?? "").split(" ")[0];
+    // APRS group channels use a leading '%' as an internal routing marker.
+    // Keep it in the namekey sent to Crow, but do not expose it as UI text.
+    return name.startsWith("%") ? name.substring(1) : name;
+}
+
 function htmlChannel(channel)
 {
-    const nk = channel.namekey.split(" ");
     const namekey = String(channel.namekey ?? "");
     const onclick = `showNamekey(${JSON.stringify(namekey)})`;
     const backendReadout = channelBackendReadout(channel);
     return `<div class="channel ${rightSelection === namekey ? "selected" : ""}" data-namekey="${attr(namekey)}" onclick="${attr(onclick)}">
         <div class="n">
-            <div class="t">${channel.label ? esc(channel.label) : (channel.meshtastic ? "Meshtastic" : esc(nk[0]))}</div>
+            <div class="t">${channel.label ? esc(channel.label) : (channel.meshtastic ? "Meshtastic" : esc(channelDisplayName(namekey)))}</div>
             ${backendReadout ? `<div class="backend-disconnected ${backendReadout.pending ? "connecting" : "failed"}" title="${attr(backendReadout.title)}" aria-label="${attr(backendReadout.title)}">${esc(backendReadout.text)}</div>` : ''}
         </div>
         <div class="unread">${channel.state.count > 0 ? safeInt(channel.state.count) : ''}</div>

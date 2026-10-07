@@ -2,6 +2,8 @@
 
 ## APRS reliability and group repeat
 
+- APRS group channels keep their `%`-prefixed internal routing namekeys while
+  the Web UI presents clean names such as `APRSTest` instead of `%APRSTest`.
 - The explicit Xastir backend authenticates to Xastir's server port before
   transmitting; generic TNC2 and YAAC connections remain raw and receive no
   APRS-IS login line.
