@@ -293,7 +293,7 @@ export function backendName()
 function backendDisplayName(name)
 {
     const backend = `meshcore-${name}[${name}]`;
-    const callsign = uc(trim(lastConfig?.callsign ?? ""));
+    const callsign = uc(trim(lastConfig?._configured_callsign ?? lastConfig?.callsign ?? ""));
     return callsign ? `${backend} ${callsign}` : backend;
 }
 

@@ -196,6 +196,9 @@ export function setup()
         override = {};
     }
 
+    // Keep the operator-configured station callsign available for UI labels.
+    // AREDN derives config.callsign from the node name later in startup.
+    config._configured_callsign = config.callsign;
     config.update = update;
     config.router = router;
 

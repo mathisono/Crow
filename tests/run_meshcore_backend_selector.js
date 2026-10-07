@@ -94,8 +94,12 @@ failures += check('MeshCore selector exports the active backend key',
     meshcoreBackendSource.includes('key: `meshcore.${activeName}`'), true);
 failures += check('MeshCore selector label includes transport and configured callsign',
     meshcoreBackendSource.includes('const backend = `meshcore-${name}[${name}]`;') &&
-    meshcoreBackendSource.includes('lastConfig?.callsign') &&
+    meshcoreBackendSource.includes('lastConfig?._configured_callsign ?? lastConfig?.callsign') &&
     meshcoreBackendSource.includes('`${backend} ${callsign}`'), true);
+failures += check('configured callsign is retained before AREDN platform normalization',
+    configSource.includes('config._configured_callsign = config.callsign;') &&
+    configSource.indexOf('config._configured_callsign = config.callsign;') <
+        configSource.indexOf('global.platform.mergePlatformConfig(config);'), true);
 failures += check('channel payload includes MeshCore selector entries and resolved binding',
     eventSource.includes('meshcore_backends: meshcore_backend.getBackendNames') &&
     eventSource.includes('backend: c.backend || binding?.key || ""'), true);
@@ -105,7 +109,7 @@ failures += check('Configure Channels merges APRS and MeshCore backend options',
     uiSource.includes('(meshcoreBackends || []).forEach(add);') &&
     uiSource.includes('meshcoreBackends = msg.meshcore_backends;'), true);
 
-const totalChecks = 14;
+const totalChecks = 15;
 console.log(`\n${failures === 0 ? totalChecks : totalChecks - failures} passed, ${failures} failed`);
 
 const uc = spawnSync('ucode', [path.join(__dirname, 'test_meshcore_backend.uc')], { stdio: 'inherit' });
