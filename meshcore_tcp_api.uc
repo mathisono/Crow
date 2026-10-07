@@ -137,6 +137,7 @@ let rootConfig       = null;
 export let enabled   = false;
 export let channelNamekey = null;
 let deviceName       = null;
+let handshakeNodeName = null;
 let channelCreated   = false;
 let callsign         = null;
 let router           = null;
@@ -1590,8 +1591,17 @@ function smartAccumulate(data)
             syncRequestInFlight = false;
             const name = parseSelfInfo(framePayload);
             if (name) {
+                const changed = handshakeNodeName !== name;
+                handshakeNodeName = name;
                 deviceName = name;
                 channelCreated = false;
+                if (changed) {
+                    try {
+                        global.event?.notify?.({ cmd: "channels" }, "meshcore-node-name");
+                    }
+                    catch (_) {
+                    }
+                }
             }
             discovery?.onSelfInfo?.();
             loginConfiguredRoomServersOnBoot();
@@ -1755,6 +1765,7 @@ function setupTransport(config, kind)
     loadRoomServers(config);
 
     deviceName = cfg.device_name ?? null;
+    handshakeNodeName = null;
     channelCreated = ensureConfiguredPublicChannel(config);
     registerConfiguredChannelSlots(config);
 
@@ -2089,6 +2100,7 @@ export function status()
         unknown_frames: stats.unknown_frames,
         unknown_frames_suppressed: stats.unknown_frames_suppressed,
         early_drop_unknown_cmd: stats.early_drop_unknown_cmd,
+        node_name: handshakeNodeName,
         transport: serialMode ? "serial" : "tcp",
         device: serialMode ? serialDevice : null,
         baud: serialMode ? serialBaud : null
@@ -2159,6 +2171,7 @@ export function _test_reset()
     unknownFrameCounts = {};
     meshcoreSelfPublicKey = null;
     meshcoreSelfPublicKeyPrefix = null;
+    handshakeNodeName = null;
     channelDataTextTypes = {};
     strictDirectIdentity = false;
     for (let k in stats) stats[k] = 0;

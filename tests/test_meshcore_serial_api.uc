@@ -56,6 +56,7 @@ global.DEBUG1 = function (...args) {};
 const STRICT_ON = { isEnabled: function () { return true; } };
 const RESP_CHANNEL_MSG_RECV = 0x08;
 const RESP_CHANNEL_DATA_RECV = 0x1B;
+const RESP_SELF_INFO = 0x05;
 const PUSH_MSG_WAITING = 0x83;
 
 const PUBLIC_SECRET = "\x8b\x33\x87\xe9\xc5\xcd\xea\x6a\xc9\xe5\xed\xba\xa1\x15\xcd\x72";
@@ -114,6 +115,11 @@ api._test_reset();
 const waiting = api._test_build_frame(PUSH_MSG_WAITING, "");
 check("queue push emits no Crow message", length(api._test_inject(waiting, STRICT_ON)), 0);
 check("queue push is counted", api._test_stats().message_waiting, 1);
+
+api._test_reset();
+const selfInfo = fillBytes(0, 57) + "KJ6DZB-MLK";
+api._test_inject(api._test_build_frame(RESP_SELF_INFO, selfInfo), STRICT_ON);
+check("self info publishes handshake node name", api.status().node_name, "KJ6DZB-MLK");
 
 printf("\n%d/%d serial Companion ucode checks passed\n", count - failures, count);
 if (failures > 0) exit(1);

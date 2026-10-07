@@ -38,6 +38,7 @@ const STRICT_OFF = { isEnabled: () => false };
 
 const PUSH_CODE_MSG_WAITING    = 0x83;
 const CMD_SYNC_NEXT_MESSAGE    = 0x0A;
+const RESP_SELF_INFO           = 0x05;
 const RESP_DIRECT_MSG_RECV     = 0x07;
 const RESP_CHANNEL_MSG_RECV    = 0x08;
 const RESP_DIRECT_MSG_RECV_V3  = 0x10;
@@ -161,6 +162,14 @@ api._test_reset();
     const tickle = api._test_build_frame(PUSH_CODE_MSG_WAITING, "");
     check("message waiting: no message emitted", length(api._test_inject(tickle, STRICT_ON)), 0);
     check("message waiting: stat incremented", api._test_stats().message_waiting, 1);
+}
+
+// ---- 8b. Self-info handshake publishes the connected MeshCore node name
+api._test_reset();
+{
+    const selfInfo = fillBytes(0, 57) + "KJ6DZB-MLK";
+    api._test_inject(api._test_build_frame(RESP_SELF_INFO, selfInfo), STRICT_OFF);
+    check("self info: handshake node name", api.status().node_name, "KJ6DZB-MLK");
 }
 
 // ---- 9. Pre-frame garbage triggers resync

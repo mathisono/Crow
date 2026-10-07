@@ -39,6 +39,7 @@ let failures = 0;
 
 const meshcoreBackendSource = fs.readFileSync(path.join(__dirname, '..', 'meshcore_backend.uc'), 'utf8');
 const meshcoreTcpSource = fs.readFileSync(path.join(__dirname, '..', 'meshcore_tcp_api.uc'), 'utf8');
+const meshcoreSerialSource = fs.readFileSync(path.join(__dirname, '..', 'meshcore_serial_api.uc'), 'utf8');
 const meshcoreSerialLoaderSource = fs.readFileSync(path.join(__dirname, '..', 'meshcore_serial_loader.uc'), 'utf8');
 const meshcoreTcpLoaderSource = fs.readFileSync(path.join(__dirname, '..', 'meshcore_tcp_loader.uc'), 'utf8');
 const meshcoreUdpLoaderSource = fs.readFileSync(path.join(__dirname, '..', 'meshcore_udp_loader.uc'), 'utf8');
@@ -92,14 +93,18 @@ failures += check('TCP preferred over USB', backendChoice({
 failures += check('MeshCore selector exports the active backend key',
     meshcoreBackendSource.includes('export function getBackendNames()') &&
     meshcoreBackendSource.includes('key: `meshcore.${activeName}`'), true);
-failures += check('MeshCore selector label includes transport and configured callsign',
-    meshcoreBackendSource.includes('const backend = `meshcore-${name}[${name}]`;') &&
-    meshcoreBackendSource.includes('lastConfig?._configured_callsign ?? lastConfig?.callsign') &&
-    meshcoreBackendSource.includes('`${backend} ${callsign}`'), true);
-failures += check('configured callsign is retained before AREDN platform normalization',
-    configSource.includes('config._configured_callsign = config.callsign;') &&
-    configSource.indexOf('config._configured_callsign = config.callsign;') <
-        configSource.indexOf('global.platform.mergePlatformConfig(config);'), true);
+failures += check('MeshCore selector label uses the Companion handshake node name',
+    meshcoreBackendSource.includes('const detail = active?.status ? active.status() : {};') &&
+    meshcoreBackendSource.includes('backendDisplayName(activeName, detail.node_name)') &&
+    !meshcoreBackendSource.includes('_configured_callsign'), true);
+failures += check('TCP Companion exposes and announces its handshake node name',
+    meshcoreTcpSource.includes('handshakeNodeName = name;') &&
+    meshcoreTcpSource.includes('node_name: handshakeNodeName') &&
+    meshcoreTcpSource.includes('"meshcore-node-name"'), true);
+failures += check('serial Companion exposes and announces its handshake node name',
+    meshcoreSerialSource.includes('handshakeNodeName = name;') &&
+    meshcoreSerialSource.includes('node_name: handshakeNodeName') &&
+    meshcoreSerialSource.includes('"meshcore-node-name"'), true);
 failures += check('channel payload includes MeshCore selector entries and resolved binding',
     eventSource.includes('meshcore_backends: meshcore_backend.getBackendNames') &&
     eventSource.includes('backend: c.backend || binding?.key || ""'), true);
@@ -109,7 +114,7 @@ failures += check('Configure Channels merges APRS and MeshCore backend options',
     uiSource.includes('(meshcoreBackends || []).forEach(add);') &&
     uiSource.includes('meshcoreBackends = msg.meshcore_backends;'), true);
 
-const totalChecks = 15;
+const totalChecks = 16;
 console.log(`\n${failures === 0 ? totalChecks : totalChecks - failures} passed, ${failures} failed`);
 
 const uc = spawnSync('ucode', [path.join(__dirname, 'test_meshcore_backend.uc')], { stdio: 'inherit' });

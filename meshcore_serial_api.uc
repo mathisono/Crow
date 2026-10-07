@@ -106,6 +106,7 @@ let strictDirectIdentity = false;
 let channelDataTextTypes = {};
 let callsign = null;
 let deviceName = null;
+let handshakeNodeName = null;
 let msgSeq = 0;
 let lastRxTime = null;
 let lastCmd = null;
@@ -806,7 +807,19 @@ function smartAccumulate(data)
             handshakeAttempts = 0;
             syncRequestInFlight = false;
             syncingMessages = true;
-            deviceName = parseSelfInfo(framePayload) ?? deviceName;
+            const name = parseSelfInfo(framePayload);
+            if (name) {
+                const changed = handshakeNodeName !== name;
+                handshakeNodeName = name;
+                deviceName = name;
+                if (changed) {
+                    try {
+                        global.event?.notify?.({ cmd: "channels" }, "meshcore-node-name");
+                    }
+                    catch (_) {
+                    }
+                }
+            }
             if (deviceName) log0("connected Companion device: %s\n", deviceName);
             continue;
         }
@@ -1037,6 +1050,7 @@ export function setup(config)
     registerConfiguredChannelSlots(config);
     callsign = config?.callsign ?? null;
     deviceName = cfg.device_name ?? null;
+    handshakeNodeName = null;
     const gk = config?._gatekeeper;
     strictHook = gk && type(gk.isEnabled) === "function"
         ? function () { return gk.isEnabled() === true; } : null;
@@ -1254,6 +1268,7 @@ export function status()
         last_cmd: lastCmd,
         last_error: lastError,
         device_name: deviceName,
+        node_name: handshakeNodeName,
         syncing_messages: syncingMessages,
         sync_request_in_flight: syncRequestInFlight,
         sync_paused_backpressure: syncPausedBackpressure
@@ -1265,6 +1280,7 @@ export function status()
 export function _test_reset()
 {
     resetWireState();
+    handshakeNodeName = null;
     pendingRx = [];
     deferredFrames = [];
     responses = [];

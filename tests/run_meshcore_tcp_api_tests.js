@@ -6,7 +6,10 @@
 'use strict';
 
 const { spawnSync } = require('child_process');
+const fs = require('fs');
 const path = require('path');
+
+const SOURCE = fs.readFileSync(path.join(__dirname, '..', 'meshcore_tcp_api.uc'), 'utf8');
 
 const FRAME_FROM_RADIO = 0x3E;
 const FRAME_TO_RADIO = 0x3C;
@@ -586,6 +589,10 @@ const STRICT_OFF = { isEnabled: () => false };
     check('room contact flood path', contact[38], 0xFF);
     check('room contact frame length', contact.readUInt16LE(1), 136);
 }
+
+check('TCP status publishes the node name parsed from Companion self-info',
+    SOURCE.includes('handshakeNodeName = name;') &&
+    SOURCE.includes('node_name: handshakeNodeName'), true);
 
 console.log(`\n${count - failures} passed, ${failures} failed`);
 

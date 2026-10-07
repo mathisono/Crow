@@ -144,6 +144,7 @@ function candidateStatus(key, label, transport, configured, isActive, host, port
         frames_in: detail.frames_in,
         frames_decoded: detail.frames_decoded,
         self_info: detail.self_info,
+        node_name: detail.node_name,
         message_waiting: detail.message_waiting,
         sync_requests: detail.sync_requests,
         sync_backpressure: detail.sync_backpressure,
@@ -290,11 +291,11 @@ export function backendName()
     return activeName;
 };
 
-function backendDisplayName(name)
+function backendDisplayName(name, nodeName)
 {
     const backend = `meshcore-${name}[${name}]`;
-    const callsign = uc(trim(lastConfig?._configured_callsign ?? lastConfig?.callsign ?? ""));
-    return callsign ? `${backend} ${callsign}` : backend;
+    const node = trim(nodeName ?? "");
+    return node ? `${backend} ${node}` : backend;
 }
 
 // Return the selected backend in the same key/label shape used by APRS so
@@ -304,9 +305,10 @@ export function getBackendNames()
     if (!activeName) {
         return [];
     }
+    const detail = active?.status ? active.status() : {};
     return [ {
         key: `meshcore.${activeName}`,
-        label: backendDisplayName(activeName)
+        label: backendDisplayName(activeName, detail.node_name)
     } ];
 };
 

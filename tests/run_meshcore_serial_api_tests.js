@@ -164,6 +164,7 @@ ok('handles the real v3 queued-message prefix', SOURCE.includes('function incomi
 ok('rejects direct outbound messages', SOURCE.includes('channel.isDirect(msg.namekey)'));
 ok('uses real MeshCore group send command', SOURCE.includes('CMD_SEND_CHANNEL_TXT_MSG = 0x03'));
 ok('parses self-info from its printable trailing name', SOURCE.includes('function _test_parse_self_info(payload)') && SOURCE.includes('while (start > 0)'));
+ok('publishes the node name parsed from Companion self-info', SOURCE.includes('handshakeNodeName = name;') && SOURCE.includes('node_name: handshakeNodeName'));
 ok('uses explicit configured channel slots without discovery', SOURCE.includes('registerConfiguredChannelSlots(config)') && SOURCE.includes('channel_discovery: false'));
 ok('requires exact tuple proof before serial send', SOURCE.includes('verifiedLocalChannelForSlot(outboundChannelIndex, configuredChannelNamekey)'));
 ok('normalizes Companion Public to Crow public namekey', DISCOVERY_SOURCE.includes('name === "Public"') && DISCOVERY_SOURCE.includes('channel.meshcorePublicChannelNamekey()'));

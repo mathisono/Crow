@@ -3,8 +3,9 @@
 ## APRS reliability and group repeat
 
 - Configure Channels now offers the selected MeshCore backend alongside APRS,
-  using labels such as `meshcore-tcp[tcp] KJ6DZB-11`; resolved MeshCore channel
-  bindings are selected automatically in the editor.
+  using the node name learned from the Companion self-info handshake in labels
+  such as `meshcore-tcp[tcp] KJ6DZB-MLK`; resolved MeshCore channel bindings are
+  selected automatically in the editor.
 - Implicit APRS channels now describe their transport: APRS-IS uses
   `APRS-IS`, KISS TCP uses `APRS-tcpKiss`, and TNC2-style backends use
   `APRS-TNC-Feed`. The generated channel is bound to the selected default
