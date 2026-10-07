@@ -79,6 +79,7 @@ check('configured APRS group channels receive their backend mapping',
     source.includes('channelBackendMap[namekey] = g.backend && backends[g.backend]'), true);
 check('implicit APRS channel name follows the selected transport',
     source.includes('function defaultChannelNameForBackend(bcfg)') &&
+    source.includes('const DEFAULT_APRSIS_CHANNEL_NAME = "APRS-IS";') &&
     source.includes('return "APRS-tcpKiss";') &&
     source.includes('return "APRS-TNC-Feed";') &&
     source.includes('defaultChannelNameForBackend(backendsCfg[defaultBackendName])'), true);

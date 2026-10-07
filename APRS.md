@@ -29,7 +29,7 @@ channel automatically, so it does not need to be duplicated in `channels`:
 }
 ```
 
-The implicit channel is transport-aware: `APRS-IS-Feed` for APRS-IS,
+The implicit channel is transport-aware: `APRS-IS` for APRS-IS,
 `APRS-tcpKiss` for KISS TCP, and `APRS-TNC-Feed` for Xastir, YAAC, or a raw
 TNC2 TCP stream. An explicit `aprs.channel` remains supported and always wins.
 When multiple backends are configured, `aprs.default_backend` selects which

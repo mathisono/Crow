@@ -15,7 +15,7 @@ if (!match) {
 const channelDisplayName = Function(`"use strict"; return (${match[0]});`)();
 const cases = [
     ['APRS group hides internal percent marker', '%APRSTest og==', 'APRSTest'],
-    ['ordinary APRS channel remains unchanged', 'APRS-IS-Feed og==', 'APRS-IS-Feed'],
+    ['ordinary APRS channel remains unchanged', 'APRS-IS og==', 'APRS-IS'],
     ['hash-prefixed bridge channel remains unchanged', '#APRSBridge og==', '#APRSBridge'],
     ['empty namekey remains safe', null, ''],
 ];
