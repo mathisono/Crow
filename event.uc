@@ -10,6 +10,7 @@ import * as router from "router";
 import * as winlink from "winlink";
 import * as commands from "commands";
 import * as aprs from "aprs";
+import * as meshcore_backend from "meshcore_backend";
 
 const MAXNODES = 1000;
 const MAXNODESSAFARI = 400;
@@ -235,7 +236,7 @@ export function tick()
                             aredn: channel.isAREDNPreset(c.namekey),
                             winlink: c.winlink,
                             telemetry: c.telemetry,
-                            backend: c.backend ?? "",
+                            backend: c.backend || binding?.key || "",
                             backend_family: binding?.family ?? "",
                             backend_key: binding?.key ?? "",
                             state: textmessage.state(c.namekey)
@@ -245,6 +246,8 @@ export function tick()
                         event: msg.cmd,
                         channels: channels,
                         aprs_backends: aprs.enabled ? aprs.getBackendNames() : [],
+                        meshcore_backends: meshcore_backend.getBackendNames
+                            ? meshcore_backend.getBackendNames() : [],
                         backend_status: commands.backendStatusSnapshot()
                     });
                     break;

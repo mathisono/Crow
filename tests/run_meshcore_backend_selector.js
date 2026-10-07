@@ -49,6 +49,8 @@ const meshtasticUdpLoaderSource = fs.readFileSync(path.join(__dirname, '..', 'me
 const meshtasticTcpLoaderSource = fs.readFileSync(path.join(__dirname, '..', 'meshtastic_tcp_loader.uc'), 'utf8');
 const meshtasticProtoLoaderSource = fs.readFileSync(path.join(__dirname, '..', 'meshtasticprotobufs_loader.uc'), 'utf8');
 const configSource = fs.readFileSync(path.join(__dirname, '..', 'config.uc'), 'utf8');
+const eventSource = fs.readFileSync(path.join(__dirname, '..', 'event.uc'), 'utf8');
+const uiSource = fs.readFileSync(path.join(__dirname, '..', 'ui', 'ui.js'), 'utf8');
 failures += check('MeshCore backends are runtime-loaded',
     /^import \* as (udp|api|serialApi) from/m.test(meshcoreBackendSource), false);
 failures += check('MeshCore selector has backend load boundary',
@@ -87,8 +89,23 @@ failures += check('USB serial selected', backendChoice({ meshcore_serial_api: { 
 failures += check('TCP preferred over USB', backendChoice({
     meshcore_tcp_api: { enabled: true }, meshcore_serial_api: { enabled: true }
 }), 'tcp');
+failures += check('MeshCore selector exports the active backend key',
+    meshcoreBackendSource.includes('export function getBackendNames()') &&
+    meshcoreBackendSource.includes('key: `meshcore.${activeName}`'), true);
+failures += check('MeshCore selector label includes transport and configured callsign',
+    meshcoreBackendSource.includes('const backend = `meshcore-${name}[${name}]`;') &&
+    meshcoreBackendSource.includes('lastConfig?.callsign') &&
+    meshcoreBackendSource.includes('`${backend} ${callsign}`'), true);
+failures += check('channel payload includes MeshCore selector entries and resolved binding',
+    eventSource.includes('meshcore_backends: meshcore_backend.getBackendNames') &&
+    eventSource.includes('backend: c.backend || binding?.key || ""'), true);
+failures += check('Configure Channels merges APRS and MeshCore backend options',
+    uiSource.includes('let meshcoreBackends = [];') &&
+    uiSource.includes('(aprsBackends || []).forEach(add);') &&
+    uiSource.includes('(meshcoreBackends || []).forEach(add);') &&
+    uiSource.includes('meshcoreBackends = msg.meshcore_backends;'), true);
 
-const totalChecks = 10;
+const totalChecks = 14;
 console.log(`\n${failures === 0 ? totalChecks : totalChecks - failures} passed, ${failures} failed`);
 
 const uc = spawnSync('ucode', [path.join(__dirname, 'test_meshcore_backend.uc')], { stdio: 'inherit' });

@@ -290,6 +290,26 @@ export function backendName()
     return activeName;
 };
 
+function backendDisplayName(name)
+{
+    const backend = `meshcore-${name}[${name}]`;
+    const callsign = uc(trim(lastConfig?.callsign ?? ""));
+    return callsign ? `${backend} ${callsign}` : backend;
+}
+
+// Return the selected backend in the same key/label shape used by APRS so
+// Configure Channels can offer both transport families in one selector.
+export function getBackendNames()
+{
+    if (!activeName) {
+        return [];
+    }
+    return [ {
+        key: `meshcore.${activeName}`,
+        label: backendDisplayName(activeName)
+    } ];
+};
+
 export function backendStatus()
 {
     const cfg = lastConfig ?? {};
