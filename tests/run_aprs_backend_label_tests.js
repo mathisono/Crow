@@ -58,8 +58,8 @@ failures += check(
 
 const source = fs.readFileSync(path.join(__dirname, '..', 'aprs.uc'), 'utf8');
 failures += check(
-    'only APRS-IS receives an APRS-IS login line',
-    source.includes('if (btype === "aprsis") {') &&
+    'APRS-IS and authenticated Xastir receive a login line',
+    source.includes('if (btype === "aprsis" || btype === "xastir") {') &&
     !source.includes('btype === "aprsis" || btype === "tcp_text"'),
     true
 );

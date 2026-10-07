@@ -128,7 +128,7 @@ function finishConnect(inst, btype, b, host, port)
     inst.reconnect_delay = RECONNECT_BASE_MS;
     inst.reconnect_after = 0;
     inst.socket.listen();
-    if (btype === "aprsis") {
+    if (btype === "aprsis" || btype === "xastir") {
         const passcode = b.passcode ?? "-1";
         inst.socket.send(`user ${cfg.callsign} pass ${passcode} vers Crow 0.1\r\n`);
         if (b.filter) {

@@ -70,7 +70,19 @@ Dire Wolf KISS TCP:
 }
 ```
 
-Xastir, YAAC, or another APRS/TNC2-style TCP server:
+Authenticated Xastir server port:
+
+```json
+"backend": {
+  "type": "xastir",
+  "host": "127.0.0.1",
+  "port": 2023,
+  "passcode": "REPLACE_WITH_APRS_PASSCODE",
+  "tx_enabled": true
+}
+```
+
+Generic TNC2-style TCP server:
 
 ```json
 "backend": {
@@ -81,8 +93,9 @@ Xastir, YAAC, or another APRS/TNC2-style TCP server:
 }
 ```
 
-TNC2 TCP backends are raw local-client connections. Crow does not send an
-APRS-IS login line to them. A packet accepted by a Xastir/YAAC TCP server only
+Generic TNC2 TCP backends are raw local-client connections and do not receive
+an APRS-IS login line. The explicit `xastir` backend authenticates with
+Xastir's server port before transmitting. A packet accepted by a Xastir/YAAC TCP server only
 appears on APRS-IS when that application is separately configured and enabled
 to gate client-originated packets. If APRS-IS delivery is required regardless
 of the local application's IGate policy, configure a second `aprsis` backend
