@@ -883,6 +883,21 @@ function commandReply(msg)
     t.lastElementChild.scrollIntoView({ behavior: "smooth", block: "end", inline: "nearest" });
 }
 
+function downloadExport(msg)
+{
+    const csv = msg.filename.endsWith(".csv");
+    const blob = new Blob([msg.data ?? ""], { type: csv ? "text/csv;charset=utf-8" : "text/plain;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = msg.filename;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    setTimeout(_ => URL.revokeObjectURL(url), 0);
+    commandReply({ reply: [ `Exported ${msg.filename}` ] });
+}
+
 function toggleFav(event, nodenum)
 {
     event.stopPropagation();
@@ -1601,6 +1616,9 @@ function startup()
                     break;
                 case "/reply":
                     commandReply(msg);
+                    break;
+                case "/export":
+                    downloadExport(msg);
                     break;
                 case "beat":
                     if (updateBackendStatuses(msg.backend_status) && channels) {

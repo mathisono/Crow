@@ -23,6 +23,7 @@ hooks are stripped from release modules during packaging.
 | `run_aprs_backend_label_tests.js` | `node` | APRS backend display-name/callsign mapping. |
 | `run_aprs_retry_dedupe_tests.js` | `node` | APRS retry IDs, bounded deduplication, and retained-history suppression. |
 | `run_backend_disconnect_ui_tests.js` | `node` | Backend-to-channel health mapping and compact disconnected overlay contracts. |
+| `run_channel_export_tests.js` | `node` + optional `ucode` | Text/CSV channel export formatting, event routing, and browser download behavior. |
 | `run_formatter_tests.js` | `node` + optional `ucode` | Outbound LoRa callsign/tag formatting and truncation. |
 | `run_meshcore_backend_selector.js` | `node` + optional `ucode` | Lazy backend selection and TCP/USB/UDP precedence. |
 | `run_meshcore_serial_api_tests.js` | `node` + optional `ucode` | USB Companion framing, queue handling, and RF slot gate. |

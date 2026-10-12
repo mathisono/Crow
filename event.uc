@@ -368,12 +368,17 @@ export function tick()
                 }
                 case "/cmd":
                 {
-                    commands.post(msg.command, msg.socket);
+                    commands.post(msg.command, msg.socket, msg.namekey);
                     break;
                 }
                 case "/reply":
                 {
                     send({ event: msg.cmd, reply: msg.reply }, msg.socket);
+                    break;
+                }
+                case "/export":
+                {
+                    send({ event: msg.cmd, filename: msg.filename, data: msg.data }, msg.socket);
                     break;
                 }
                 case "ping":

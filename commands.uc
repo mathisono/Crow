@@ -10,6 +10,7 @@ import * as aprs from "aprs";
 import * as meshcore_backend from "meshcore_backend";
 import * as meshtastic_backend from "meshtastic_backend";
 import * as gatekeeper from "gatekeeper";
+import * as channel_export from "channel_export";
 
 function fmtBytes(n)
 {
@@ -87,6 +88,23 @@ function keyBytesToBase64(keyBytes)
         keyStr += chr(keyBytes[i]);
     }
     return b64enc(keyStr);
+}
+
+function exportMessages(id, namekey, format)
+{
+    if (!namekey) {
+        event.queue({ cmd: "/reply", reply: [ "No channel selected." ], socket: id });
+        return;
+    }
+
+    const messages = textmessage.getMessages(namekey) ?? [];
+    if (length(messages) === 0) {
+        event.queue({ cmd: "/reply", reply: [ "The selected channel has no messages to export." ], socket: id });
+        return;
+    }
+
+    const result = channel_export.build(namekey, messages, format);
+    event.queue({ cmd: "/export", filename: result.filename, data: result.data, socket: id });
 }
 
 function backendBadge(state)
@@ -260,7 +278,7 @@ export function channelBackendBinding(c)
     return null;
 };
 
-export function post(cmd, id)
+export function post(cmd, id, namekey)
 {
     switch (cmd[0]) {
         // ----- New short‑form join commands (MeshCore / Meshtastic) -----
@@ -647,6 +665,21 @@ export function post(cmd, id)
             }
             break;
         }
+        case "export":
+        {
+            const format = lc(cmd[1] ?? "text");
+            if (format !== "text" && format !== "csv") {
+                event.queue({ cmd: "/reply", reply: [
+                    "Usage:",
+                    "/export &mdash; download the selected channel as plain text",
+                    "/export text &mdash; download the selected channel as plain text",
+                    "/export csv &mdash; download the selected channel as CSV"
+                ], socket: id });
+                break;
+            }
+            exportMessages(id, namekey, format);
+            break;
+        }
         case "backend":
         case "backends":
         {
@@ -776,6 +809,7 @@ export function post(cmd, id)
                 "<b>/leave</b> #name &mdash; leave channel and remove APRS group",
                 "<b>/groups</b> &mdash; list all APRS groups and members",
                 "<b>/backends</b> &mdash; show APRS, MeshCore, and Meshtastic backend status",
+                "<b>/export</b> [text|csv] &mdash; download the selected channel log",
                 "<b>/cmd meshcore room ...</b> &mdash; add/login to a MeshCore room server",
                 "<b>/cmd meshcore private ...</b> &mdash; provision a MeshCore private channel",
                 "<b>/storage</b> status &mdash; show active storage state",
