@@ -83,7 +83,7 @@ function esc(text)
 
 function attr(text)
 {
-    return esc(text).replace(/'/g, "&#039;").replace(/`/g, "&#96;");
+    return esc(text).replace(/"/g, "&quot;").replace(/'/g, "&#039;").replace(/`/g, "&#96;");
 }
 
 function safeClass(value)
@@ -291,9 +291,8 @@ function channelDisplayName(namekey)
 function htmlChannel(channel)
 {
     const namekey = String(channel.namekey ?? "");
-    const onclick = `showNamekey(${JSON.stringify(namekey)})`;
     const backendReadout = channelBackendReadout(channel);
-    return `<div class="channel ${rightSelection === namekey ? "selected" : ""}" data-namekey="${attr(namekey)}" onclick="${attr(onclick)}">
+    return `<div class="channel ${rightSelection === namekey ? "selected" : ""}" data-namekey="${attr(namekey)}">
         <div class="n">
             <div class="t">${channel.label ? esc(channel.label) : (channel.meshtastic ? "Meshtastic" : esc(channelDisplayName(namekey)))}</div>
             ${backendReadout ? `<div class="backend-disconnected ${backendReadout.pending ? "connecting" : "failed"}" title="${attr(backendReadout.title)}" aria-label="${attr(backendReadout.title)}">${esc(backendReadout.text)}</div>` : ''}
@@ -308,12 +307,11 @@ function htmlNode(node)
     const namekey = `DirectMessages ${nodenum}`;
     const platform = safeClass(node.platform);
     const filter = `${node.short_name} ${node.long_name} ${node.platform === "native" ? "aredn" : node.platform}`.toLowerCase();
-    const onclick = `showNamekey(${JSON.stringify(namekey)})`;
     let filtered = false;
     if (activeFilter && filter.indexOf(activeFilter) === -1) {
         filtered = true;
     }
-    return `<div id="${attr(nodenum)}" class="node ${platform} ${rightSelection === namekey ? 'selected' : ''}" ${filtered ? 'style="display:none"' : ''} data-namekey="${attr(namekey)}" data-filter="${attr(filter)}" onclick="${attr(onclick)}">
+    return `<div id="${attr(nodenum)}" class="node ${platform} ${rightSelection === namekey ? 'selected' : ''}" ${filtered ? 'style="display:none"' : ''} data-namekey="${attr(namekey)}" data-filter="${attr(filter)}">
         <div class="s" style="color:${attr(node.colors.fcolor)};background-color:${attr(node.colors.bcolor)}">${esc(node.short_name)}</div>
         ${platform ? '<div class="logo"></div>' : ''}
         <div class="m">
@@ -361,11 +359,12 @@ function htmlNodeDetail(node)
 
 function renderChannelsList(rawHtml)
 {
-    // Parse channels list HTML and rebuild with safe event handlers
-    const parser = new DOMParser();
+    // Legacy command replies carry HTML, including replies from other nodes.
+    // Parse inertly and rebuild only channel labels and literal join commands.
+    const template = document.createElement('template');
     try {
-        const doc = parser.parseFromString(rawHtml, 'text/html');
-        const divs = doc.querySelectorAll('div.cj');
+        template.innerHTML = rawHtml;
+        const divs = template.content.querySelectorAll('div.cj');
         if (divs.length === 0) {
             return null; // Not a channels list
         }
@@ -374,9 +373,20 @@ function renderChannelsList(rawHtml)
         for (const div of divs) {
             const channelName = div.textContent || '';
             const onclick = div.getAttribute('onclick') || '';
-            // Safely re-render: escape channel name, preserve onclick command
-            if (onclick) {
-                result.push(`<div class="cj" onclick='${onclick.replace(/'/g, "&#39;")}'>${esc(channelName)}</div>`);
+            const match = /^cmd\(("(?:[^"\\]|\\.)*")\);?$/.exec(onclick);
+            let command = null;
+            if (match) {
+                try {
+                    const value = JSON.parse(match[1]);
+                    if (/^\/(?:channels join|join) [^\r\n]+$/.test(value)) {
+                        command = value;
+                    }
+                } catch (_) {
+                }
+            }
+            if (command) {
+                const handler = `cmd(${JSON.stringify(command)})`;
+                result.push(`<div class="cj" onclick="${attr(handler)}">${esc(channelName)}</div>`);
             } else {
                 result.push(`<div class="cj">${esc(channelName)}</div>`);
             }
@@ -412,10 +422,6 @@ function htmlText(text, useimage)
             };
         }
     }
-    // Check for channels list HTML BEFORE escaping
-    const rawText = String(text.text ?? '');
-    const isChannelsList = rawText.indexOf('<div class="cj"') >= 0;
-    
     let plaintext = T(text.text);
     let reply = "";
     if (text.replyid) {
@@ -424,7 +430,7 @@ function htmlText(text, useimage)
             reply = `<div class="r"><div>${T(r.text.replace(/\n/g," "))}</div></div>`;
         }
     }
-    else if (!isChannelsList && plaintext.indexOf("@[") === 0) {
+    else if (plaintext.indexOf("@[") === 0) {
         const rs = [];
         while (plaintext.indexOf("@[") === 0) {
             const end = plaintext.indexOf("]");
@@ -455,21 +461,15 @@ function htmlText(text, useimage)
         }
     }
     if (!textmsg) {
-        if (isChannelsList) {
-            const channelsListHtml = renderChannelsList(rawText);
-            textmsg = `<div class="b"><div class="ack ${text.ack ? 'true' : ''}"></div><div class="t">${channelsListHtml}</div><a href="#" class="re" onclick="setupReply(event)">Reply</a></div>`;
-        } else {
-            textmsg = `<div class="b"><div class="ack ${text.ack ? 'true' : ''}"></div><div class="t">`
-                + linkifyEscaped(plaintext)
-                + '</div><a href="#" class="re" onclick="setupReply(event)">Reply</a></div>';
-        }
+        textmsg = `<div class="b"><div class="ack ${text.ack ? 'true' : ''}"></div><div class="t">`
+            + linkifyEscaped(plaintext)
+            + '</div><a href="#" class="re" onclick="setupReply(event)">Reply</a></div>';
     }
     const textId = safeInt(text.id);
     const isMe = safeInt(n.num, null) === safeInt(me.num, undefined);
     const ownerClass = isMe ? `me ${safeClass(me.align)}` : '';
     const platform = safeClass(n.platform);
-    const textClass = isChannelsList ? 'command' : '';
-    return `<div id="${attr(textId)}" class="text ${ownerClass} ${platform} ${textClass}">
+    return `<div id="${attr(textId)}" class="text ${ownerClass} ${platform}">
         ${reply}
         <div>
             <div class="s" style="color:${attr(n.colors.fcolor)};background-color:${attr(n.colors.bcolor)}">${esc(n.short_name)}</div>
@@ -485,11 +485,15 @@ function htmlText(text, useimage)
 
 function htmlCommand(reply)
 {
-    const commandMarkup = line => esc(line)
+    const commandMarkup = line => renderChannelsList(line) ?? esc(line)
         .replaceAll('&lt;b&gt;', '<b>')
         .replaceAll('&lt;/b&gt;', '</b>')
+        .replaceAll('&lt;i&gt;', '<i>')
+        .replaceAll('&lt;/i&gt;', '</i>')
         .replaceAll('&amp;nbsp;', '&nbsp;')
-        .replaceAll('&amp;mdash;', '&mdash;');
+        .replaceAll('&amp;mdash;', '&mdash;')
+        .replaceAll('&amp;lt;', '&lt;')
+        .replaceAll('&amp;gt;', '&gt;');
     const lines = reply.map(line => `<div>${commandMarkup(line)}</div>`).join("");
     return `<div class="text me command ${safeClass(me.align)}">
         <div>
