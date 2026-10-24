@@ -58,6 +58,31 @@ let storageDevice = null;
 let storageMinFree = DEFAULT_MIN_FREE;
 let storageImageQuota = DEFAULT_IMAGE_QUOTA;
 
+function startServiceWatcher()
+{
+    pwatcher = services.watch("publish");
+    // New AREDN returns an object owning a nonblocking io.handle. Older
+    // releases return the pipe, which needs an fs.file wrapper for ioctl.
+    watcher = type(pwatcher.handle) === "function"
+        ? pwatcher.handle() : fs.fdopen(pwatcher.fileno());
+}
+
+function stopServiceWatcher()
+{
+    if (!pwatcher) {
+        return;
+    }
+    if (type(pwatcher.handle) === "function") {
+        pwatcher.close();
+    }
+    else {
+        services.unwatch(pwatcher);
+        watcher.close();
+    }
+    pwatcher = null;
+    watcher = null;
+}
+
 function mkdirp(p)
 {
     const d = fs.dirname(p);
@@ -750,9 +775,7 @@ function assimilationFailureMessage(status)
     }
 
     if (services.watch) {
-        pwatcher = services.watch("publish");
-        // We need a proper file description which supports ioctl calls.
-        watcher = fs.fdopen(pwatcher.fileno());
+        startServiceWatcher();
     }
     else {
         timers.setInterval("aredn", 0, RESCAN_INTERVAL);
@@ -764,8 +787,7 @@ function assimilationFailureMessage(status)
     inShutdown = true;
     services.unpublish(pubID);
     if (watcher) {
-        services.unwatch(pwatcher);
-        watcher.close();
+        stopServiceWatcher();
     }
 }
 
@@ -1204,15 +1226,26 @@ function refreshTargets()
 
 /* export */ function handleChanges()
 {
+    if (type(pwatcher.changes) === "function") {
+        const changes = pwatcher.changes();
+        if (changes === null) {
+            stopServiceWatcher();
+            startServiceWatcher();
+        }
+        else if (changes === "") {
+            return;
+        }
+        refreshTargets();
+        return;
+    }
+
     const FIONREAD_TYPE = 0x54;
     const FIONREAD_NUM = 0x1B;
 
     const len = watcher.ioctl(fs.IOC_DIR_READ, FIONREAD_TYPE, FIONREAD_NUM, 4);
     if (len === null || len < 0) {
-        services.unwatch(pwatcher);
-        watcher.close();
-        pwatcher = services.watch("publish");
-        watcher = fs.fdopen(pwatcher.fileno());
+        stopServiceWatcher();
+        startServiceWatcher();
     }
     else if (len > 0) {
         watcher.read(len);

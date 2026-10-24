@@ -446,7 +446,11 @@ meshtastic --ch-index 2 --ch-name "Custom"
 
 ### Q: Can I export channel history?
 
-**A:** Not yet. Planned for future versions.
+**A:** Yes. Select the channel, then enter `/export` or `/export text` to
+download the retained messages as a plain-text file. Use `/export csv` for a
+CSV file with `timestamp`, `from`, and `message` columns. The export contains
+the messages currently retained by Crow for that channel; it does not recover
+messages that have aged out or were cleared by a restart.
 
 ---
 

@@ -1,6 +1,7 @@
 # Crow tests
 
-Lightweight regression tests for Crow modules. No test framework dependency.
+Lightweight regression tests for Crow modules. Core checks have no test framework
+dependency; optional browser checks use Playwright and Chromium.
 
 ## Test entry point
 
@@ -22,7 +23,9 @@ hooks are stripped from release modules during packaging.
 | --- | --- | --- |
 | `run_aprs_backend_label_tests.js` | `node` | APRS backend display-name/callsign mapping. |
 | `run_aprs_retry_dedupe_tests.js` | `node` | APRS retry IDs, bounded deduplication, and retained-history suppression. |
+| `run_aredn_service_watch_tests.js` | `node` | Legacy and object-based AREDN watcher changes, empty reads, EOF recovery, and cleanup. |
 | `run_backend_disconnect_ui_tests.js` | `node` | Backend-to-channel health mapping and compact disconnected overlay contracts. |
+| `run_channel_export_tests.js` | `node` + optional `ucode` | Text/CSV channel export formatting, event routing, and browser download behavior. |
 | `run_formatter_tests.js` | `node` + optional `ucode` | Outbound LoRa callsign/tag formatting and truncation. |
 | `run_meshcore_backend_selector.js` | `node` + optional `ucode` | Lazy backend selection and TCP/USB/UDP precedence. |
 | `run_meshcore_serial_api_tests.js` | `node` + optional `ucode` | USB Companion framing, queue handling, and RF slot gate. |
@@ -31,6 +34,7 @@ hooks are stripped from release modules during packaging.
 | `run_router_gatekeeper_matrix.js` | `node` | Router/gatekeeper scope, local-direct handling, slot mapping, and callsign policy. |
 | `run_storage_assimilate_tests.js` | `node` | Safe USB discovery, non-formatting assimilation, migration, quotas, and hotplug identity. |
 | `run_serial_bridge_resolver_tests.js` | `node` | Stable MeshCore ACM identity selection, ambiguity refusal, and hotplug rescanning. |
+| `run_ui_rendering_tests.js` | `node` + optional Playwright/Chromium | Real-DOM attribute escaping, channel controls, click dispatch, and inert message markup. |
 
 Canonical ucode fixtures remain under `tests/test_*.uc`; the Node runners are
 portable mirrors/static contract checks for development hosts without ucode.
@@ -111,10 +115,26 @@ command -v ucode >/dev/null \
 ## What is not covered (yet)
 
 - Live RF/TNC delivery and radio firmware behavior.
-- AREDN CGI path handling, browser rendering, and full WebSocket integration.
+- AREDN CGI path handling and full live WebSocket integration.
 
 Those require the live-node tools under `tools/`; they are deliberately kept
 out of the deterministic local regression suite and out of release packages.
+
+## Browser rendering regression checks
+
+`run_ui_rendering_tests.js` uses real Chromium DOM parsing to check quoted
+attributes, channel-list command replies, click dispatch, and inert chat markup.
+It is included in `run_all.sh` and reports an explicit skip if Playwright is not
+available. Install Playwright in your development environment, or point to an
+existing installation and Chromium binary:
+
+```sh
+CROW_PLAYWRIGHT_MODULE=/path/to/playwright-core \
+CROW_CHROMIUM=/path/to/chromium node tests/run_ui_rendering_tests.js
+```
+
+These tests use synthetic data, stub command dispatch, and never contact a node
+or transmit radio traffic.
 
 If you add tests for any of the above, follow the same pattern: a canonical
 `.uc` test plus a `node`-runnable mirror under `tests/` so CI / dev laptops
