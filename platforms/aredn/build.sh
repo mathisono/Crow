@@ -75,10 +75,13 @@ if ! command -v "$GO_BIN" >/dev/null 2>&1; then
     echo "Go is required to build the AREDN crow-rawtty helper (set GO_BIN or install go)." >&2
     exit 1
 fi
+# File-list mode avoids embedding the checkout's absolute path as a GOPATH
+# pseudo-import path; -trimpath removes source paths from debug metadata and
+# an empty build ID avoids path-dependent Go action-cache identifiers.
 (cd "$SRC" && GO111MODULE=off GOOS=linux GOARCH="$CROW_GOARCH" GOMIPS="$CROW_GOMIPS" CGO_ENABLED=0 "$GO_BIN" build \
-    -trimpath -ldflags='-s -w' \
+    -trimpath -ldflags='-s -w -buildid=' \
     -o "$ROOT/data/usr/local/crow/crow-rawtty" \
-    ./tools/crow-rawtty)
+    ./tools/crow-rawtty/main.go)
 chmod 755 "$ROOT/data/usr/local/crow/crow-rawtty"
 chmod 755 "$ROOT/data/usr/local/crow/crow-serial-bridge"
 printf "export const version = '%s';\n" "$VERSION" > "$ROOT/data/usr/local/crow/version.uc"
