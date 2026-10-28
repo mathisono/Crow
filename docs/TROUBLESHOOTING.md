@@ -793,7 +793,7 @@ Add:
 
 ```json
 {
-  "loglevel": "debug"
+  "debug": 1
 }
 ```
 
@@ -811,33 +811,42 @@ logread | grep crow | tail -50
 
 (Much more output, helps diagnose issues)
 
-### Test Config Without Restarting Service
+### Make reversible configuration edits
 
-```bash
-cp /etc/crow.conf /etc/crow.conf.backup
-cp /etc/crow.conf /etc/crow.conf.override
-vi /etc/crow.conf.override
-# Make test changes
-/etc/init.d/crow restart
+Follow the [base/override selection rules](CONFIG_REFERENCE.md#configuration-files)
+to identify the files actually in use. An override is persistent operator
+configuration, not a disposable test file. Back up both active files privately
+before editing, and record whether each originally existed.
+
+Stop `crow-watchdog` before stopping Crow, edit only the intended fields, then
+validate the JSON and start Crow followed by its watchdog. Do not copy the
+whole base over an existing override or delete the override to undo one change:
+either action can discard unrelated UI/backend settings. For rollback, restore
+the exact file you backed up; remove a file only if this test created it.
+
+Published 0.0.3-r0 fresh-setup caveats and tested workarounds are recorded in
+[Fresh-install findings](FRESH_INSTALL_FINDINGS.md).
+
+### Manual application testing
+
+`router.uc` is a library, not the application entry point. Importing or running
+that library alone does not prove Crow starts. Prefer the supervised service:
+
+```sh
+/etc/init.d/crow status
 ```
 
-To roll back:
+For an intentional foreground diagnosis, stop the watchdog and service first
+so a second process cannot contend for ports or the radio:
 
-```bash
-rm /etc/crow.conf.override
-/etc/init.d/crow restart
+```sh
+/etc/init.d/crow-watchdog stop
+/etc/init.d/crow stop
+ucode -L /usr/local/crow /usr/local/crow/crow.uc
 ```
 
-### Manual Module Testing
-
-For experts only:
-
-```bash
-cd /usr/local/crow
-ucode -L . router.uc
-```
-
-If router loads without errors, Crow should work.
+After ending the foreground process, start Crow and its watchdog again.
+Logs can contain private operator data; redact them before sharing.
 
 ---
 

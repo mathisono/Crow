@@ -1,361 +1,229 @@
-# Crow: Getting Started Guide
+# Crow: getting started on AREDN
 
-**Version:** 0.0.2  
-**Updated:** 2026-06-20  
-**Audience:** New users, Raven migration, operators new to mesh protocols
+Updated 2026-10-28 for Crow 0.0.3-r0.
 
----
+Crow provides AREDN mesh messaging with optional APRS, MeshCore, and Meshtastic
+connections. **The default AREDN channel does not need a LoRa radio.**
 
-## What is Crow?
+## 1. Install the correct package
 
-Crow is a **LoRa mesh messaging application** for AREDN (Amateur Radio Emergency Data Network) nodes. It lets you send and receive text messages across LoRa radios in a resilient, fault-tolerant way.
+Download from [GitHub Releases](https://github.com/mathisono/Crow/releases/latest)
+and verify the release checksum. Use the package manager present on the node:
 
-Unlike Raven (which focuses on cross-platform APRS bridging), Crow is **purpose-built for LoRa radio mesh**. It integrates with two main LoRa radio systems:
-
-- **Meshtastic**: Popular open-source ESP32-based LoRa platform
-- **MeshCore**: Professional-grade LoRa mesh platform
-
----
-
-## Quick Start (2 minutes)
-
-### 1. **Install Crow on Your AREDN Node**
-
-Download the latest IPK from the Crow GitHub releases, or ask your mesh admin for the package:
-
-```bash
-opkg install crow_0.0.2-r*.ipk
+```sh
+command -v apk
+command -v opkg
 ```
 
-Crow should start automatically. Check status:
+Current AREDN using APK:
 
-```bash
-/etc/init.d/crow status
+```sh
+apk add --allow-untrusted /tmp/crow-0.0.3-r0.apk
 ```
 
-### 2. **Access the Web UI**
+Older AREDN using opkg:
 
-Open your browser to:
-
-```
-http://10.local.mesh/app/crow
+```sh
+opkg install /tmp/crow_0.0.3-r0_all.ipk
 ```
 
-(Replace `10` with your node's IP on the mesh.)
+Replace the example filename with the release you downloaded. The APK is
+unsigned. Do not install both formats. Check the release notes for tested
+firmware and CPU-specific USB-helper limitations.
 
-You should see an empty chat interface and a **Channels** section. MeshCore
-channels are shown only when they are explicitly configured and mapped to a
-radio slot; Crow intentionally drops MeshCore contact and channel discovery
-data to protect low-RAM AREDN nodes.
-
-### 3. **Add a Meshtastic or MeshCore Device**
-
-- If you have a **Meshtastic device** on your LAN:
-  - Go to **Settings** → **Meshtastic**
-  - Leave defaults (UDP multicast) or switch to TCP API (see [Backend Selection](#backend-selection) below)
-  - Check **Enabled**
-  - Click **Save**
-
-- If you have a **MeshCore device**:
-  - Go to **Settings** → **MeshCore**
-  - Leave defaults (UDP multicast) enabled, or switch to TCP Companion API if
-    you want the direct bridge path
-  - Click **Save**
-
-Crow will show the public channel and any explicitly configured channel-slot
-mappings. MeshCore discovery is intentionally disabled; this prevents unused
-contacts and channel records from consuming RAM.
-
-### 4. **Send Your First Message**
-
-1. Click a channel name
-2. Type a message in the text box
-3. Press **Send** or Enter
-
-Done! Your message is now on the LoRa mesh.
-
----
-
-## Coming from Raven?
-
-Raven and Crow are **different applications** with different design goals:
-
-| Feature | Raven | Crow |
-|---------|-------|------|
-| **Purpose** | APRS bridge + relay | LoRa mesh messaging |
-| **Transports** | APRS, KISS, Winlink | Meshtastic, MeshCore |
-| **Web UI** | Yes | Yes |
-| **Config Location** | `/etc/raven.conf` | `/etc/crow.conf` |
-| **Config Format** | JSON | JSON |
-| **Service Name** | `raven` | `crow` |
-
-### You Can Run Both
-
-Raven and Crow can coexist on the same node. They're separate services:
-
-```bash
-/etc/init.d/raven status    # Check Raven
-/etc/init.d/crow status     # Check Crow
-```
-
-### How to Migrate from Raven
-
-1. **Install Crow** (as above)
-2. **Copy your Raven callsign** into Crow Settings:
-   - Raven config: `grep callsign /etc/raven.conf`
-   - Crow settings: Settings → Node Info → Callsign
-3. **Disable Raven if you only want Crow**:
-   ```bash
-   /etc/init.d/raven disable
-   /etc/init.d/raven stop
-   ```
-
-That's it. Your channels will auto-discover via Meshtastic or MeshCore.
-
----
-
-## What's Inside Crow?
-
-```
-Crow Node
-├── Meshtastic Backend
-│   ├── UDP (multicast, default)
-│   └── TCP API (opt-in, recommended)
-├── MeshCore Backend
-│   ├── UDP (multicast, default)
-│   └── TCP Companion API (opt-in, recommended)
-├── Channel Discovery
-│   └── Explicit configured mappings (MeshCore discovery is dropped)
-├── Gatekeeper (ACL/anti-spam)
-└── Web UI
-    ├── Chat interface
-    ├── Channel management
-    └── Settings
-```
-
----
-
-## Backend Selection (UDP vs TCP)
-
-### Default: UDP Multicast
-
-When you enable Meshtastic or MeshCore, Crow uses **UDP multicast by default**:
-
-- **Pros**: Simple, no configuration, works immediately
-- **Cons**: No channel list discovery, no radio config access
-
-### TCP Port-API (Recommended)
-
-You can switch to **TCP Port-API** mode, which connects directly to your radio and allows:
-
-- **Channel discovery**: Auto-sync channel list from radio
-- **Cleaner logs**: See backend selection messages
-- **Direct radio control**: Better access to radio-side config and telemetry
-
-**To enable TCP Meshtastic:**
-
-1. Settings → Meshtastic → Backend: Select **TCP API**
-2. Host: Enter your Meshtastic device IP (e.g., `192.168.4.1`)
-3. Port: `4403` (default)
-4. Check **Enable channel discovery**
-5. Save
-
-Crow will connect and discover your channels within a few seconds.
-
-For MeshCore, use the TCP Companion API path instead of the UDP default when
-you want direct queue draining and direct-message verification. MeshCore
-channel/contact discovery is intentionally disabled in Crow; configure only
-the channels that are needed and map them to the radio's slots.
-
-For details, see [Backend Selection Guide](BACKEND_SELECTION.md).
-
----
-
-## Channel Configuration
-
-Channels in Crow represent the radio channels that the operator has chosen to
-keep. Meshtastic TCP can use its documented discovery path, but Crow's
-low-RAM MeshCore path requires explicit channel name/key/slot mappings.
-
-### Viewing Channels
-
-In the **Channels** panel, you'll see:
-
-```
-Public      (built-in, unencrypted)
-Admin       (admin use, encrypted)
-Custom #1   (your channel, encrypted)
-```
-
-Each shows:
-- Channel **name**
-- Approximate **member count** (if available)
-- **Unread message count**
-
-### Adding a New Channel
-
-To add a channel to your radio (and thus to Crow):
-
-1. Use your **Meshtastic app** (mobile) or **MeshCore console** to add the channel to your radio
-2. Restart Crow or wait for auto-refresh (default: 10 minutes)
-3. The new channel will appear in Crow
-
-### Channel Encryption
-
-Crow **never logs raw PSKs or encryption keys**. Channel encryption is handled by the radio firmware, transparent to Crow.
-
-## MeshCore channel soak benchmark
-
-The public channel directory at
-`https://bayareameshcore.com/channels/` (machine-readable source:
-`channels.json`) is the real-world baseline for this test. The directory
-contained **20 public channels** when the soak began on 2026-08-27. Those 20
-entries are a traffic reference, not 20 radio slots: MeshCore exposes slots
-0–7, and BB5/Hub5 currently use two mapped slots (public plus the private
-test channel).
-
-The passive monitor is used first for short five-minute soaks:
-
-```bash
-mkdir -p test-artifacts
-export CROW_NODE_PASSWORD='(operator-provided node password)'
-python3 tools/meshcore_channel_soak.py \\
-  --node NODE1=10.0.0.2 \\
-  --duration-hours 0.083333 \\
-  --interval-seconds 30 \\
-  --output test-artifacts/meshcore-channel-soak-5m-2slot.jsonl
-```
-
-It records the directory count/name digest, Crow service status, process RSS,
-available RAM, restart count, and fatal/OOM/ucode error deltas. It does not
-save channel secrets, inject traffic, alter radio channels, or retain message
-contents. Run each soak alongside normal live MeshCore traffic. The raw
-reports are ignored by Git; summarize the completed results in this section
-before a release.
-
-Acceptance criteria:
-
-- both Crow services remain running for the full 24 hours;
-- no new ucode, fatal, OOM, or kernel out-of-memory events;
-- no unexplained Crow restarts;
-- available RAM never reaches zero, with any sustained low-memory period
-  investigated before release;
-- channel handling is reported as mapped radio slots, separately from the
-  public directory's channel count.
-
-Preliminary live baseline at test start:
-
-| Node | Crow | Available RAM | Crow RSS | Mapped MeshCore slots |
-|---|---|---:|---:|---:|
-| BB5 | running | ~7.0 MiB | not yet stable | 2 |
-| Hub5 | running | ~21.3 MiB | not yet stable | 2 |
-
-Completed five-minute two-slot soak, 2026-08-27 19:31–19:36 PDT, using 30
-second samples (10 samples per node):
-
-| Node | Service samples | Available RAM range | Crow RSS range | Probe failures | New errors | PID changes |
-|---|---:|---:|---:|---:|---:|---:|
-| BB5 | 10/10 running | 7.9–9.9 MiB | 3.9–4.1 MiB | 0 | 0 | 0 |
-| Hub5 | 10/10 running | 25.5–27.4 MiB | 4.6 MiB | 0 | 0 | 0 |
-
-The completed run is a five-minute, two-mapped-slot soak. Short soaks are
-smoke tests, not the final release gate. A controlled slot-ramp test is
-required to claim a maximum beyond the current two-slot live configuration;
-adding directory entries alone would not create real MeshCore traffic. After
-the short-soak series passes, repeat the selected maximum configuration for
-24 hours before release.
-
-For details, see [Channel Management Guide](CHANNELS.md).
-
-## Keeping Crow running on AREDN
-
-Crow is supervised by OpenWrt `procd` and is enabled at boot. The service now
-continues retrying after crashes, while a separate `crow-watchdog` service
-checks the RAM-backed `/tmp/crow-heartbeat` every 60 seconds and restarts Crow
-if its process disappears or its event loop is stale for three minutes.
-
-Check both services and recent recovery events with:
+Crow and its watchdog should start automatically:
 
 ```sh
 /etc/init.d/crow status
 /etc/init.d/crow-watchdog status
-logread | grep -E 'crow|Crow'
+cat /usr/local/crow/version.uc
 ```
 
-For maintenance, stop the watchdog first so it does not undo an intentional
-Crow stop:
+Upgrades preserve configuration; they are not fresh-install tests. For a
+controlled clean setup on an existing node, follow the backup-first
+[fresh-install test](FRESH_INSTALL_SETUP_TEST.md).
+
+## 2. Open Crow
+
+Use Crow's application link in the node UI, or open:
+
+```text
+http://NODE:8080/apps/crow/index.html
+```
+
+Replace `NODE` with the node's reachable hostname/IP and use its actual HTTP
+port if it differs. The application entry is `/apps/crow/index.html`, not
+`/app/crow` and not `10.local.mesh` as a substitute for an IP address.
+
+Wait for the backend connection and channel list. AREDN should be present.
+Other factory presets may also appear; a preset is not proof that a radio is
+attached. An empty or connecting sidebar should be investigated before saving
+channel settings.
+
+## 3. Use channel settings and slash commands
+
+Click the channel-settings gear to inspect/add channels. Save only after the
+current channel list has loaded. The built-in AREDN channel is protected from
+removal/renaming.
+
+Useful commands, entered in the message box:
+
+```text
+/help
+/backends
+/channels local
+/join %LocalOps
+```
+
+`/join %LocalOps` creates an AREDN-only channel. `/join #LocalOps` uses a shared
+name-derived key. For an exact existing name/key, use the channel form or
+`/channels join NAME BASE64KEY`. Keep private keys out of screenshots and logs;
+channel-list replies can include them.
+
+On published 0.0.3-r0, use `/channels join` for names longer than 11 characters:
+typing them into the editor truncates the name. Once joined, use the UI for
+backend bindings and preferences without retyping the name.
+
+A command containing APRS group members **and trailing message text can send
+that text**. For a setup-only check, do not append a message. A plain chat line
+is also an actual send, not a harmless connection test.
+
+See [Channel management](CHANNELS.md) for details.
+
+## 4. Configure optional connections
+
+The chat UI provides channel controls and backend bindings. It does **not**
+currently provide separate Settings → MeshCore/Meshtastic/APRS pages or a
+complete backend wizard. Configure host/port/device, credentials and advanced
+settings over SSH, then finish channel bindings in the UI.
+
+- **USB MeshCore:** [step-by-step USB setup](USB_MESHCORE_SETUP.md). Choose
+  direct USB **or** the local-TCP bridge; never have two readers own one radio.
+- **Network MeshCore:** [Companion TCP backend](MESHCORE_COMPANION_TCP_BACKEND.md).
+- **Meshtastic:** [backend selection](BACKEND_SELECTION.md) and the
+  [TCP API reference](MESHTASTIC_TCP_PORT_API_BACKEND.md).
+- **Configuration paths:** [configuration reference](CONFIG_REFERENCE.md#configuration-files).
+
+A fresh package is AREDN-capable without an enabled radio backend. MeshCore
+channel/contact discovery is deliberately discarded; match each wanted Crow
+channel to the radio's existing name/key/slot. Configuring both TCP and UDP
+entries does not provide automatic failover: only the selected transport runs.
+
+## 5. Edit configuration without losing existing settings
+
+Crow chooses a base file and recursively merges a separate persistent override.
+The override is **not** merely a temporary test file. UI changes can write it.
+
+Stop the watchdog and Crow before SSH edits, so a later runtime save cannot
+replace your edits with its older in-memory configuration:
 
 ```sh
 /etc/init.d/crow-watchdog stop
 /etc/init.d/crow stop
 ```
 
-Nodes are always supplied explicitly so development tools never silently
-target a remembered live system:
+If no `/etc/crow.conf` exists, an operator can create one from the packaged
+base before editing individual settings:
 
 ```sh
-python3 tools/meshcore_channel_soak.py --node NODE1=10.0.0.2 \
-  --duration-hours 24 --interval-seconds 60 --output test-artifacts/soak.jsonl
+umask 077
+[ -e /etc/crow.conf ] || cp -p /usr/local/crow/crow.conf /etc/crow.conf
+vi /etc/crow.conf
 ```
 
----
+Also inspect `/etc/crow.conf.override` privately: overriding fields may mask
+base-file edits. Preserve unrelated keys. Do not overwrite or delete the whole
+override to change a single backend. Validate each edited file as JSON:
 
-## Troubleshooting
+```sh
+ucode -l fs -e 'json(fs.readfile("/etc/crow.conf")); print("JSON syntax OK\n");'
+```
 
-### "No channels found"
+This checks syntax, not hardware readiness or semantic correctness. Start
+Crow and the watchdog after editing, wait for the UI to connect, and check
+`/backends` again:
 
-1. **Check radio connection:**
-   ```bash
-   nc -vz 192.168.4.1 4403  # for Meshtastic TCP
-   ```
-   If this fails, your radio isn't reachable. Check network + cable.
+```sh
+/etc/init.d/crow start
+/etc/init.d/crow-watchdog start
+```
 
-2. **Check backend selection:**
-   - Settings → Meshtastic (or MeshCore)
-   - Ensure **Enabled** is checked
-   - Try switching between UDP and TCP to see which works
+## 6. Optional USB message storage
 
-3. **Check logs:**
-   ```bash
-   logread | grep -i crow
-   ```
+USB storage is separate from the USB radio. For an existing, backed-up data
+stick, use these non-formatting commands from Crow:
 
-### "Service won't start"
+```text
+/storage usb scan
+/storage assimilate
+/storage status
+```
 
-```bash
+`/storage assimilate` can install/load storage support and select an existing
+drive; it does not format it. Check the drive identity before proceeding.
+The standalone `usb-setup.sh format` path is destructive and is not part of
+normal setup or the fresh-install test.
+
+After enabling storage, check that the saved effective configuration contains
+`storage.mode: "usb"`, the intended mountpoint/device, and the desired quotas.
+A mounted drive or runtime “USB storage active” reply alone does not prove
+Crow will use it after restart. If a setting is not persisted by the command,
+record the gap, set that field explicitly over SSH, restart, and verify again.
+
+This persistence gap was reproduced live on 0.0.3-r0: assimilation selected
+USB at runtime, but a Crow restart reverted to internal storage until the
+configuration was edited. Also verify capacity/free space with `df -k /mnt/crow`:
+0.0.3-r0 overstates string-derived storage sizes by 10×. The source correction
+has native ucode regression coverage; it is not in that published package.
+
+## 7. Verify persistence and backend health
+
+```sh
 /etc/init.d/crow restart
-logread | tail -20
+/etc/init.d/crow status
+/etc/init.d/crow-watchdog status
 ```
 
-If you see "Unable to resolve path for module", restart the service:
+Refresh the browser. Check the channels, backend bindings, preferences, labels,
+`/storage status`, and `/backends`. A MeshCore connection is ready only after
+current Companion self-info arrives; an open TCP socket is insufficient.
+RF delivery requires a separately authorized test with an independent radio.
 
-```bash
-sleep 2 && /etc/init.d/crow restart
+For maintenance, stop the watchdog first so it does not restart Crow underneath
+your work:
+
+```sh
+/etc/init.d/crow-watchdog stop
+/etc/init.d/crow stop
 ```
 
-### "TCP connection fails"
+Restart both services when maintenance is complete. No node reboot is normally
+required for editing Crow configuration.
 
-1. Check Meshtastic device is powered on and reachable
-2. Try pinging it:
-   ```bash
-   ping 192.168.4.1
-   ```
-3. Verify port 4403 is listening on the device
-4. Fall back to UDP (no config needed)
+## Coming from Raven
 
----
+The installer has a compatibility importer for selected legacy files when Crow
+files are missing. Review the result and keep a backup. Crow/Raven config paths
+are different, but that alone does not prove their ports or radio ownership
+can coexist; check those before running both services.
 
-## Next Steps
+For a fresh-install test, quarantine legacy migration inputs as well as Crow's
+base/override before installing. Restoring old settings automatically would
+invalidate the new-user walkthrough.
 
-- **[Backend Selection Guide](BACKEND_SELECTION.md)** — Detailed guide on UDP vs TCP, pros/cons, switching
-- **[Channel Management](CHANNELS.md)** — How channels work, discovery, configuration
-- **[Meshtastic TCP Migration](MESHTASTIC_TCP_MIGRATION.md)** — Step-by-step migration from UDP to TCP API
-- **[Configuration Reference](CONFIG_REFERENCE.md)** — All config options explained
+## Troubleshooting and further reading
 
----
+- No AREDN channel: check Crow service/startup errors and the browser connection;
+  attaching a radio is not the remedy for the missing AREDN default.
+- USB radio missing: check Companion firmware, cable/power, the correct serial
+  driver, and exclusive port ownership; storage setup does not install radio drivers.
+- Backend configured but not ready: inspect the selected transport and current
+  handshake. Do not assume an automatic UDP fallback.
+- Changes disappear after restart: check base/override precedence and distinguish
+  runtime state from persisted settings.
+- Before sharing diagnostics, redact channel keys, passcodes, room passwords,
+  private message content, and other operator data.
 
-## Getting Help
-
-- **AREDN Mesh Admin**: Ask your local mesh admin for guidance
-- **GitHub Issues**: https://github.com/mathisono/Crow/issues
-- **Logs**: Always include `logread | grep crow` output when asking for help
+See [USB MeshCore setup](USB_MESHCORE_SETUP.md),
+[fresh-install test](FRESH_INSTALL_SETUP_TEST.md), and
+[historical channel-soak evidence](MESHCORE_CHANNEL_SOAK_HISTORY.md).

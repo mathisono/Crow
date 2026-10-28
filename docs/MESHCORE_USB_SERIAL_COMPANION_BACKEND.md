@@ -1,5 +1,10 @@
 # MeshCore USB Serial Companion backend
 
+For the operator procedure, drivers, startup scripts, and the alternative
+USB-to-local-TCP bridge used by BB5, start with
+[USB MeshCore setup](USB_MESHCORE_SETUP.md). This document describes the direct
+serial transport; it is not the same as selecting `meshcore.tcp` behind a bridge.
+
 Crow can talk directly to a USB-attached MeshCore Companion radio such as the
 RAK3401 BLE/USB Companion build. It opens the radio's CDC serial device at
 115200 baud and speaks the binary Companion protocol; it does not invoke or
@@ -56,8 +61,9 @@ path.
 
 ## Required firmware and USB ownership
 
-Flash the **USB Companion Radio** firmware, not the Repeater or BLE Companion
-image. The serial port must be owned by Crow alone. Do not run
+Use firmware exposing the **USB Companion binary protocol**, not a Repeater or
+text-console image. Verify USB support for the exact board/build; some Companion
+builds also support BLE. The serial port must be owned by Crow alone. Do not run
 `meshcore-cli`, PlatformIO monitor, a terminal emulator, or a second serial
 daemon against the same `/dev/ttyACM*` device while Crow is enabled.
 
@@ -133,7 +139,8 @@ GOOS=linux GOARCH=mips GOMIPS=softfloat CGO_ENABLED=0 \
 
 The independent probe waits two seconds after opening the port, sends only the
 handshake, and prints the returned Companion frames. It should show
-`RESP_SELF_INFO` (`0x05`) and channel records (`0x12`). A successful probe does
+`RESP_SELF_INFO` (`0x05`). It sends only the app-start handshake, not channel
+discovery requests; channel records are not a required result. A successful probe does
 not transmit a LoRa text message. Crow must be stopped while the probe owns the
 device.
 

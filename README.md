@@ -8,6 +8,24 @@ Send mesages, share a file, have group chats with your APRS stations. Dose your 
 
 Documentation can be found in the [Crow GitHub wiki](https://github.com/mathisono/Crow/wiki).
 
+## Install and configure
+
+- Download the APK (current AREDN) or IPK (older opkg firmware) from
+  [GitHub Releases](https://github.com/mathisono/Crow/releases/latest).
+- Start with the [Getting Started guide](docs/SETUP_GETTING_STARTED.md).
+- For a USB-attached MeshCore Companion, follow
+  [USB MeshCore setup](docs/USB_MESHCORE_SETUP.md), including the required
+  drivers, exclusive serial-port ownership, and channel-slot mapping.
+- The [fresh-install setup test](docs/FRESH_INSTALL_SETUP_TEST.md) recreates an
+  operator's settings through the UI and commands without restoring a saved
+  configuration over the fresh installation.
+- See the [BB5 fresh-install findings](docs/FRESH_INSTALL_FINDINGS.md) for
+  verified setup results and 0.0.3-r0 workarounds.
+
+The AREDN channel does not require a LoRa radio. Channel settings are in the
+chat UI; backend connections and advanced settings currently require SSH
+configuration, not a separate backend-settings screen.
+
 ## Credits
 
 Crow is derived from the

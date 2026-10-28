@@ -84,6 +84,17 @@ const initial=()=>[
       assert.deepEqual(await page.evaluate(()=>payloads.find(m=>m.cmd==='newchannels').channels.map(c=>c.namekey)),['AREDN og==','%Ops og==','%Existing og==']);
       assert.equal(await page.evaluate(()=>channels[0].aredn),true);
     });
+    await check('typing a 12-character MeshCore channel name preserves its exact identity',initial(),async page=>{
+      await page.locator('.cog').click();
+      await page.locator('.config form').first().getByRole('button',{name:'+',exact:true}).click();
+      const row=page.locator('.config form').nth(1);
+      await row.getByPlaceholder('Name',{exact:true}).pressSequentially('CrowLatePriv');
+      await row.getByPlaceholder('ID or Key',{exact:true}).fill('AQEBAQEBAQEBAQEBAQEBAQ==');
+      assert.equal(await row.getByPlaceholder('Name',{exact:true}).inputValue(),'CrowLatePriv');
+      await page.getByRole('button',{name:'Save',exact:true}).click();
+      assert.deepEqual(await page.evaluate(()=>payloads.find(m=>m.cmd==='newchannels').channels.map(c=>c.namekey)),
+        ['AREDN og==','CrowLatePriv AQEBAQEBAQEBAQEBAQEBAQ==','%Existing og==']);
+    });
     await check('invalid rows cannot partially save or mutate existing channel state',initial(),async page=>{
       await page.locator('.cog').click();
       await page.evaluate(()=>{echannels[0].max=250;addChannel(0);doneChannels();});

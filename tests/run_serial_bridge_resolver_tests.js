@@ -85,6 +85,13 @@ check('ambiguous non-matches are refused', r.status, 3);
 r = fixture([], { CROW_SERIAL_USB_ID: '239a:8029' });
 check('missing ACM device asks caller to retry', r.status, 2);
 
+r = fixture([
+    { tty: 'ttyACM1', vendor: '239a', product: '8029', serial: 'FIRST' },
+    { tty: 'ttyACM8', vendor: '239a', product: '8029', serial: 'SECOND' }
+], { CROW_SERIAL_USB_ID: '239a:8029' });
+check('multiple devices matching VID/PID are refused', r.status, 3);
+check('ambiguous matching devices do not produce a selected path', r.device, '');
+
 const source = fs.readFileSync(resolver, 'utf8');
 check('runtime continuously rescans after hotplug/disconnect',
     source.includes('while :; do') &&

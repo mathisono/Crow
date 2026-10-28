@@ -271,7 +271,7 @@ function freeBytes(p)
         return null;
     }
     const m = match(lines[length(lines) - 1], /^\S+\s+\d+\s+\d+\s+(\d+)\s+/);
-    return m ? (m[1] + 0) * 1024 : null;
+    return m ? int(m[1]) * 1024 : null;
 }
 
 function setInternalStorage()
@@ -473,8 +473,8 @@ function setupStorage(config)
     storageMountpoint = sc.mountpoint ?? CROW_USB_MOUNT;
     storageLabel = sc.label ?? CROW_USB_LABEL;
     storageDevice = sc.device ?? null;
-    storageImageQuota = sc.image_quota_mb ? (sc.image_quota_mb + 0) * 1024 * 1024 : DEFAULT_IMAGE_QUOTA;
-    storageMinFree = sc.min_free_mb ? (sc.min_free_mb + 0) * 1024 * 1024 : DEFAULT_MIN_FREE;
+    storageImageQuota = sc.image_quota_mb ? (+sc.image_quota_mb) * 1024 * 1024 : DEFAULT_IMAGE_QUOTA;
+    storageMinFree = sc.min_free_mb ? (+sc.min_free_mb) * 1024 * 1024 : DEFAULT_MIN_FREE;
 
     setInternalStorage();
     if (storageMode === "usb") {
@@ -523,7 +523,7 @@ function setupStorage(config)
             if (readTrim(`/sys/block/${b}/removable`) !== "1") {
                 continue;
             }
-            const sectors = readTrim(`/sys/block/${b}/size`) + 0;
+            const sectors = int(readTrim(`/sys/block/${b}/size`));
             const device = partitionForBlock(b);
             const info = blockInfo(device);
             mounted = currentMountDevice(storageMountpoint) === device;
