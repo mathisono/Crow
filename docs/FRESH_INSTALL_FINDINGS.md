@@ -35,7 +35,7 @@ test message, or room login. Software reconnect/handshake success is not RF proo
 | Finding | Live effect / workaround | Source status |
 | --- | --- | --- |
 | Channel editor limits typed names to 11 characters | A 12-character existing name was truncated. Discard the draft; use `/channels join` and edit its preferences in the UI. | Limit raised to 32; real browser typing regression fails before and passes after. |
-| USB activation does not persist Crow's storage mode | `/storage assimilate` succeeded, but restart returned to internal storage. Explicitly set `storage.mode` and device in the persistent configuration. | Recorded; automatic persistence is not fixed in this change. |
+| USB activation does not persist Crow's storage mode | In published 0.0.3-r0/r1, explicitly set `storage.mode` and device in the persistent configuration; runtime activation alone is insufficient. | Fixed in unreleased post-r1 source: activation, disable, and quota commands persist through the configuration writer; restart and failed-write regressions pass in portable/native fixtures. |
 | Storage size/free-space strings use `+ 0` | ucode concatenates a zero, producing 10× capacity/free-space values. Use `df -k` to check actual capacity; the low-space guard is affected too. | Explicit numeric conversion; five native exact-function tests pass, including the free-space guard input. |
 | Optional runner executes `router.uc` | The router module is not the application entry point. Use the normal init service. | Runner corrected and tested; normal init already used `crow.uc`. |
 | No backend setup wizard or label editor | Use explicit SSH fields for transport, credentials, slot map, labels and advanced group options. | Guides now describe actual supported surfaces. |
@@ -45,9 +45,11 @@ test message, or room login. Software reconnect/handshake success is not RF proo
 The installed/published **0.0.3-r0 payload was not patched** during this test.
 The runner, channel-name, and accounting corrections are included in
 **0.0.3-r1**; they are not present in the older 0.0.3-r0 release packages.
-The automatic USB storage-mode persistence gap remains unresolved. Publishing
-a new release does not update an installed node, and this historical live
-test does not constitute a fresh-install qualification of 0.0.3-r1.
+The automatic USB storage-mode persistence gap is fixed in **unreleased source
+after 0.0.3-r1**, not in either published package. Isolated native regression
+coverage is not a live-install qualification. Publishing a new release does not
+update an installed node, and this historical live test does not qualify a
+later package.
 
 ## Reproduce
 
@@ -63,8 +65,15 @@ uses exact source functions with inert I/O:
 node tests/run_backend_setup_script_tests.js
 node tests/run_channel_settings_ui_tests.js
 node tests/run_storage_accounting_tests.js
+node tests/run_storage_persistence_tests.js
 ```
 
 Without local ucode, the accounting runner reports a skip. Its `--emit` output
 can be executed with `ucode -` on an authorized target; it does not mount,
 format, install packages, modify live configuration, or access the radio.
+
+The persistence runner uses the actual storage functions, configuration writer,
+and startup merge with inert I/O. It repeats its behavioral cases in ucode when
+available, and verifies the real native filesystem API only in a disposable
+local directory. Use `UCODE=/path/to/ucode` to select a development interpreter.
+Its `--emit` output contains only the inert behavioral fixture.

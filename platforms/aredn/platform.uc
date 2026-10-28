@@ -57,6 +57,7 @@ let storageLabel = CROW_USB_LABEL;
 let storageDevice = null;
 let storageMinFree = DEFAULT_MIN_FREE;
 let storageImageQuota = DEFAULT_IMAGE_QUOTA;
+let storageConfig = null;
 
 function startServiceWatcher()
 {
@@ -468,6 +469,7 @@ function imageQuotaPrune()
 
 function setupStorage(config)
 {
+    storageConfig = config;
     const sc = config.storage ?? {};
     storageMode = sc.mode ?? "internal";
     storageMountpoint = sc.mountpoint ?? CROW_USB_MOUNT;
@@ -554,6 +556,41 @@ function selectStorageCandidate(candidates)
     return length(candidates) === 1 ? candidates[0] : null;
 }
 
+function saveStorageSettings(settings)
+{
+    return storageConfig?.update?.("storage", settings) === true;
+}
+
+function persistActiveStorage()
+{
+    // The already-mounted path must save the actual device too, not just fstab.
+    const device = currentMountDevice(storageMountpoint);
+    if (!device || !deviceIsSafeUsb(device)) {
+        return { ok: false, active: true, persisted: false,
+            message: "USB storage is active, but its device could not be safely saved. Settings were not persisted." };
+    }
+    storageDevice = device;
+    const info = blockInfo(device);
+    const settings = {
+        mode: "usb",
+        mountpoint: storageMountpoint,
+        device: device,
+        label: info.LABEL ?? storageLabel
+    };
+    if (!persistStorageMount(device)) {
+        return { ok: false, active: true, persisted: false, device: device,
+            message: "USB storage is active, but its boot mount could not be saved. Fix the write error and retry; activation is not persistent." };
+    }
+    if (!saveStorageSettings(settings)) {
+        return { ok: false, active: true, persisted: false, device: device,
+            message: "USB storage is active, but Crow's storage settings could not be saved. Fix the configuration write error and retry before restarting." };
+    }
+    storageLabel = settings.label;
+    return { ok: true, active: true, persisted: true, device: device,
+        label: info.LABEL, filesystem: info.TYPE,
+        message: "USB storage active; settings saved for restart." };
+}
+
 /* export */ function storageMount(requestedDevice)
 {
     if (!hasUsbPort()) {
@@ -562,11 +599,7 @@ function selectStorageCandidate(candidates)
     }
     storageMode = "usb";
     if (activateMountedUsb()) {
-        const mountedDevice = currentMountDevice(storageMountpoint);
-        if (mountedDevice) {
-            persistStorageMount(mountedDevice);
-        }
-        return { ok: true, message: "USB storage active." };
+        return persistActiveStorage();
     }
 
     let device = requestedDevice ?? storageDevice;
@@ -611,10 +644,9 @@ function selectStorageCandidate(candidates)
         return { ok: false, message: storageReason ?? "USB storage mounted but failed health checks." };
     }
     storageDevice = device;
-    persistStorageMount(device);
     migrateDataToUsb();
     imageQuotaPrune();
-    return { ok: true, message: "USB storage active." };
+    return persistActiveStorage();
 }
 
 function assimilationFailureMessage(status)
@@ -677,21 +709,25 @@ function assimilationFailureMessage(status)
     }
     const result = storageMount(candidate.device);
     result.discovery_run = discoveryRun;
-    result.device = candidate.device;
-    result.label = candidate.label;
-    result.filesystem = candidate.filesystem;
+    result.device = result.device ?? candidate.device;
+    result.label = result.label ?? candidate.label;
+    result.filesystem = result.filesystem ?? candidate.filesystem;
     if (result.ok) {
-        result.message = `${candidate.device} mounted at ${storageMountpoint}; Crow data and images assimilated.`;
+        result.message = `${result.device} mounted at ${storageMountpoint}; Crow data and images assimilated; settings saved for restart.`;
     }
     return result;
 }
 
 /* export */ function storageDisable()
 {
+    if (!saveStorageSettings({ mode: "internal" })) {
+        return { ok: false, persisted: false,
+            message: "Storage disable was not saved; the current mode is unchanged. Fix the configuration write error and retry." };
+    }
     storageMode = "internal";
     removeStoragePersistence();
     setInternalStorage();
-    return { ok: true, message: "Crow storage returned to internal node storage." };
+    return { ok: true, persisted: true, message: "Crow storage returned to internal node storage; settings saved for restart." };
 }
 
 /* export */ function storageImageQuota(mb)
@@ -700,9 +736,13 @@ function assimilationFailureMessage(status)
     if (!(quota > 0 && quota <= 65536)) {
         return { ok: false, message: "Image quota must be between 1 and 65536 MB." };
     }
+    if (!saveStorageSettings({ image_quota_mb: quota })) {
+        return { ok: false, persisted: false,
+            message: "Image quota was not saved; the current quota is unchanged. Fix the configuration write error and retry." };
+    }
     storageImageQuota = quota * 1024 * 1024;
     imageQuotaPrune();
-    return { ok: true, message: `Image quota set to ${quota} MB.` };
+    return { ok: true, persisted: true, message: `Image quota set to ${quota} MB and saved for restart.` };
 }
 
 /* export */ function setup(config)

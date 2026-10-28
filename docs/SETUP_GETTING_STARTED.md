@@ -165,18 +165,27 @@ drive; it does not format it. Check the drive identity before proceeding.
 The standalone `usb-setup.sh format` path is destructive and is not part of
 normal setup or the fresh-install test.
 
-After enabling storage, check that the saved effective configuration contains
-`storage.mode: "usb"`, the intended mountpoint/device, and the desired quotas.
-A mounted drive or runtime “USB storage active” reply alone does not prove
-Crow will use it after restart. If a setting is not persisted by the command,
-record the gap, set that field explicitly over SSH, restart, and verify again.
+**Unreleased source after 0.0.3-r1:** successful assimilation/USB enable saves
+`storage.mode: "usb"`, the actual mounted device, mountpoint, and label in
+Crow's persistent override. Disable saves internal mode, and image-quota changes
+are saved too. Other configuration and storage overrides are preserved. If the
+reply says storage is **active but not persistent**, fix the configuration or
+mount-persistence write error and retry before restarting; that is not a
+successful durable activation. A failed disable/quota save leaves its previous
+runtime setting unchanged.
 
-This persistence gap was reproduced live on 0.0.3-r0 and remains unresolved
-in 0.0.3-r1: assimilation selected USB at runtime, but a Crow restart reverted
-to internal storage until the configuration was edited. The separate capacity
-and free-space accounting defect is fixed in 0.0.3-r1, with native ucode
-regression coverage. If still using 0.0.3-r0, verify actual capacity/free space
-with `df -k /mnt/crow`; that older package overstates string-derived sizes by 10×.
+After enabling storage, restart Crow and confirm the same storage state, device,
+and desired quotas. A mounted drive alone is not proof that Crow will use it.
+
+**Published 0.0.3-r0 and 0.0.3-r1 still need the workaround:** explicitly save
+`storage.mode`, mountpoint/device, and desired settings over SSH using the
+configuration-editing procedure above, then restart and verify. The live gap
+was reproduced on 0.0.3-r0: assimilation selected USB only at runtime. The new
+persistence fix has not yet shipped in a release package.
+
+The separate capacity/free-space accounting defect is fixed in 0.0.3-r1.
+If still using 0.0.3-r0, verify actual capacity/free space with `df -k /mnt/crow`;
+that older package overstates string-derived sizes by 10×.
 
 ## 7. Verify persistence and backend health
 

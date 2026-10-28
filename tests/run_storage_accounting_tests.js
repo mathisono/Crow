@@ -18,7 +18,7 @@ const CROW_USB_MOUNT="/mnt/crow";
 const CROW_USB_LABEL="CROWDATA";
 const DEFAULT_IMAGE_QUOTA=67108864;
 const DEFAULT_MIN_FREE=16777216;
-let storageMode,storageMountpoint,storageLabel,storageDevice,storageImageQuota,storageMinFree,storageState;
+let storageMode,storageMountpoint,storageLabel,storageDevice,storageImageQuota,storageMinFree,storageState,storageConfig;
 let dfText="Filesystem 1024-blocks Used Available Capacity Mounted on\\n/dev/sda1 200000 10000 190000 5% /mnt/crow\\n";
 const fs={
   popen:function(){return {read:function(){return dfText;},close:function(){}};},

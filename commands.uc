@@ -745,7 +745,7 @@ export function post(cmd, id, namekey)
                                 break;
                             }
                             const result = platform.storageMount();
-                            event.queue({ cmd: "/reply", reply: [ result.ok ? "USB storage active." : "USB storage degraded.", result.message ?? "" ], socket: id });
+                            event.queue({ cmd: "/reply", reply: [ result.ok ? "USB storage active." : result.active ? "USB storage active but not persistent." : "USB storage degraded.", result.message ?? "" ], socket: id });
                             break;
                         }
                         case "disable":
@@ -769,7 +769,7 @@ export function post(cmd, id, namekey)
                         break;
                     }
                     const result = platform.storageAssimilate();
-                    const reply = [ result.ok ? "USB storage assimilated." : "USB assimilation failed.", result.message ?? "" ];
+                    const reply = [ result.ok ? "USB storage assimilated." : result.active ? "USB storage active but not persistent." : "USB assimilation failed.", result.message ?? "" ];
                     if (result.device) {
                         push(reply, `Device: ${result.device}${result.label ? ` label=${result.label}` : ""}${result.filesystem ? ` fs=${result.filesystem}` : ""}`);
                     }

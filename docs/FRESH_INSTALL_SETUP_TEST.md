@@ -86,7 +86,11 @@ check the saved `storage.mode` and recheck after restarting.
    and room records through supported surfaces. If a setting has no UI/command
    surface, record the gap and the explicit SSH edit used.
 8. **Storage.** Use non-formatting storage commands, check state and quotas,
-   and verify persistence. Restore historical content only as a separately
+   and verify persistence. When qualifying the post-r1 automatic-persistence
+   fix, require a saved-settings success reply and restart parity without a
+   manual configuration repair; an SSH workaround does not validate that fix.
+   Check disable and quota persistence in the authorized test plan too.
+   Restore historical content only as a separately
    recorded data-preservation action, not as a substitute for entering settings.
 9. **Compare.** Compare effective base+override values and per-channel UI state
    against the private worksheet. Report differences by field, without secrets.
