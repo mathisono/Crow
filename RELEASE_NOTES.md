@@ -18,6 +18,8 @@ including the fixes and setup documentation merged in
   instructions. Update getting-started and configuration documentation.
 - Include browser, native storage-accounting, and isolated setup-script
   regression coverage, plus the documented fresh-install test procedure.
+- Build the bundled serial helper without embedding the checkout path in its
+  Go package metadata, making fixed-epoch artifacts independent of that path.
 
 ## Packages and scope
 
