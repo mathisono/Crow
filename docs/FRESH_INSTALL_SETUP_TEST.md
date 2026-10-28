@@ -86,7 +86,7 @@ check the saved `storage.mode` and recheck after restarting.
    and room records through supported surfaces. If a setting has no UI/command
    surface, record the gap and the explicit SSH edit used.
 8. **Storage.** Use non-formatting storage commands, check state and quotas,
-   and verify persistence. When qualifying the post-r1 automatic-persistence
+   and verify persistence. When qualifying the 0.0.3-r2 automatic-persistence
    fix, require a saved-settings success reply and restart parity without a
    manual configuration repair; an SSH workaround does not validate that fix.
    Check disable and quota persistence in the authorized test plan too.

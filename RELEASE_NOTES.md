@@ -1,4 +1,4 @@
-# Unreleased — automatic storage persistence
+# Crow v0.0.3-r2 — automatic storage persistence
 
 - Successful `/storage assimilate` and `/storage usb enable` now save Crow's
   USB mode, actual mounted device, mountpoint, and label to its persistent
@@ -14,9 +14,20 @@
   startup merge in portable and native ucode fixtures, including restart reloads,
   already-mounted/new mounts, disable, quotas, and injected write failures.
 
-This fix is **not included in published 0.0.3-r0 or 0.0.3-r1 packages**. Those
-versions still require the manual storage-mode workaround. The new code has
-isolated regression coverage, not a live-install or physical USB/reboot test.
+This fix is **not included in 0.0.3-r0 or 0.0.3-r1 packages**. Those versions
+still require the manual storage-mode workaround.
+
+Download `crow-0.0.3-r2.apk` for APK firmware or `crow_0.0.3-r2_all.ipk` for
+older opkg firmware from [the release](https://github.com/mathisono/Crow/releases/tag/v0.0.3-r2).
+The rolling aliases contain identical bytes. Verify `release-sha256.txt` and
+read the attached `VALIDATION.md` for the exact live and isolated test scope.
+The APK candidate was upgraded and tested on BB5: disable, assimilation, USB
+enable, and quota settings persisted across Crow restarts without manual repair.
+Existing configuration, channel preferences, message history, and node keys
+were preserved. This was not a fresh install, node reboot, physical USB reconnect,
+or RF-delivery test; IPK installation was not tested on hardware.
+The APK is unsigned; the bundled serial helper still targets MIPS big-endian
+soft-float rather than every architecture implied by `all`/`noarch` metadata.
 
 ---
 

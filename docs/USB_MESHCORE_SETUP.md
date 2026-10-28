@@ -1,6 +1,6 @@
 # Set up a USB MeshCore Companion on AREDN
 
-Applies to Crow 0.0.3-r1, with notes for 0.0.3-r0. A USB **radio** and USB
+Applies to Crow 0.0.3-r2, with notes for older releases. A USB **radio** and USB
 **message storage** are different devices and use different setup paths.
 
 ## 1. Choose one connection method
@@ -64,7 +64,7 @@ does **not** install this node-specific init service automatically.
 
 ```sh
 apk add socat
-curl -fL https://raw.githubusercontent.com/mathisono/Crow/v0.0.3-r1/tools/bb5-crow-serial-bridge.init \
+curl -fL https://raw.githubusercontent.com/mathisono/Crow/v0.0.3-r2/tools/bb5-crow-serial-bridge.init \
   -o /etc/init.d/crow-serial-bridge
 chmod 755 /etc/init.d/crow-serial-bridge
 ```
@@ -135,7 +135,7 @@ Stop and disable an existing `crow-serial-bridge` service before selecting it.
 }
 ```
 
-The 0.0.3-r1 packages bundle a **MIPS big-endian soft-float** serial
+The 0.0.3-r2 packages bundle a **MIPS big-endian soft-float** serial
 helper. On another CPU architecture, provide a matching build or supported
 `stty`; `all`/`noarch` package metadata does not make that executable universal.
 See [direct-USB protocol and build details](MESHCORE_USB_SERIAL_COMPANION_BACKEND.md).
@@ -181,7 +181,7 @@ backend or a connected TCP socket. Confirm the intended transport, all channel
 bindings and slot mappings, then restart Crow and check they remain correct.
 Capture only redacted status; channel-list replies can contain keys.
 
-In 0.0.3-r1, the channel editor accepts names up to 32 characters, matching
+In 0.0.3-r1 and later, the channel editor accepts names up to 32 characters, matching
 MeshCore's limit. Confirm the exact name/key before adding the corresponding
 `channel_slots` entry. If still using 0.0.3-r0, the editor truncates typed names
 at 11 characters: use `/channels join NAME BASE64KEY`, then set the backend

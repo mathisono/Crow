@@ -35,7 +35,7 @@ test message, or room login. Software reconnect/handshake success is not RF proo
 | Finding | Live effect / workaround | Source status |
 | --- | --- | --- |
 | Channel editor limits typed names to 11 characters | A 12-character existing name was truncated. Discard the draft; use `/channels join` and edit its preferences in the UI. | Limit raised to 32; real browser typing regression fails before and passes after. |
-| USB activation does not persist Crow's storage mode | In published 0.0.3-r0/r1, explicitly set `storage.mode` and device in the persistent configuration; runtime activation alone is insufficient. | Fixed in unreleased post-r1 source: activation, disable, and quota commands persist through the configuration writer; restart and failed-write regressions pass in portable/native fixtures. |
+| USB activation does not persist Crow's storage mode | In older 0.0.3-r0/r1, explicitly set `storage.mode` and device in the persistent configuration; runtime activation alone is insufficient. | Fixed in 0.0.3-r2: activation, disable, and quota commands persist through the configuration writer. BB5 command/restart checks and portable/native failed-write regressions pass. |
 | Storage size/free-space strings use `+ 0` | ucode concatenates a zero, producing 10× capacity/free-space values. Use `df -k` to check actual capacity; the low-space guard is affected too. | Explicit numeric conversion; five native exact-function tests pass, including the free-space guard input. |
 | Optional runner executes `router.uc` | The router module is not the application entry point. Use the normal init service. | Runner corrected and tested; normal init already used `crow.uc`. |
 | No backend setup wizard or label editor | Use explicit SSH fields for transport, credentials, slot map, labels and advanced group options. | Guides now describe actual supported surfaces. |
@@ -45,11 +45,37 @@ test message, or room login. Software reconnect/handshake success is not RF proo
 The installed/published **0.0.3-r0 payload was not patched** during this test.
 The runner, channel-name, and accounting corrections are included in
 **0.0.3-r1**; they are not present in the older 0.0.3-r0 release packages.
-The automatic USB storage-mode persistence gap is fixed in **unreleased source
-after 0.0.3-r1**, not in either published package. Isolated native regression
-coverage is not a live-install qualification. Publishing a new release does not
-update an installed node, and this historical live test does not qualify a
-later package.
+The automatic USB storage-mode persistence gap is fixed in **0.0.3-r2**, not
+in r0/r1. The separate upgrade qualification below validates the r2 candidate;
+it does not retroactively change the historical fresh-install results.
+
+## Follow-up: 0.0.3-r2 upgrade and storage-persistence qualification
+
+After verified private backups, BB5 was upgraded from 0.0.3-r0 to the r2 APK
+candidate on the same AREDN firmware. All 86 installed release files matched
+the candidate package. Live commands exercised:
+
+- `/storage usb disable`, followed by a Crow restart: internal mode persisted
+  even while the USB filesystem remained mounted.
+- `/storage assimilate`, followed by a restart: USB mode/device persisted
+  without manually editing the configuration.
+- An increased image quota, restart, and restoration of the original quota
+  through `/storage quota images`: the intended saved values persisted.
+- Disable then `/storage usb enable`, followed by a restart: USB mode returned
+  and the original effective configuration matched exactly.
+
+The final UI reported 0.0.3-r2, six channels, active USB storage, and no page
+errors. APRS-IS connected and the USB Companion TCP backend completed a current
+self-info handshake. Six channel preferences, all 75 baseline messages, active
+node ID/keys, and the protected recovery files were preserved. Node-location
+fields refreshed normally and are not treated as identity-key changes.
+
+This was an **upgrade and storage-persistence test**, not another fresh install.
+The live drive was already mounted; new-mount and failed-write cases were tested
+with inert native fixtures. No node reboot, physical USB unplug/replug, formatting,
+intentional RF test transmission, or history reimport was performed. See the
+[r2 release](https://github.com/mathisono/Crow/releases/tag/v0.0.3-r2) attachment
+`VALIDATION.md` for package checksums, source identity, and complete scope.
 
 ## Reproduce
 
