@@ -557,7 +557,7 @@ function htmlChannelConfig()
             ? `<select onchange="typeChannelBackend(${i}, event.target.value)">${backendOptions(e.backend)}</select>`
             : '';
         return `<form class="c">
-            <input value="${attr(channelName)}" oninput="typeChannelName(${i}, event.target.value)" required minlength="1" maxlength="11" size="11" placeholder="Name" ${disabledName} pattern="[^ ]+">
+            <input value="${attr(channelName)}" oninput="typeChannelName(${i}, event.target.value)" required minlength="1" maxlength="32" size="11" placeholder="Name" ${disabledName} pattern="[^ ]+">
             <input value="${attr(channelKey)}" oninput="typeChannelKey(${i}, event.target)" required minlength="4" maxlength="43" size="43" placeholder="ID or Key" ${disabledKey}>
             <input value="${attr(safeInt(e.max))}" oninput="typeChannelMax(${i}, event.target.value)" required minlength="2" maxlength="4" size="4" placeholder="Count">
             <div><input ${e.badge ? "checked" : ""} type="checkbox" oninput="typeChannelBadge(${i}, event.target.checked)"></div>

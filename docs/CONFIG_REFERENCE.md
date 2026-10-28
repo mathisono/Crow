@@ -8,14 +8,35 @@
 
 ## Configuration Files
 
-Crow reads configuration from (in order of priority):
+Crow first selects the first existing **base** file:
 
-1. **`/etc/crow.conf`** (main config, persistent)
-2. **`/etc/crow.conf.override`** (override config, for testing)
-3. **Local `./crow.conf`** (current directory, for testing)
-4. **`/etc/raven.conf`** (legacy Raven config, read-only fallback)
+1. `/etc/crow.conf`
+2. `crow.conf` beside the running script (normally `/usr/local/crow/crow.conf`)
+3. `/etc/raven.conf`
+4. `raven.conf` beside the running script
 
-The **first file found** wins. Typically, use `/etc/crow.conf` for production.
+It then selects the first existing **override** file independently:
+
+1. `/etc/crow.conf.override`
+2. `crow.conf.override` beside the running script
+3. `/etc/raven.conf.override`
+4. `raven.conf.override` beside the running script
+
+An object override is recursively merged into the base. Arrays replace the
+corresponding arrays, and a `null` override removes the corresponding key.
+This is not one “first file wins” list. “Local” means the script directory,
+not the shell's current working directory.
+
+The override is persistent user state, not a disposable testing file. Channel
+and supported command changes can write it. Keep unrelated fields when editing;
+do not delete it to change one connection. A base edit can be masked by the
+override. Back up both privately, including credentials and channel keys.
+
+The chat UI has channel settings and backend bindings, but no general backend
+wizard. Configure connection host/port/device, slot mappings and advanced
+settings over SSH. See [Getting started](SETUP_GETTING_STARTED.md),
+[USB MeshCore setup](USB_MESHCORE_SETUP.md), and the
+[fresh-install test](FRESH_INSTALL_SETUP_TEST.md).
 
 ---
 

@@ -28,6 +28,8 @@ hooks are stripped from release modules during packaging.
 | `run_channel_export_tests.js` | `node` + optional `ucode` | Text/CSV channel export formatting, event routing, and browser download behavior. |
 | `run_channel_join_tests.js` | `node` + optional `ucode` | Actual short/long join dispatch, shared keys, usage errors, and existing-channel preservation. |
 | `run_channel_settings_ui_tests.js` | `node` + optional Playwright/Chromium | Empty/disconnected channel settings, reconnects, validation, and safe channel-list replacement. |
+| `run_backend_setup_script_tests.js` | `node` + Python 3, Linux bubblewrap/BusyBox | Executes unchanged installer, upgrade, watchdog, USB-storage, bridge-loop and init scripts inside an isolated filesystem with mocked devices/services/package managers. |
+| `run_storage_accounting_tests.js` | `node` + ucode | Runs exact storage source functions with inert I/O; verifies disk sectors, free-space bytes, numeric-string quotas and malformed output. Use `--emit` for an authorized native target. |
 | `run_formatter_tests.js` | `node` + optional `ucode` | Outbound LoRa callsign/tag formatting and truncation. |
 | `run_meshcore_backend_selector.js` | `node` + optional `ucode` | Lazy backend selection and TCP/USB/UDP precedence. |
 | `run_meshcore_serial_api_tests.js` | `node` + optional `ucode` | USB Companion framing, queue handling, and RF slot gate. |
@@ -143,6 +145,22 @@ the real page, styles, and script, supplies a synthetic WebSocket, and blocks
 all network requests. It checks the initial connection, empty-list creation,
 preservation of existing channels, invalid forms, disconnects, and updated
 server data while the editor is open.
+
+## Fresh-install and backend setup testing
+
+Follow [Fresh-install setup test](../docs/FRESH_INSTALL_SETUP_TEST.md) for the
+live operator walkthrough. It requires a verified private backup and actual
+UI access before resetting a node. An upgraded node with its old configuration
+restored is not a passing fresh-install test.
+
+`run_backend_setup_script_tests.js` executes the real shell scripts with
+network isolation and private `/etc`, `/sys`, `/dev`, `/usr/local`, and `/tmp`.
+Package managers, service commands, serial I/O, mounts, and formatting are
+inert fixtures. It checks installer ordering, upgrade preservation, dependency
+failure reporting, no-format assimilation, watchdog decisions, serial
+re-enumeration, procd arguments, and the runner entry point. It reports an
+explicit skip when Linux bubblewrap/BusyBox isolation is unavailable. A pass
+does not certify a physical USB radio, a fresh installation, or RF delivery.
 
 ## Native join regression fixture
 
