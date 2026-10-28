@@ -339,6 +339,7 @@ export function post(cmd, id, namekey)
                 }
             }
             break;
+        case "join":
         {
             const parsed = groups.parseJoinArgs(slice(cmd, 1));
             if (!parsed) {

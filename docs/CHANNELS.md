@@ -8,14 +8,18 @@
 
 ## What Are Channels?
 
-**Channels** are broadcast groups on your LoRa mesh. Each channel:
+**Channels** are messaging groups. Crow supports AREDN/IP channels as well as
+channels bridged to optional Meshtastic or MeshCore radios. Each channel:
 
 - Has a **name** (e.g., "Public", "Admin", "Weather")
 - May have **encryption** (PSK: Pre-Shared Key)
 - Contains **members** on the mesh
 - Has a **message history**
 
-Crow **mirrors channels from your Meshtastic or MeshCore device**. You don't create channels in Crow—you manage them on the radio, and Crow discovers them.
+On AREDN, Crow includes the **AREDN** channel automatically, just as Raven does.
+It does **not** require a LoRa radio. You can create additional Crow channels in
+the channel settings or with the join commands below. Configuring a channel in
+Crow does not, by itself, provision that channel on a connected radio.
 
 ---
 
@@ -44,7 +48,8 @@ Each channel shows:
 
 *Coming soon:* Channel search and sorting.
 
-Currently, channels appear in the order they're reported by your radio.
+Channels appear in Crow's configured order. Radio discovery and Crow's local
+channel configuration are separate; their lists need not be identical.
 
 ---
 
@@ -105,9 +110,28 @@ ssh root@10.local.mesh
 
 ## Adding New Channels
 
-Channels are managed on your **radio**, not created automatically by Crow.
-Meshtastic and MeshCore Companion radios differ in how Crow maps the channel,
-so use the appropriate procedure below.
+### AREDN and Crow channels
+
+The built-in **AREDN** channel is added automatically on AREDN firmware. Its
+name and remove controls are intentionally disabled. If the entire channel
+list is missing, troubleshoot the Crow connection rather than creating a
+second channel called `%AREDN` (which is a different channel).
+
+To create a custom AREDN-only group, enter `/join %LocalOps` in the message box.
+The longer form `/channels join %LocalOps` also works. `/join #LocalOps` creates
+a deterministic shared-key channel; using it on a radio still requires the
+appropriate radio/backend configuration. Plain `/join AREDN` is not the syntax
+for a custom group: use `%` or `#` as shown above.
+
+Alternatively, open the gear beside **Channels**, press **+** (or **Add channel**
+when the list is empty), enter a name such as `%LocalOps`, and press **Save**.
+Crow waits for the server's channel list before allowing settings to be saved.
+
+### Radio channels
+
+Meshtastic and MeshCore Companion radios differ in how Crow maps a channel.
+Use the appropriate procedure below to configure the radio side; this is not
+required for AREDN-only chat.
 
 ### Via Meshtastic Mobile App
 
@@ -288,9 +312,25 @@ Coming soon:
 
 ### "No channels showing"
 
-**If using UDP:**
+**If the entire sidebar is empty, including AREDN:**
 
-→ Expected. UDP doesn't discover channels. Switch to TCP API (see [Backend Selection](BACKEND_SELECTION.md)).
+1. Check whether the page says it is connecting to Crow. The page's HTTP server
+   and Crow's WebSocket service are separate; loading the page does not prove
+   that the messaging service is running.
+2. Check `/etc/init.d/crow status` and `logread | grep -i crow` on the node.
+3. Check that the browser can reach Crow's WebSocket port **4404**. An HTTP-only
+   tunnel/proxy or an HTTPS page trying to open an insecure WebSocket can
+   prevent the channel list from loading.
+4. On recent AREDN RC firmware, use a Crow build containing the service-watcher
+   compatibility fix. Older packages can fail during startup. Check the
+   package version, not just the source branch's revision.
+
+There is no need to attach a radio to obtain the default AREDN channel.
+
+**If AREDN is present but expected radio channels are missing:**
+
+UDP backends do not perform the TCP API's channel discovery. Check your local
+channel configuration and the selected backend (see [Backend Selection](BACKEND_SELECTION.md)).
 
 **If using TCP:**
 
@@ -418,15 +458,19 @@ meshtastic --ch-index 2 --ch-name "Custom"
 
 ### Q: Can I rename a channel in Crow?
 
-**A:** No, currently not. Rename on your Meshtastic device, and Crow will sync the new name.
+**A:** Custom Crow entries can be edited in channel settings; the built-in
+AREDN preset is protected. Changing a Crow entry does not rename a radio slot.
 
 ### Q: Can I delete a channel in Crow?
 
-**A:** No. Delete on your Meshtastic device, and Crow will remove it from the list.
+**A:** Custom Crow entries can be removed in channel settings; the AREDN preset
+is protected. Removing a Crow entry does not delete a radio slot.
 
 ### Q: Do I need to manually add channels in Crow?
 
-**A:** No (with TCP). Crow auto-discovers all channels. With UDP, you'll need to manage them manually (not recommended).
+**A:** AREDN is included automatically. Additional local channels can be added
+in Crow. Optional radio discovery has backend-specific behavior and does not
+replace the local channel configuration.
 
 ### Q: Can I have channels with the same name?
 

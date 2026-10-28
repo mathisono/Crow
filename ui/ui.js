@@ -2,6 +2,7 @@ let sock = null;
 let rightSelection = null;
 let previousSelection = null;
 let channels = null;
+let channelsReady = false;
 let echannels = null;
 let directs = {};
 const nodes = {};
@@ -132,7 +133,7 @@ function byNamekey(namekey)
 
 function getChannel(namekey)
 {
-    for (let i = 0; i < channels.length; i++) {
+    for (let i = 0; i < (channels || []).length; i++) {
         if (channels[i].namekey === namekey) {
             return channels[i];
         }
@@ -542,6 +543,9 @@ function backendOptions(selected)
 
 function htmlChannelConfig()
 {
+    if (!channelsReady) {
+        return '<div class="config"><div class="t">Configure Channels</div><div role="status">Connecting to Crow. Channel settings will be available after the connection is restored. No changes have been saved.</div></div>';
+    }
     const hasBackends = configuredBackends().length > 0;
     const body = echannels.map((e, i) => {
         const channelName = e.meshtastic ? "Meshtastic" : e.name;
@@ -597,9 +601,10 @@ function htmlChannelConfig()
                 <div></div>
                 ${hasBackends ? '<div>Backend</div>' : ''}
             </div>
-            ${body}
+            ${body || '<button type="button" onclick="addChannel(-1)">Add channel</button>'}
         </div>
-        <div class="d"><button onclick="doneChannels()">Save</button></div>
+        <div id="channel-config-error" role="alert"></div>
+        <div class="d"><button onclick="doneChannels()" ${echannels.length ? '' : 'disabled'}>Save</button></div>
     </div>`;
 }
 
@@ -713,7 +718,7 @@ function updateNode(msg)
 function updateTitle()
 {
     let count = 0;
-    for (let i = 0; i < channels.length; i++) {
+    for (let i = 0; i < (channels || []).length; i++) {
         if (channels[i].state.badge) {
             count += channels[i].state.count;
         }
@@ -726,8 +731,9 @@ function updateTitle()
 
 function updateChannels(msg)
 {
-    if (msg) {
+    if (msg && Array.isArray(msg.channels)) {
         channels = msg.channels;
+        channelsReady = true;
         updateBackendStatuses(msg.backend_status);
         if (msg.aprs_backends) {
             aprsBackends = msg.aprs_backends;
@@ -736,7 +742,11 @@ function updateChannels(msg)
             meshcoreBackends = msg.meshcore_backends;
         }
     }
-    I("channels").innerHTML = channels.map(c => htmlChannel(c)).join("");
+    I("channels").innerHTML = !channelsReady
+        ? '<div role="status">Connecting to Crow…</div>'
+        : channels.length
+            ? channels.map(c => htmlChannel(c)).join("")
+            : '<div role="status">No channels configured. Open channel settings to add one.</div>';
     updateTitle();
 }
 
@@ -1143,12 +1153,18 @@ function downloadImage()
 
 function addChannel(idx)
 {
+    if (!channelsReady || !Array.isArray(echannels)) {
+        return;
+    }
     echannels.splice(idx + 1, 0, { name: "", key: "og==", max: 100, badge: true, images: true, telemetry: false, winlink: false, backend: "" });
     I("texts").innerHTML = htmlChannelConfig();
 }
 
 function rmChannel(idx)
 {
+    if (!channelsReady || !Array.isArray(echannels)) {
+        return;
+    }
     echannels.splice(idx, 1);
     I("texts").innerHTML = htmlChannelConfig();
 }
@@ -1296,6 +1312,14 @@ function genChannelKey(idx, value)
 
 function doneChannels()
 {
+    // Never queue a replacement channel list before receiving the current one.
+    if (!channelsReady || !Array.isArray(echannels)) {
+        return;
+    }
+    if (!sock || sock.readyState !== 1) {
+        restartup();
+        return;
+    }
     function getKey(key)
     {
         key = key.replace(/\s/g, "");
@@ -1304,7 +1328,7 @@ function doneChannels()
             return btoa(key.match(/\w{2}/g).map(a => String.fromCharCode(parseInt(a, 16))).join(""));
         }
         try {
-            if (key.length >= 4 && atob(key)) {
+            if (key.length >= 4 && [1, 16, 32].includes(atob(key).length)) {
                 return key;
             }
         }
@@ -1320,7 +1344,10 @@ function doneChannels()
             const name = e.name.replace(/\s/g, "");
             if (name.length >= 1 && key && e.max >= 10 && e.max <= 1000) {
                 const namekey = `${name} ${key}`;
-                const channel = getChannel(namekey) || { meshtastic: false, state: { count: 0, cursor: null, max: 100, badge: true, images: true } };
+                const existing = getChannel(namekey);
+                const channel = existing
+                    ? { ...existing, state: { ...existing.state } }
+                    : { meshtastic: false, state: { count: 0, cursor: null, max: 100, badge: true, images: true } };
                 channelnames.push({ namekey: namekey, max: e.max, badge: e.badge, images: e.images, telemetry: e.telemetry, winlink: e.winlink, backend: e.backend || "" });
                 channel.state.max = e.max;
                 channel.state.badge = e.badge;
@@ -1328,12 +1355,16 @@ function doneChannels()
                 channel.state.winlink = e.winlink;
                 channel.telemetry = e.telemetry;
                 channel.backend = e.backend || "";
-                nchannels.push({ namekey: namekey, telemetry: channel.telemetry, meshtastic: channel.meshtastic, backend: channel.backend, state: channel.state });
+                nchannels.push({ ...channel, namekey: namekey });
             }
         }
         catch (_) {
         }
     });
+    if (channelnames.length === 0 || channelnames.length !== echannels.length) {
+        I("channel-config-error").textContent = "Enter a name, a valid channel key, and a message count from 10 to 1000 for every channel before saving.";
+        return;
+    }
     updateChannels({ channels: nchannels });
     showNamekey(channelnames[0].namekey);
     send({ cmd: "newchannels", channels: channelnames });
@@ -1451,7 +1482,7 @@ function showNamekey(namekey)
         I("rheader").innerHTML = "";
         if (namekey === "channel-config") {
             echannels = [];
-            channels.forEach((c, i) => {
+            (channels || []).forEach((c, i) => {
                 const nk = c.namekey.split(" ");
                 echannels.push({
                     name: nk[0],
@@ -1497,6 +1528,11 @@ function showNamekey(namekey)
 function restartup()
 {
     if (sock) {
+        channelsReady = false;
+        updateChannels();
+        if (rightSelection === "channel-config") {
+            I("texts").innerHTML = htmlChannelConfig();
+        }
         try {
             if (sock.readyState < 2) {
                 sock.close();
@@ -1518,6 +1554,8 @@ function activity()
 
 function startup()
 {
+    channelsReady = false;
+    updateChannels();
     sock = new WebSocket(`ws://${location.hostname}:4404`);
     sock.addEventListener("open", _ => {
         activity();
@@ -1545,6 +1583,12 @@ function startup()
                 {
                     const selectFirst = !rightSelection;
                     updateChannels(msg);
+                    if (rightSelection === "channel-config") {
+                        // Refresh from the server, including changes made by another client.
+                        rightSelection = null;
+                        showNamekey("channel-config");
+                        break;
+                    }
                     if (msg.channels.length === 0) {
                         break;
                     }
