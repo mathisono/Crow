@@ -1,6 +1,6 @@
 # Crow: getting started on AREDN
 
-Updated 2026-10-28 for Crow 0.0.3-r0.
+Updated 2026-10-28 for Crow 0.0.3-r1.
 
 Crow provides AREDN mesh messaging with optional APRS, MeshCore, and Meshtastic
 connections. **The default AREDN channel does not need a LoRa radio.**
@@ -18,13 +18,13 @@ command -v opkg
 Current AREDN using APK:
 
 ```sh
-apk add --allow-untrusted /tmp/crow-0.0.3-r0.apk
+apk add --allow-untrusted /tmp/crow-0.0.3-r1.apk
 ```
 
 Older AREDN using opkg:
 
 ```sh
-opkg install /tmp/crow_0.0.3-r0_all.ipk
+opkg install /tmp/crow_0.0.3-r1_all.ipk
 ```
 
 Replace the example filename with the release you downloaded. The APK is
@@ -80,9 +80,10 @@ name-derived key. For an exact existing name/key, use the channel form or
 `/channels join NAME BASE64KEY`. Keep private keys out of screenshots and logs;
 channel-list replies can include them.
 
-On published 0.0.3-r0, use `/channels join` for names longer than 11 characters:
-typing them into the editor truncates the name. Once joined, use the UI for
-backend bindings and preferences without retyping the name.
+The 0.0.3-r1 editor accepts names up to 32 characters. If still using 0.0.3-r0,
+use `/channels join` for names longer than 11 characters: typing them into that
+older editor truncates the name. Once joined, use the UI for backend bindings
+and preferences without retyping the name.
 
 A command containing APRS group members **and trailing message text can send
 that text**. For a setup-only check, do not append a message. A plain chat line
@@ -170,11 +171,12 @@ A mounted drive or runtime “USB storage active” reply alone does not prove
 Crow will use it after restart. If a setting is not persisted by the command,
 record the gap, set that field explicitly over SSH, restart, and verify again.
 
-This persistence gap was reproduced live on 0.0.3-r0: assimilation selected
-USB at runtime, but a Crow restart reverted to internal storage until the
-configuration was edited. Also verify capacity/free space with `df -k /mnt/crow`:
-0.0.3-r0 overstates string-derived storage sizes by 10×. The source correction
-has native ucode regression coverage; it is not in that published package.
+This persistence gap was reproduced live on 0.0.3-r0 and remains unresolved
+in 0.0.3-r1: assimilation selected USB at runtime, but a Crow restart reverted
+to internal storage until the configuration was edited. The separate capacity
+and free-space accounting defect is fixed in 0.0.3-r1, with native ucode
+regression coverage. If still using 0.0.3-r0, verify actual capacity/free space
+with `df -k /mnt/crow`; that older package overstates string-derived sizes by 10×.
 
 ## 7. Verify persistence and backend health
 

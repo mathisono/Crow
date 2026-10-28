@@ -42,10 +42,12 @@ test message, or room login. Software reconnect/handshake success is not RF proo
 | Room-add command has whitespace-only tokenization | Add with a single-word alias, then edit the saved display name if spaces are required. Do not log in during a setup-only test. | Documented limitation. |
 | Watchdog observed a stale pre-install heartbeat during startup | One restart occurred before the fresh UI became ready. `status=running` alone is not application readiness; wait for channels and handshakes. | Observation recorded; healthy watchdog and isolated recovery cases pass. |
 
-The installed/published **0.0.3-r0 payload was not patched**. The runner,
-channel-name, and accounting corrections are included in the source alongside
-this guide; they are not present in the 0.0.3-r0 release packages. Publishing
-these source changes does not update an installed node.
+The installed/published **0.0.3-r0 payload was not patched** during this test.
+The runner, channel-name, and accounting corrections are included in
+**0.0.3-r1**; they are not present in the older 0.0.3-r0 release packages.
+The automatic USB storage-mode persistence gap remains unresolved. Publishing
+a new release does not update an installed node, and this historical live
+test does not constitute a fresh-install qualification of 0.0.3-r1.
 
 ## Reproduce
 

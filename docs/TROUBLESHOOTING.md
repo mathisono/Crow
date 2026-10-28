@@ -824,8 +824,8 @@ whole base over an existing override or delete the override to undo one change:
 either action can discard unrelated UI/backend settings. For rollback, restore
 the exact file you backed up; remove a file only if this test created it.
 
-Published 0.0.3-r0 fresh-setup caveats and tested workarounds are recorded in
-[Fresh-install findings](FRESH_INSTALL_FINDINGS.md).
+The historical 0.0.3-r0 fresh-setup results, fixes shipped in 0.0.3-r1, and
+remaining workarounds are recorded in [Fresh-install findings](FRESH_INSTALL_FINDINGS.md).
 
 ### Manual application testing
 

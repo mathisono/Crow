@@ -1,4 +1,46 @@
-# Crow r30 (unreleased)
+# Crow v0.0.3-r1
+
+Patch release for the fresh-install defects identified after 0.0.3-r0,
+including the fixes and setup documentation merged in
+[PR #5](https://github.com/mathisono/Crow/pull/5).
+
+## Fixes and documentation
+
+- Allow channel names up to 32 characters in the editor instead of truncating
+  typed names at 11 characters.
+- Convert storage size, free-space, and quota strings explicitly to numbers;
+  fix the 10× size inflation and its effect on the low-space guard.
+- Point the optional foreground runner at the Crow application entry point,
+  `crow.uc`, instead of the `router.uc` library. Normal init startup already
+  used the correct entry point.
+- Add the [USB MeshCore setup guide](docs/USB_MESHCORE_SETUP.md), with driver,
+  direct-USB/local-TCP bridge, exclusive serial ownership, and slot-mapping
+  instructions. Update getting-started and configuration documentation.
+- Include browser, native storage-accounting, and isolated setup-script
+  regression coverage, plus the documented fresh-install test procedure.
+
+## Packages and scope
+
+Download `crow-0.0.3-r1.apk` for APK firmware or `crow_0.0.3-r1_all.ipk` for
+older opkg firmware from [the release](https://github.com/mathisono/Crow/releases/tag/v0.0.3-r1).
+The rolling `crow-alpha.apk` and `crow_alpha.ipk` aliases contain identical
+bytes. Verify downloads against the attached `release-sha256.txt` and see
+`VALIDATION.md` for release-specific checks and limitations.
+
+**Automatic USB storage-mode persistence remains unresolved.** Explicitly
+save `storage.mode`, device identity, and intended settings, then restart
+and verify as described in [Getting Started](docs/SETUP_GETTING_STARTED.md#6-optional-usb-message-storage).
+
+The APK remains unsigned and requires `--allow-untrusted` for manual install.
+The bundled USB serial helper targets Linux MIPS big-endian soft-float; the
+`all`/`noarch` package metadata does not make that helper universal.
+No live installation, reboot, or RF test is part of this release run;
+**hardware validation pending** for this exact package. Historical BB5
+fresh-install results apply to 0.0.3-r0, not to an installed 0.0.3-r1 package.
+
+---
+
+# Crow r30 (historical development notes)
 
 ## APRS reliability and group repeat
 
