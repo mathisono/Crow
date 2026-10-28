@@ -351,6 +351,14 @@ export function setup()
     winlink.setup(config);
     router.registerApp(winlink);
 
+    // Install only after startup has loaded the selected store. Runtime root
+    // switches must checkpoint even clean caches into the new destination.
+    config.storageChanged = function() {
+        platform.store("node", node.getInfo());
+        textmessage.storageChanged();
+        textstore.storageChanged();
+    };
+
     platform.publish(node.getInfo(), channel.getAllLocalChannels());
 
     function shutdown()

@@ -229,3 +229,11 @@ export function shutdown()
         saveToPlatform();
     }
 };
+
+export function storageChanged()
+{
+    for (let namekey in stores) {
+        dirty[namekey] = true;
+    }
+    saveToPlatform();
+};

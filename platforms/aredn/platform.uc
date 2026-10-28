@@ -277,6 +277,7 @@ function freeBytes(p)
 
 function setInternalStorage()
 {
+    const changed = storageRoot !== CROW_INTERNAL_ROOT;
     storageState = "internal";
     storageReason = null;
     storageRoot = CROW_INTERNAL_ROOT;
@@ -287,10 +288,12 @@ function setInternalStorage()
     if (ramMessages) {
         mkdirp(`${CROW_TMP_ROOT}/data`);
     }
+    if (changed) storageConfig?.storageChanged?.();
 }
 
 function setDegradedStorage(reason)
 {
+    const changed = storageRoot !== CROW_INTERNAL_ROOT;
     storageState = "degraded";
     storageReason = reason;
     storageRoot = CROW_INTERNAL_ROOT;
@@ -299,6 +302,7 @@ function setDegradedStorage(reason)
     if (ramMessages) {
         mkdirp(`${CROW_TMP_ROOT}/data`);
     }
+    if (changed) storageConfig?.storageChanged?.();
 }
 
 function prepareStorageRoot(root)
@@ -403,11 +407,13 @@ function activateMountedUsb()
         setDegradedStorage(reason);
         return false;
     }
+    const changed = storageRoot !== storageMountpoint;
     storageState = "usb";
     storageReason = null;
     storageRoot = storageMountpoint;
     storageImageRoot = `${storageMountpoint}/images`;
     migrateDataToUsb();
+    if (changed) storageConfig?.storageChanged?.();
     return true;
 }
 

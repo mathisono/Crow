@@ -13,6 +13,9 @@
 - Regression coverage executes the actual storage/configuration functions and
   startup merge in portable and native ucode fixtures, including restart reloads,
   already-mounted/new mounts, disable, quotas, and injected write failures.
+- Runtime storage-root changes checkpoint active message history/preferences,
+  text stores, and node identity, including clean caches. This prevents a
+  disable/restart/enable cycle from reviving older internal state.
 
 This fix is **not included in 0.0.3-r0 or 0.0.3-r1 packages**. Those versions
 still require the manual storage-mode workaround.

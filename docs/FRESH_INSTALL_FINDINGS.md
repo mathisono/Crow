@@ -70,6 +70,15 @@ self-info handshake. Six channel preferences, all 75 baseline messages, active
 node ID/keys, and the protected recovery files were preserved. Node-location
 fields refreshed normally and are not treated as identity-key changes.
 
+An earlier, unpublished r2 candidate exposed a second bug during the fully
+restarted disable/enable cycle: clean message caches were not checkpointed to
+the new storage root, so older internal preferences/history could return.
+The affected active data was recovered from the verified pre-test backup, and
+the correction now checkpoints loaded message/text-store state and identity on
+root changes. Five additional portable/native regressions reproduce that gap
+before the fix and cover both directions, startup/no-op selection, and fallback.
+The final live qualification was repeated against the corrected package.
+
 This was an **upgrade and storage-persistence test**, not another fresh install.
 The live drive was already mounted; new-mount and failed-write cases were tested
 with inert native fixtures. No node reboot, physical USB unplug/replug, formatting,

@@ -31,6 +31,7 @@ hooks are stripped from release modules during packaging.
 | `run_backend_setup_script_tests.js` | `node` + Python 3, Linux bubblewrap/BusyBox | Executes unchanged installer, upgrade, watchdog, USB-storage, bridge-loop and init scripts inside an isolated filesystem with mocked devices/services/package managers. |
 | `run_storage_accounting_tests.js` | `node` + ucode | Runs exact storage source functions with inert I/O; verifies disk sectors, free-space bytes, numeric-string quotas and malformed output. Use `--emit` for an authorized native target. |
 | `run_storage_persistence_tests.js` | `node` + optional ucode | Runs production storage/configuration functions and the startup merge against inert adapters; verifies restart persistence, unrelated-setting preservation, and write failures. Native filesystem checks use only a disposable local directory. |
+| `run_storage_switch_state_tests.js` | `node` + optional ucode | Runs actual root-switch/checkpoint functions; preserves clean message/preferences, text-store caches and identity across runtime switches, without rewriting destination data at startup or on no-op status checks. |
 | `run_formatter_tests.js` | `node` + optional `ucode` | Outbound LoRa callsign/tag formatting and truncation. |
 | `run_meshcore_backend_selector.js` | `node` + optional `ucode` | Lazy backend selection and TCP/USB/UDP precedence. |
 | `run_meshcore_serial_api_tests.js` | `node` + optional `ucode` | USB Companion framing, queue handling, and RF slot gate. |

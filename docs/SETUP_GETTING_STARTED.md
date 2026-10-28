@@ -174,6 +174,11 @@ mount-persistence write error and retry before restarting; that is not a
 successful durable activation. A failed disable/quota save leaves its previous
 runtime setting unchanged.
 
+When the active storage root changes, Crow also checkpoints its loaded message
+history/preferences, text stores, and node identity to the new root. This keeps
+active state continuous across disable/restart/enable cycles. It does not copy
+the entire USB image archive into internal flash; keep the USB data and backups.
+
 After enabling storage, restart Crow and confirm the same storage state, device,
 and desired quotas. A mounted drive alone is not proof that Crow will use it.
 
