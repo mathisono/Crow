@@ -26,6 +26,8 @@ hooks are stripped from release modules during packaging.
 | `run_aredn_service_watch_tests.js` | `node` | Legacy and object-based AREDN watcher changes, empty reads, EOF recovery, and cleanup. |
 | `run_backend_disconnect_ui_tests.js` | `node` | Backend-to-channel health mapping and compact disconnected overlay contracts. |
 | `run_channel_export_tests.js` | `node` + optional `ucode` | Text/CSV channel export formatting, event routing, and browser download behavior. |
+| `run_channel_join_tests.js` | `node` + optional `ucode` | Actual short/long join dispatch, shared keys, usage errors, and existing-channel preservation. |
+| `run_channel_settings_ui_tests.js` | `node` + optional Playwright/Chromium | Empty/disconnected channel settings, reconnects, validation, and safe channel-list replacement. |
 | `run_formatter_tests.js` | `node` + optional `ucode` | Outbound LoRa callsign/tag formatting and truncation. |
 | `run_meshcore_backend_selector.js` | `node` + optional `ucode` | Lazy backend selection and TCP/USB/UDP precedence. |
 | `run_meshcore_serial_api_tests.js` | `node` + optional `ucode` | USB Companion framing, queue handling, and RF slot gate. |
@@ -135,6 +137,30 @@ CROW_CHROMIUM=/path/to/chromium node tests/run_ui_rendering_tests.js
 
 These tests use synthetic data, stub command dispatch, and never contact a node
 or transmit radio traffic.
+
+`run_channel_settings_ui_tests.js` uses the same Playwright variables. It loads
+the real page, styles, and script, supplies a synthetic WebSocket, and blocks
+all network requests. It checks the initial connection, empty-list creation,
+preservation of existing channels, invalid forms, disconnects, and updated
+server data while the editor is open.
+
+## Native join regression fixture
+
+`run_channel_join_tests.js` exercises the actual command dispatcher and group
+logic with inert dependencies. When `ucode` is installed it also runs
+`test_channel_join.uc` against the same source. To prepare that canonical
+fixture for a separate ucode host:
+
+```sh
+node tests/run_channel_join_tests.js --native-fixture /tmp/crow-join-fixture
+ucode -L /tmp/crow-join-fixture /tmp/crow-join-fixture/test_channel_join.uc
+```
+
+The fixture captures events in memory; it does not read live Crow configuration,
+save channels, start a service, or transmit messages. Copy only the generated
+directory to a temporary test location if using another host, and remove it
+after the check. The Node join and channel-settings runners accept
+`CROW_SOURCE_ROOT` to verify regression failures against an older source tree.
 
 If you add tests for any of the above, follow the same pattern: a canonical
 `.uc` test plus a `node`-runnable mirror under `tests/` so CI / dev laptops
