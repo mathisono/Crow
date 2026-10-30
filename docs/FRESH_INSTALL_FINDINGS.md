@@ -51,9 +51,9 @@ it does not retroactively change the historical fresh-install results.
 
 ## Follow-up: 0.0.3-r2 upgrade and storage-persistence qualification
 
-After verified private backups, BB5 was upgraded from 0.0.3-r0 to the r2 APK
-candidate on the same AREDN firmware. All 86 installed release files matched
-the candidate package. Live commands exercised:
+After verified private backups, BB5 was upgraded from 0.0.3-r0 to an r2 APK
+candidate on the same AREDN firmware. A corrected r2 candidate was subsequently
+reinstalled before the final command/restart qualification. Live commands exercised:
 
 - `/storage usb disable`, followed by a Crow restart: internal mode persisted
   even while the USB filesystem remained mounted.
@@ -64,11 +64,19 @@ the candidate package. Live commands exercised:
 - Disable then `/storage usb enable`, followed by a restart: USB mode returned
   and the original effective configuration matched exactly.
 
-The final UI reported 0.0.3-r2, six channels, active USB storage, and no page
-errors. APRS-IS connected and the USB Companion TCP backend completed a current
-self-info handshake. Six channel preferences, all 75 baseline messages, active
-node ID/keys, and the protected recovery files were preserved. Node-location
-fields refreshed normally and are not treated as identity-key changes.
+The corrected candidate passed three process-ID-verified Crow restarts and five
+saved-state comparisons. Six channel preferences, all 75 baseline messages,
+active node ID/keys, and the original effective configuration were preserved.
+Node-location fields refreshed normally and are not treated as identity-key changes.
+
+UI, backend, installed-file, and protected-recovery checks were recorded before
+the final correction: the earlier candidate showed r2, six channels, active USB,
+no page errors, connected APRS-IS, and a current Companion self-info handshake.
+These observations must not be mistaken for final corrected-package checks.
+On resuming publication after an agent interruption, SSH/HTTP checks could not
+be completed reliably, and managed browser access lacked the required scope.
+Current service/UI health is therefore unverified; the saved successful restart
+and state-preservation results remain the evidence for this qualification.
 
 An earlier, unpublished r2 candidate exposed a second bug during the fully
 restarted disable/enable cycle: clean message caches were not checkpointed to
