@@ -285,6 +285,16 @@ function saveToPlatform()
     }
 }
 
+export function storageChanged()
+{
+    // A clean cache is only clean relative to its previous data root. Carry
+    // active preferences/history across a storage switch before a restart.
+    for (let namekey in channelmessages) {
+        channelmessagesdirty[namekey] = true;
+    }
+    saveToPlatform();
+};
+
 export function shutdown()
 {
     saveToPlatform();

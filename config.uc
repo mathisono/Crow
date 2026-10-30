@@ -27,6 +27,7 @@ import * as gatekeeper from "gatekeeper";
 let bconfig;
 let config;
 let override;
+let overrideWriteId = 0;
 const HEARTBEAT_FILE = "/tmp/crow-heartbeat";
 let lastHeartbeat = 0;
 
@@ -68,19 +69,77 @@ function clone(a)
 
 function writeOverride(data)
 {
+    let path;
     if (fs.access("/etc/crow.conf.override") || fs.access("/etc/crow.conf") || fs.access("/etc/raven.conf")) {
-        fs.writefile("/etc/crow.conf.override", data);
+        path = "/etc/crow.conf.override";
     }
     else if (fs.access(localFile("crow.conf.override")) || fs.access(localFile("crow.conf")) || fs.access(localFile("raven.conf"))) {
-        fs.writefile(localFile("crow.conf.override"), data);
+        path = localFile("crow.conf.override");
     }
+    else {
+        return false;
+    }
+
+    // Never truncate the last good override on a failed or partial write.
+    const temporary = `${path}.${time()}.${overrideWriteId++}.tmp`;
+    const file = fs.open(temporary, "wx", 0o600);
+    if (!file) {
+        return false;
+    }
+    const written = file.write(data);
+    const flushed = file.flush();
+    file.close();
+    if (written !== length(data) || !flushed || !fs.rename(temporary, path)) {
+        fs.unlink(temporary);
+        return false;
+    }
+    return true;
 }
 
-function update(option)
+function updateStorage(settings)
+{
+    if (type(settings) !== "object") {
+        return false;
+    }
+    // Patch only the requested fields. Preserve other storage overrides,
+    // including null tombstones, and every unrelated configuration section.
+    const next = clone(override);
+    const storage = { ...(config.storage ?? {}), ...settings };
+    const saved = type(next.storage) === "object" ? next.storage : {};
+    if (next.storage === null && type(bconfig.storage) === "object") {
+        for (let key in bconfig.storage) {
+            saved[key] = null;
+        }
+    }
+    for (let key in settings) {
+        if (jsonEq(settings[key], bconfig.storage?.[key])) {
+            delete saved[key];
+        }
+        else {
+            saved[key] = settings[key];
+        }
+    }
+    if (length(keys(saved))) {
+        next.storage = saved;
+    }
+    else {
+        delete next.storage;
+    }
+    if (!writeOverride(sprintf("%.2J", next))) {
+        return false;
+    }
+    config.storage = storage;
+    override = next;
+    return true;
+}
+
+function update(option, settings)
 {
     let write = false;
 
     switch (option) {
+        case "storage":
+            return updateStorage(settings);
         case "channels":
         {
             const channels = channel.getAllLocalChannels();
@@ -291,6 +350,14 @@ export function setup()
 
     winlink.setup(config);
     router.registerApp(winlink);
+
+    // Install only after startup has loaded the selected store. Runtime root
+    // switches must checkpoint even clean caches into the new destination.
+    config.storageChanged = function() {
+        platform.store("node", node.getInfo());
+        textmessage.storageChanged();
+        textstore.storageChanged();
+    };
 
     platform.publish(node.getInfo(), channel.getAllLocalChannels());
 

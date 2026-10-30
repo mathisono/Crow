@@ -1,3 +1,39 @@
+# Crow v0.0.3-r2 — automatic storage persistence
+
+- Successful `/storage assimilate` and `/storage usb enable` now save Crow's
+  USB mode, actual mounted device, mountpoint, and label to its persistent
+  override, including when the drive was already mounted.
+- `/storage usb disable` and `/storage quota images <mb>` also persist their
+  changes. Disable/quota write failures leave their previous runtime settings
+  intact; activation with an unsuccessful save explicitly reports that it is
+  active but not persistent.
+- Configuration updates patch only the requested storage fields and preserve
+  unrelated settings and deletion overrides. Override files are replaced
+  atomically with private permissions; failed writes retain the last good file.
+- Regression coverage executes the actual storage/configuration functions and
+  startup merge in portable and native ucode fixtures, including restart reloads,
+  already-mounted/new mounts, disable, quotas, and injected write failures.
+- Runtime storage-root changes checkpoint active message history/preferences,
+  text stores, and node identity, including clean caches. This prevents a
+  disable/restart/enable cycle from reviving older internal state.
+
+This fix is **not included in 0.0.3-r0 or 0.0.3-r1 packages**. Those versions
+still require the manual storage-mode workaround.
+
+Download `crow-0.0.3-r2.apk` for APK firmware or `crow_0.0.3-r2_all.ipk` for
+older opkg firmware from [the release](https://github.com/mathisono/Crow/releases/tag/v0.0.3-r2).
+The rolling aliases contain identical bytes. Verify `release-sha256.txt` and
+read the attached `VALIDATION.md` for the exact live and isolated test scope.
+The APK candidate was upgraded and tested on BB5: disable, assimilation, USB
+enable, and quota settings persisted across Crow restarts without manual repair.
+Existing configuration, channel preferences, message history, and node keys
+were preserved. This was not a fresh install, node reboot, physical USB reconnect,
+or RF-delivery test; IPK installation was not tested on hardware.
+The APK is unsigned; the bundled serial helper still targets MIPS big-endian
+soft-float rather than every architecture implied by `all`/`noarch` metadata.
+
+---
+
 # Crow v0.0.3-r1
 
 Patch release for the fresh-install defects identified after 0.0.3-r0,

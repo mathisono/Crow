@@ -20,7 +20,7 @@ Documentation can be found in the [Crow GitHub wiki](https://github.com/mathison
   operator's settings through the UI and commands without restoring a saved
   configuration over the fresh installation.
 - See the [BB5 fresh-install findings](docs/FRESH_INSTALL_FINDINGS.md) for
-  verified 0.0.3-r0 setup results, fixes shipped in 0.0.3-r1, and remaining
+  verified 0.0.3-r0 setup results, fixes shipped in 0.0.3-r1/r2, and remaining
   workarounds.
 
 The AREDN channel does not require a LoRa radio. Channel settings are in the

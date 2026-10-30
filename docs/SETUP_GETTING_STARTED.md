@@ -1,6 +1,6 @@
 # Crow: getting started on AREDN
 
-Updated 2026-10-28 for Crow 0.0.3-r1.
+Updated 2026-10-28 for Crow 0.0.3-r2.
 
 Crow provides AREDN mesh messaging with optional APRS, MeshCore, and Meshtastic
 connections. **The default AREDN channel does not need a LoRa radio.**
@@ -18,13 +18,13 @@ command -v opkg
 Current AREDN using APK:
 
 ```sh
-apk add --allow-untrusted /tmp/crow-0.0.3-r1.apk
+apk add --allow-untrusted /tmp/crow-0.0.3-r2.apk
 ```
 
 Older AREDN using opkg:
 
 ```sh
-opkg install /tmp/crow_0.0.3-r1_all.ipk
+opkg install /tmp/crow_0.0.3-r2_all.ipk
 ```
 
 Replace the example filename with the release you downloaded. The APK is
@@ -80,7 +80,7 @@ name-derived key. For an exact existing name/key, use the channel form or
 `/channels join NAME BASE64KEY`. Keep private keys out of screenshots and logs;
 channel-list replies can include them.
 
-The 0.0.3-r1 editor accepts names up to 32 characters. If still using 0.0.3-r0,
+The 0.0.3-r1 and later editors accept names up to 32 characters. If still using 0.0.3-r0,
 use `/channels join` for names longer than 11 characters: typing them into that
 older editor truncates the name. Once joined, use the UI for backend bindings
 and preferences without retyping the name.
@@ -165,18 +165,32 @@ drive; it does not format it. Check the drive identity before proceeding.
 The standalone `usb-setup.sh format` path is destructive and is not part of
 normal setup or the fresh-install test.
 
-After enabling storage, check that the saved effective configuration contains
-`storage.mode: "usb"`, the intended mountpoint/device, and the desired quotas.
-A mounted drive or runtime “USB storage active” reply alone does not prove
-Crow will use it after restart. If a setting is not persisted by the command,
-record the gap, set that field explicitly over SSH, restart, and verify again.
+**In 0.0.3-r2 and later:** successful assimilation/USB enable saves
+`storage.mode: "usb"`, the actual mounted device, mountpoint, and label in
+Crow's persistent override. Disable saves internal mode, and image-quota changes
+are saved too. Other configuration and storage overrides are preserved. If the
+reply says storage is **active but not persistent**, fix the configuration or
+mount-persistence write error and retry before restarting; that is not a
+successful durable activation. A failed disable/quota save leaves its previous
+runtime setting unchanged.
 
-This persistence gap was reproduced live on 0.0.3-r0 and remains unresolved
-in 0.0.3-r1: assimilation selected USB at runtime, but a Crow restart reverted
-to internal storage until the configuration was edited. The separate capacity
-and free-space accounting defect is fixed in 0.0.3-r1, with native ucode
-regression coverage. If still using 0.0.3-r0, verify actual capacity/free space
-with `df -k /mnt/crow`; that older package overstates string-derived sizes by 10×.
+When the active storage root changes, Crow also checkpoints its loaded message
+history/preferences, text stores, and node identity to the new root. This keeps
+active state continuous across disable/restart/enable cycles. It does not copy
+the entire USB image archive into internal flash; keep the USB data and backups.
+
+After enabling storage, restart Crow and confirm the same storage state, device,
+and desired quotas. A mounted drive alone is not proof that Crow will use it.
+
+**Older 0.0.3-r0 and 0.0.3-r1 still need the workaround:** explicitly save
+`storage.mode`, mountpoint/device, and desired settings over SSH using the
+configuration-editing procedure above, then restart and verify. The live gap
+was reproduced on 0.0.3-r0: assimilation selected USB only at runtime. Upgrade
+to 0.0.3-r2 or later for automatic persistence.
+
+The separate capacity/free-space accounting defect is fixed in 0.0.3-r1.
+If still using 0.0.3-r0, verify actual capacity/free space with `df -k /mnt/crow`;
+that older package overstates string-derived sizes by 10×.
 
 ## 7. Verify persistence and backend health
 
